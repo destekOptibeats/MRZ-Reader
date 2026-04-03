@@ -1,0 +1,2643 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>MRZ Okuyucu</title>
+<style>
+:root{
+  --bg:#0a0a0f;--card:#13131a;--border:#2a2a3a;
+  --blue:#3b82f6;--green:#10b981;--red:#ef4444;--warn:#f59e0b;
+  --text:#f1f5f9;--muted:#64748b;--r:16px;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{min-height:100vh;background:var(--bg);color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}
+
+/* ── screens ── */
+.screen{display:none;flex-direction:column;min-height:100vh;
+  padding:28px 18px;align-items:center;justify-content:center;gap:16px;}
+.screen.active{display:flex;}
+
+/* ── typography ── */
+.title{font-size:1.3rem;font-weight:700;text-align:center;}
+.sub{color:var(--muted);font-size:0.87rem;text-align:center;line-height:1.6;}
+
+/* ── buttons ── */
+.btn{width:100%;max-width:460px;padding:15px;border-radius:14px;border:none;
+  font-size:0.95rem;font-weight:600;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:9px;transition:opacity .15s;}
+.btn:active{opacity:.75;}
+.blue{background:var(--blue);color:#fff;}
+.green{background:var(--green);color:#fff;}
+.ghost{background:transparent;color:var(--muted);border:1px solid var(--border);}
+.red-ghost{background:transparent;color:var(--red);border:1px solid var(--red);}
+
+/* ── cards ── */
+.card{width:100%;max-width:460px;background:var(--card);
+  border:1px solid var(--border);border-radius:var(--r);padding:18px;}
+
+/* ── result rows ── */
+.row{display:flex;justify-content:space-between;align-items:center;
+  padding:11px 0;border-bottom:1px solid var(--border);}
+.row:last-child{border-bottom:none;}
+.rl{color:var(--muted);font-size:0.76rem;text-transform:uppercase;
+  letter-spacing:.4px;flex-shrink:0;margin-right:8px;}
+.rv{font-size:0.93rem;font-weight:600;text-align:right;}
+.ok  {color:var(--green);font-size:.82rem;margin-left:4px;}
+.fail{color:var(--red);  font-size:.82rem;margin-left:4px;}
+
+/* ── banners ── */
+.banner{width:100%;max-width:460px;border-radius:12px;padding:14px 16px;
+  font-size:0.9rem;font-weight:500;display:flex;align-items:flex-start;gap:10px;}
+.b-ok  {background:rgba(16,185,129,.1);color:#10b981;border:1px solid rgba(16,185,129,.2);}
+.b-warn{background:rgba(245,158,11,.1);color:#f59e0b;border:1px solid rgba(245,158,11,.2);}
+.b-err {background:rgba(239,68,68,.1); color:#ef4444; border:1px solid rgba(239,68,68,.2);}
+.b-info{background:rgba(59,130,246,.1);color:#93c5fd; border:1px solid rgba(59,130,246,.2);}
+
+/* ── upload zone ── */
+.upload-zone{width:100%;max-width:460px;border:2px dashed var(--border);
+  border-radius:var(--r);padding:36px 18px;text-align:center;
+  cursor:pointer;transition:all .2s;}
+.upload-zone:hover,.upload-zone.drag{border-color:var(--blue);background:rgba(59,130,246,.05);}
+
+/* ── progress ── */
+.prog-wrap{width:100%;max-width:460px;background:var(--border);border-radius:99px;height:5px;}
+.prog{height:100%;background:var(--blue);border-radius:99px;transition:width .4s ease;}
+.spinner{width:46px;height:46px;border:3px solid var(--border);
+  border-top-color:var(--blue);border-radius:50%;animation:spin .8s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
+
+/* ── video ── */
+#video-wrap{position:relative;width:100%;max-width:460px;
+  border-radius:14px;overflow:hidden;background:#000;display:block;}
+video{width:100%;height:auto;display:block;}
+#cam-overlay{position:absolute;top:0;left:0;width:100%;height:100%;
+  pointer-events:none;display:block;}
+
+/* Animasyonlu köşe çerçevesi */
+@keyframes corner-pulse {
+  0%,100% { opacity:1; transform:scale(1); }
+  50%      { opacity:.5; transform:scale(1.08); }
+}
+@keyframes scan-line {
+  0%   { top: var(--scan-top); }
+  100% { top: var(--scan-bot); }
+}
+#scan-line {
+  position:absolute;left:2%;width:96%;height:2px;
+  background:linear-gradient(90deg,transparent,rgba(59,130,246,.8),transparent);
+  box-shadow:0 0 8px rgba(59,130,246,.6);
+  pointer-events:none;display:none;
+  animation: scan-line 1.5s linear infinite;
+}
+
+/* ── passport list ── */
+.pp-list{width:100%;max-width:460px;display:flex;flex-direction:column;gap:10px;}
+.pp-card{background:var(--card);border:1px solid var(--border);border-radius:14px;
+  padding:16px 18px;cursor:pointer;transition:all .2s;
+  display:flex;align-items:center;justify-content:space-between;gap:12px;}
+.pp-card:hover{border-color:var(--blue);background:rgba(59,130,246,.05);}
+.pp-name{font-weight:700;font-size:0.95rem;}
+.pp-meta{font-size:0.78rem;color:var(--muted);}
+.empty-state{text-align:center;color:var(--muted);font-size:0.87rem;padding:30px 0;}
+
+/* ── textarea ── */
+textarea{width:100%;max-width:460px;background:var(--card);
+  border:1px solid var(--border);border-radius:12px;padding:14px;
+  color:var(--text);font-family:monospace;font-size:0.83rem;
+  resize:none;letter-spacing:1.5px;outline:none;line-height:1.8;}
+textarea:focus{border-color:var(--blue);}
+textarea::placeholder{color:var(--muted);letter-spacing:0;font-family:inherit;font-size:0.78rem;}
+.char-row{width:100%;max-width:460px;display:flex;justify-content:space-between;margin-top:-10px;}
+.cnt{font-size:.74rem;color:var(--muted);}
+.cnt.full{color:var(--green);}
+
+/* ── raw MRZ ── */
+.mrz-raw{width:100%;max-width:460px;background:#0d1117;
+  border:1px solid var(--border);border-radius:10px;padding:14px;
+  font-family:monospace;font-size:0.72rem;color:#58a6ff;letter-spacing:1px;line-height:2;}
+
+/* ── tabs ── */
+.tabs{display:flex;width:100%;max-width:460px;background:var(--card);
+  border:1px solid var(--border);border-radius:12px;padding:4px;gap:4px;}
+.tab{flex:1;padding:10px;border-radius:9px;border:none;background:transparent;
+  color:var(--muted);font-size:0.83rem;font-weight:600;cursor:pointer;transition:all .2s;}
+.tab.active{background:var(--blue);color:#fff;}
+
+/* ── cam counter ── */
+.cam-counter{font-size:2.2rem;font-weight:800;color:var(--blue);}
+.cam-hint{
+  color:var(--muted);font-size:0.85rem;margin-top:-4px;
+  text-align:center;min-height:1.4em;transition:all .3s;
+  font-weight:500;
+}
+.cam-hint.hint-warn { color:#f59e0b; font-size:0.95rem; }
+.cam-hint.hint-ok   { color:#10b981; font-size:0.95rem; }
+
+/* ── cache status pill ── */
+#cache-pill{position:fixed;top:12px;right:12px;padding:5px 12px;
+  border-radius:99px;font-size:0.72rem;font-weight:600;
+  background:var(--card);border:1px solid var(--border);color:var(--muted);
+  display:flex;align-items:center;gap:5px;z-index:999;transition:all .4s;}
+#cache-pill.online{border-color:var(--green);color:var(--green);}
+#cache-pill.offline{border-color:var(--warn);color:var(--warn);}
+#cache-pill.ready{border-color:var(--green);color:var(--green);}
+.pill-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0;}
+
+/* ── btn-sm ── */
+.btn-sm{width:auto;padding:10px 18px;font-size:0.84rem;border-radius:10px;}
+
+/* ── Debug Log Panel ── */
+#log-toggle {
+  position:fixed; bottom:16px; right:16px; z-index:999;
+  background:rgba(15,15,25,.95); border:1px solid var(--border);
+  color:var(--muted); font-size:0.75rem; padding:7px 14px;
+  border-radius:99px; cursor:pointer; backdrop-filter:blur(8px);
+  display:flex; align-items:center; gap:6px; transition:all .2s;
+  box-shadow:0 2px 12px rgba(0,0,0,.5);
+}
+#log-toggle:hover { border-color:var(--blue); color:var(--text); }
+#log-toggle .badge {
+  background:var(--blue); color:#fff; border-radius:99px;
+  padding:1px 7px; font-size:0.68rem; font-weight:700; min-width:20px; text-align:center;
+}
+#log-panel {
+  position:fixed; z-index:998;
+  background:rgba(8,8,18,.97); border:1px solid rgba(255,255,255,.1);
+  display:none; flex-direction:column;
+  box-shadow:0 16px 64px rgba(0,0,0,.8);
+  /* Normal: bottom sheet */
+  bottom:60px; right:12px; left:12px;
+  max-width:600px; margin:0 auto;
+  height:62vh; border-radius:18px;
+  overflow:hidden;
+}
+#log-panel.open { display:flex; }
+#log-panel.fullscreen {
+  top:0 !important; left:0 !important; right:0 !important; bottom:0 !important;
+  max-width:100% !important; width:100% !important; height:100% !important;
+  border-radius:0 !important; margin:0 !important;
+}
+#log-header {
+  display:flex; justify-content:space-between; align-items:center;
+  padding:12px 16px; border-bottom:1px solid rgba(255,255,255,.08);
+  font-size:0.82rem; font-weight:600; color:var(--text);
+  flex-shrink:0; gap:8px; background:rgba(255,255,255,.03);
+}
+.log-hdr-left  { display:flex; align-items:center; gap:10px; flex:1; min-width:0; }
+.log-hdr-right { display:flex; align-items:center; gap:5px; flex-shrink:0; }
+.log-btn {
+  background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.1);
+  color:var(--muted); cursor:pointer; font-size:0.72rem;
+  padding:4px 10px; border-radius:7px; transition:.15s; white-space:nowrap;
+}
+.log-btn:hover { border-color:var(--blue); color:var(--text); background:rgba(59,130,246,.1); }
+.log-btn.red:hover { border-color:var(--red); color:var(--red); background:rgba(239,68,68,.1); }
+#log-entries {
+  overflow-y:auto; overflow-x:hidden; flex:1; padding:4px 0;
+  font-family:'SF Mono',ui-monospace,monospace; font-size:0.70rem; line-height:1.65;
+  overscroll-behavior:contain;
+}
+#log-entries::-webkit-scrollbar { width:4px; }
+#log-entries::-webkit-scrollbar-thumb { background:rgba(255,255,255,.15); border-radius:2px; }
+.log-row {
+  display:flex; align-items:flex-start; gap:0;
+  padding:6px 0; border-bottom:1px solid rgba(255,255,255,.04);
+  cursor:pointer; transition:background .12s;
+}
+.log-row:hover { background:rgba(255,255,255,.03); }
+.log-row:last-child { border-bottom:none; }
+.log-col-time {
+  flex:0 0 52px; min-width:52px; max-width:52px;
+  padding:2px 0 0 14px;
+  color:#374151; font-size:0.62rem; white-space:nowrap; overflow:hidden;
+}
+.log-col-icon {
+  flex:0 0 22px; min-width:22px; max-width:22px;
+  padding-top:1px; font-size:0.78rem; text-align:center;
+}
+.log-col-body {
+  flex:1 1 0; min-width:0; padding-right:14px; overflow:hidden;
+}
+.log-main {
+  font-weight:600; font-size:0.72rem;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  max-width:100%;
+}
+.log-detail {
+  color:#4a6080; font-size:0.64rem;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  margin-top:1px; max-width:100%;
+}
+.log-ok   { color:#10b981; }
+.log-warn { color:#f59e0b; }
+.log-err  { color:#ef4444; }
+.log-skip { color:#374151; }
+.log-cs   { display:flex; gap:6px; margin-top:4px; flex-wrap:wrap; }
+.cs-badge {
+  display:inline-block; padding:1px 6px; border-radius:4px;
+  font-size:0.61rem; font-weight:700; white-space:nowrap;
+}
+.cs-ok-badge   { background:rgba(16,185,129,.18); color:#10b981; }
+.cs-fail-badge { background:rgba(239,68,68,.18);  color:#ef4444; }
+.log-thumb-img {
+  display:block; max-width:160px; width:100%;
+  border-radius:5px; border:1px solid rgba(255,255,255,.1);
+  margin-top:6px; cursor:pointer; opacity:.9;
+  transition:opacity .15s;
+}
+.log-thumb-img:hover { opacity:1; }
+@keyframes flash-green { 0%{background:rgba(16,185,129,.18);} 100%{background:transparent;} }
+.log-row.copied { animation:flash-green .35s ease; }
+</style>
+</head>
+<body>
+
+<!-- cache status pill -->
+<div id="cache-pill"><div class="pill-dot"></div><span id="pill-txt">Yükleniyor…</span></div>
+
+<!-- ══════════════════════════════════
+     S0: İLK YÜKLEME (sadece 1. açılış)
+══════════════════════════════════ -->
+<div class="screen active" id="s-loading">
+  <div class="spinner"></div>
+  <div class="title" style="font-size:1.1rem">İlk Kurulum</div>
+  <div class="sub" id="load-msg">OCR motoru indiriliyor…<br>Bu işlem bir kere yapılır</div>
+  <div class="prog-wrap"><div class="prog" id="load-prog" style="width:5%"></div></div>
+  <div class="sub" style="font-size:.78rem">Sonraki açılışlarda internet gerekmez</div>
+</div>
+
+<!-- ══════════════════════════════════
+     S1: ANA EKRAN — pasaport listesi
+══════════════════════════════════ -->
+<div class="screen" id="s-home">
+  <div style="font-size:2.6rem">🛂</div>
+  <div>
+    <div class="title">MRZ Okuyucu</div>
+    <div class="sub" style="margin-top:4px">Kayıtlı pasaportunuzu seçin<br>veya yenisini tarayın</div>
+  </div>
+
+  <!-- Butonlar üstte -->
+  <button class="btn green" onclick="goScreen('s-scan')">📷 Yeni Pasaport Tara</button>
+  <button class="btn blue" onclick="startSerialScan()" id="serial-btn" style="display:none">
+    🚀 Seri Tarama Başlat
+  </button>
+  <button class="btn ghost" onclick="goScreen('s-add')">⌨️ Elle Gir</button>
+
+  <!-- Kayıtlı belgeler — collapse -->
+  <div style="width:100%;max-width:460px;margin-top:8px;">
+    <button onclick="toggleList()" id="list-toggle-btn"
+      style="width:100%;background:var(--card);border:1px solid var(--border);
+             border-radius:12px;padding:12px 16px;cursor:pointer;
+             display:flex;justify-content:space-between;align-items:center;
+             color:var(--text);font-size:0.9rem;font-weight:500;">
+      <span>📋 Kayıtlı Belgeler</span>
+      <span id="list-toggle-icon" style="color:var(--muted);font-size:0.8rem;transition:transform .2s">▼</span>
+    </button>
+    <div id="pp-list-wrap" style="display:none;margin-top:6px;">
+      <div class="pp-list" id="pp-list"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════
+     S2: TARA — kamera + fotoğraf yükle
+══════════════════════════════════ -->
+<div class="screen" id="s-scan">
+  <div class="title">Pasaport Tara</div>
+
+  <div class="tabs">
+    <button class="tab active" id="tab-cam" onclick="setTab('cam')">📷 Kamera</button>
+    <button class="tab" id="tab-img" onclick="setTab('img')">🖼️ Fotoğraf</button>
+  </div>
+
+  <!-- Camera tab -->
+  <div id="tab-cam-content">
+    <div id="video-wrap">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="cam-overlay"></canvas>
+      <div id="scan-line"></div>
+    </div>
+    <div style="width:100%;max-width:460px;margin-top:6px;display:flex;flex-direction:column;gap:8px;">
+      <div class="prog-wrap"><div class="prog" id="cam-prog" style="width:0%;transition:width .3s ease;"></div></div>
+      <div id="cam-hint" style="font-size:0.83rem;color:var(--muted);text-align:center">
+        MRZ'yi yeşil kutuya hizalayın
+      </div>
+    </div>
+    <button class="btn red-ghost" style="max-width:460px;margin-top:4px" onclick="stopScan()">✕ İptal</button>
+  </div>
+
+  <!-- Photo tab -->
+  <div id="tab-img-content" style="display:none;width:100%;max-width:460px;flex-direction:column;gap:12px;">
+
+    <!-- Yükleme alanı -->
+    <div id="upload-zone-wrap">
+      <div class="upload-zone" id="drop-zone" onclick="document.getElementById('file-in').click()">
+        <div style="font-size:2.4rem;margin-bottom:10px">🖼️</div>
+        <h3 style="font-size:1rem;margin-bottom:5px">Pasaport / Kimlik Fotoğrafı Seç</h3>
+        <p style="color:var(--muted);font-size:0.82rem">MRZ satırlarının olduğu arka yüzü seçin</p>
+      </div>
+    </div>
+
+    <!-- Önizleme (başlangıçta gizli) -->
+    <div id="img-preview-wrap" style="display:none;flex-direction:column;gap:10px;">
+      <div style="position:relative;border-radius:12px;overflow:hidden;background:#000;">
+        <img id="img-preview" style="width:100%;display:block;max-height:300px;object-fit:contain;">
+        <div id="img-preview-info" style="position:absolute;bottom:0;left:0;right:0;
+          background:rgba(0,0,0,.6);color:#fff;font-size:0.72rem;padding:6px 10px;"></div>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn green" style="flex:2" onclick="startImageScan()">🔍 Taramayı Başlat</button>
+        <button class="btn ghost" style="flex:1" onclick="resetImageUpload()">↩ Değiştir</button>
+      </div>
+    </div>
+
+    <input type="file" id="file-in" accept="image/*" style="display:none" onchange="onFile(event)">
+    <button class="btn ghost" onclick="stopScan()">✕ İptal</button>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════
+     S3: İŞLENİYOR
+══════════════════════════════════ -->
+<div class="screen" id="s-processing">
+  <div class="spinner"></div>
+  <div class="title" style="font-size:1.1rem">Analiz Ediliyor…</div>
+  <div class="sub" id="proc-msg">OCR çalışıyor</div>
+  <div class="prog-wrap"><div class="prog" id="proc-prog" style="width:0%"></div></div>
+  <button class="btn red-ghost" id="proc-cancel-btn" style="max-width:300px;margin-top:16px;display:none" onclick="cancelProcessing()">✕ İptal</button>
+</div>
+
+<!-- ══════════════════════════════════
+     S4: SONUÇ
+══════════════════════════════════ -->
+<div class="screen" id="s-result">
+  <div class="banner" id="res-banner"><span id="res-icon">✅</span><span id="res-txt"></span></div>
+
+  <!-- Editable name fields -->
+  <div class="card" style="max-width:460px">
+    <div style="font-size:0.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:10px">
+      ✏️ İsim alanları — gerekirse düzeltin
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      <div>
+        <div style="font-size:0.72rem;color:var(--muted);margin-bottom:4px">SOYAD</div>
+        <input type="text" id="edit-surname" style="width:100%;background:#0d1117;border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-size:0.9rem;font-weight:600;outline:none;"
+          oninput="updateSavedName()">
+      </div>
+      <div>
+        <div style="font-size:0.72rem;color:var(--muted);margin-bottom:4px">AD</div>
+        <input type="text" id="edit-given" style="width:100%;background:#0d1117;border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-size:0.9rem;font-weight:600;outline:none;"
+          oninput="updateSavedName()">
+      </div>
+    </div>
+  </div>
+
+  <div class="card"><div id="res-fields"></div></div>
+  <div class="mrz-raw" id="mrz-raw"></div>
+
+  <!-- Grup check-in: seri tarama butonu -->
+  <button class="btn green" id="next-scan-btn" onclick="nextScan()" style="display:none">
+    📷 Sonraki Pasaport →
+  </button>
+
+  <div style="display:flex;gap:10px;width:100%;max-width:460px;">
+    <button class="btn ghost btn-sm" style="flex:1" onclick="goHome()">← Liste</button>
+    <button class="btn red-ghost btn-sm" style="flex:1" id="del-btn" onclick="deleteCurrent()">🗑 Sil</button>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════
+     S5: ELLE GİR
+══════════════════════════════════ -->
+<div class="screen" id="s-add">
+  <div class="title">Elle Gir</div>
+  <div class="sub">Her satır tam 44 karakter</div>
+  <textarea id="l1" rows="2" maxlength="44"
+    placeholder="Satır 1 — P ile başlar"
+    oninput="onTA(this,'c1')"></textarea>
+  <div class="char-row">
+    <span style="font-size:.74rem;color:var(--muted)">A-Z · 0-9 · &lt;</span>
+    <span class="cnt" id="c1">0 / 44</span>
+  </div>
+  <textarea id="l2" rows="2" maxlength="44"
+    placeholder="Satır 2 — pasaport no ile başlar"
+    oninput="onTA(this,'c2')"></textarea>
+  <div class="char-row">
+    <span style="font-size:.74rem;color:var(--muted)">A-Z · 0-9 · &lt;</span>
+    <span class="cnt" id="c2">0 / 44</span>
+  </div>
+  <button class="btn green" onclick="addManual()">💾 Kaydet</button>
+  <button class="btn ghost" onclick="goHome()">← Geri</button>
+</div>
+
+<!-- ══════════════════════════════════
+     S6: HATA
+══════════════════════════════════ -->
+<div class="screen" id="s-error">
+  <div style="font-size:2.8rem">⚠️</div>
+  <div class="title">Hata</div>
+  <div class="banner b-err" style="max-width:460px">
+    <span style="flex-shrink:0">❌</span><span id="err-msg"></span>
+  </div>
+  <button class="btn blue" onclick="goHome()">← Ana Ekran</button>
+</div>
+
+<canvas id="main-canvas" style="display:none"></canvas>
+
+<!-- ══════════════════════════════════════════════════════════
+     SERVICE WORKER — inline blob registration
+     Caches: tesseract.min.js + eng.traineddata + this page
+══════════════════════════════════════════════════════════ -->
+<script>
+// Service Worker disabled - single HTML file limitation
+// Tesseract loads from CDN on first use, browser cache handles subsequent loads
+async function registerSW() { return false; }
+</script>
+
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady()" onerror="console.warn('OpenCV yüklenemedi — kart tespiti devre dışı')"></script>
+<script>
+// ── GLOBALS ───────────────────────────────────────────────────────────
+let worker       = null;
+let workerReady  = false;
+let stream       = null;
+let scanning     = false;
+let loopId       = null;
+let matches      = [];
+let currentIdx   = -1;
+let loadedImg    = null;
+let cvReady      = false;
+function onOpenCvReady() {
+  // cv objesi yüklendi ama Runtime henüz hazır olmayabilir
+  if (typeof cv !== 'undefined' && cv.Mat) {
+    cvReady = true;
+    console.log('OpenCV.js hazır');
+  } else if (typeof cv !== 'undefined') {
+    // Runtime init bekle
+    cv.onRuntimeInitialized = () => {
+      cvReady = true;
+      console.log('OpenCV.js hazır (runtime)');
+    };
+  }
+}
+let processingCancelled = false;
+let lastValidCount = 0;
+let confirmedChecks = { passOk: false, dobOk: false, expOk: false, compOk: false };
+let ocrActive = false; // OCR only runs when user activates it
+let l2Votes = {}; // L2 string → count, find most frequent
+
+const video    = document.getElementById('video');
+const mainC    = document.getElementById('main-canvas');
+const mainCtx  = mainC.getContext('2d', {willReadFrequently: true});
+const camOvl   = document.getElementById('cam-overlay');
+const camCtx   = camOvl.getContext('2d');
+
+// ── SCREEN NAV ────────────────────────────────────────────────────────
+function goScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  window.scrollTo(0, 0);
+  if (id === 's-scan') setTimeout(() => startCamera(), 100);
+  else stopCamera();
+}
+function goHome() {
+  stopScan();
+  renderList();
+  goScreen('s-home');
+}
+
+// ── STORAGE ───────────────────────────────────────────────────────────
+const DEMO = [{
+  id:'demo_mia',
+  line1:'P<ESPGUCEL<MAZLIYAH<<MIA<<<<<<<<<<<<<<<<<<',
+  line2:'XDE4677822ESP1507218F2801223<<<<<<<<<<<<<<6',
+  name:'Gucel Mazliyah, Mia', nation:'ESP'
+}];
+function loadPassports() {
+  try { return JSON.parse(localStorage.getItem('mrz_pp') || '[]'); } catch { return []; }
+}
+function savePassports(list) { localStorage.setItem('mrz_pp', JSON.stringify(list)); }
+function getAllPassports() {
+  const saved = loadPassports();
+  const ids   = saved.map(p => p.id);
+  return [...DEMO.filter(d => !ids.includes(d.id)), ...saved];
+}
+
+// ── PASSPORT LIST ─────────────────────────────────────────────────────
+const FLAGS = {ESP:'🇪🇸',TUR:'🇹🇷',USA:'🇺🇸',GBR:'🇬🇧',DEU:'🇩🇪',FRA:'🇫🇷',ITA:'🇮🇹',NLD:'🇳🇱',RUS:'🇷🇺',CHN:'🇨🇳',JPN:'🇯🇵',IND:'🇮🇳',BRA:'🇧🇷',CAN:'🇨🇦',AUS:'🇦🇺',SAU:'🇸🇦',ARE:'🇦🇪'};
+function flag(c) { return FLAGS[c] || '🌍'; }
+
+function toggleList() {
+  const wrap = document.getElementById('pp-list-wrap');
+  const icon = document.getElementById('list-toggle-icon');
+  const open = wrap.style.display === 'none';
+  wrap.style.display = open ? 'block' : 'none';
+  icon.textContent = open ? '▲' : '▼';
+}
+
+// ── SERİ TARAMA MODU ─────────────────────────────────────────────────
+let serialMode = false;
+let serialCount = 0;
+
+function startSerialScan() {
+  serialMode = true;
+  serialCount = 0;
+  goScreen('s-scan');
+  setTimeout(() => startCamera(), 100);
+}
+
+function nextScan() {
+  // Immediately go back to camera for next passport
+  goScreen('s-scan');
+  setTimeout(() => startCamera(), 100);
+}
+
+function renderList() {
+  const list = getAllPassports();
+  const el   = document.getElementById('pp-list');
+  // Show serial scan button only when there are user-saved passports
+  const hasSaved = loadPassports().length > 0;
+  const sb = document.getElementById('serial-btn');
+  if (sb) sb.style.display = hasSaved ? 'flex' : 'none';
+  if (!list.length) {
+    el.innerHTML = `<div class="empty-state">Henüz kayıtlı pasaport yok.</div>`;
+    return;
+  }
+  el.innerHTML = list.map((p, i) => `
+    <div class="pp-card" onclick="viewPassport(${i})">
+      <span style="font-size:1.6rem;flex-shrink:0">${flag(p.nation)}</span>
+      <div style="flex:1">
+        <div class="pp-name">${p.name}</div>
+        <div class="pp-meta">${p.nation} · ${p.line2.substring(0,9).replace(/</g,'')}</div>
+      </div>
+      <span style="color:var(--muted);font-size:1.1rem">›</span>
+    </div>`).join('');
+}
+
+function viewPassport(idx) {
+  currentIdx = idx;
+  const p = getAllPassports()[idx];
+  if (p) showResult(p.line1, p.line2, false);
+}
+
+function deleteCurrent() {
+  const p = getAllPassports()[currentIdx];
+  if (!p || p.id.startsWith('demo_')) { alert('Demo kayıtlar silinemez.'); return; }
+  if (!confirm(`"${p.name}" silinsin mi?`)) return;
+  savePassports(loadPassports().filter(x => x.id !== p.id));
+  goHome();
+}
+
+// ── TABS ──────────────────────────────────────────────────────────────
+function setTab(t) {
+  ['cam','img'].forEach(x => {
+    document.getElementById('tab-'+x).classList.toggle('active', x===t);
+    document.getElementById('tab-'+x+'-content').style.display = x===t ? 'flex' : 'none';
+  });
+  if (t === 'cam') startCamera();
+  else stopCamera();
+}
+
+// ── INIT / WORKER ─────────────────────────────────────────────────────
+async function init() {
+  // Register service worker for offline caching
+  registerSW();
+
+  updatePill('loading');
+  document.getElementById('load-prog').style.width = '10%';
+  document.getElementById('load-msg').textContent  = 'OCR motoru yükleniyor…';
+
+  try {
+    // Suppress noisy Tesseract console warnings
+    const origWarn = console.warn;
+    console.warn = (...args) => {
+      const msg = args[0]?.toString() || '';
+      if (msg.includes('Image too small') || msg.includes('Line cannot be recognized')) return;
+      origWarn.apply(console, args);
+    };
+
+    const logger = m => {
+      if (m.status === 'loading tesseract core')       setLoadProg(20, 'Tesseract yükleniyor…');
+      if (m.status === 'initializing tesseract')       setLoadProg(40, 'Motor başlatılıyor…');
+      if (m.status === 'loading language traineddata') {
+        const p = Math.round((m.progress||0)*100);
+        setLoadProg(50 + Math.round((m.progress||0)*40), `Dil modeli indiriliyor %${p}…`);
+      }
+      if (m.status === 'initializing api')             setLoadProg(92, 'Hazırlanıyor…');
+    };
+
+    setLoadProg(40, 'OCR motoru başlatılıyor…');
+
+    const localBase = window.location.origin + window.location.pathname.replace(/[^/]+$/, '');
+    let mrzLoaded = false;
+
+    // Try to load MRZ-specific traineddata (much more accurate than eng)
+    // File must be in same folder as this HTML: mrz.traineddata OR mrz.traineddata.gz
+    for (const fname of ['mrz.traineddata', 'mrz.traineddata.gz']) {
+      try {
+        setLoadProg(43, `MRZ modeli kontrol: ${fname}…`);
+        const r = await fetch(localBase + fname);
+        if (!r.ok) { console.warn(`${fname}: HTTP ${r.status}`); continue; }
+        console.log(`${fname} found (${r.headers.get('content-length')} bytes), loading…`);
+
+        setLoadProg(55, 'MRZ modeli yükleniyor…');
+        worker = await Tesseract.createWorker('mrz', 1, {
+          workerPath:  'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js',
+          corePath:    'https://cdn.jsdelivr.net/npm/tesseract.js-core@5/tesseract-core-simd-lstm.wasm.js',
+          langPath:    localBase,
+          logger,
+        });
+        mrzLoaded = true;
+        setLoadProg(85, 'MRZ modeli hazır ✓');
+        console.log('MRZ model loaded:', fname);
+        break;
+      } catch(e) {
+        console.warn(`MRZ model (${fname}) failed:`, e.message);
+        if (worker) { try { await worker.terminate(); } catch(_){} worker = null; }
+      }
+    }
+
+    if (!mrzLoaded) {
+      setLoadProg(48, 'Standart model yükleniyor (eng)…');
+      worker = await Tesseract.createWorker('eng', 1, { logger });
+      console.warn('Using eng model — accuracy may be lower. Place mrz.traineddata in same folder for better results.');
+    }
+    // MRZ için optimize Tesseract parametreleri
+    await worker.setParameters({
+      tessedit_char_whitelist:    'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<',
+      tessedit_pageseg_mode:      '6',   // uniform block — MRZ satır yapısı için
+      preserve_interword_spaces:  '0',
+      tessedit_do_invert:         '0',
+      textord_min_linesize:       '2.5',
+    });
+    workerReady = true;
+    const modelName = mrzLoaded ? 'mrz.traineddata ✓' : 'eng (düşük doğruluk)';
+    setLoadProg(100, `Hazır! — ${modelName}`);
+    updatePill('ready');
+    addLog('skip', `🚀 Sistem hazır`, [
+      `OCR Modeli: ${modelName}`,
+      `OpenCV: ${typeof cv !== 'undefined' ? 'hazır ✓' : 'yüklenmedi'}`,
+      mrzLoaded ? 'MRZ modeli yüklendi — yüksek doğruluk modu' : '⚠ mrz.traineddata bulunamadı — düşük doğruluk',
+    ]);
+    await new Promise(r => setTimeout(r, 400));
+    renderList();
+    goScreen('s-home');
+  } catch(e) {
+    setLoadProg(100, '');
+    document.getElementById('load-msg').textContent = 'Hata: ' + e.message;
+  }
+}
+
+function setLoadProg(p, msg) {
+  document.getElementById('load-prog').style.width = p + '%';
+  if (msg) document.getElementById('load-msg').textContent = msg;
+}
+
+function updatePill(state) {
+  const pill = document.getElementById('cache-pill');
+  const txt  = document.getElementById('pill-txt');
+  if (state === 'loading') { pill.className = 'id'; txt.textContent = 'Yükleniyor'; }
+  if (state === 'ready')   { pill.className = 'ready'; txt.textContent = 'Hazır ✓'; }
+  if (state === 'offline') { pill.className = 'offline'; txt.textContent = 'Çevrimdışı'; }
+}
+
+// ── CAMERA ────────────────────────────────────────────────────────────
+async function startCamera() {
+  if (stream) return;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: {ideal:'environment'},
+        width:  {min:320, ideal:1280},
+        height: {min:240, ideal:720}
+      }
+    });
+    video.srcObject = stream;
+    await new Promise(r => video.onloadedmetadata = r);
+    video.play();
+    // Video boyutları hazır olana kadar bekle (max 3 saniye)
+    // Wait until video truly has valid dimensions
+    await new Promise(r => {
+      const check = () => {
+        if (video.readyState >= 2 && video.videoWidth >= 100 && video.videoHeight >= 100) {
+          r();
+        } else {
+          video.addEventListener('canplay', r, {once:true});
+          setTimeout(r, 3000); // max wait
+        }
+      };
+      check();
+    });
+    // Extra settle time for camera
+    await new Promise(r => setTimeout(r, 300));
+    scanning = true;
+    matches  = [];
+    lastValidCount = 0;
+    voteBuffer = [];
+    l2Votes = {};
+    confirmedChecks = { passOk: false, dobOk: false, expOk: false, compOk: false };
+    startOverlayLoop();
+    setHint('📄 Kimliği YATAY tutun — MRZ satırlarını kutuya hizalayın');
+    loopId = setTimeout(() => scanLoop(), 800);
+  } catch(e) {
+    showError('Kamera hatası: ' + e.message);
+  }
+}
+
+function stopCamera() {
+  scanning = false;
+  stopOverlayLoop();
+  const sl = document.getElementById('scan-line');
+  if (sl) sl.style.display = 'none';
+  if (loopId) { clearTimeout(loopId); loopId = null; }
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+}
+
+function stopScan() {
+  stopCamera();
+  goScreen('s-home');
+}
+
+// ── MRZ SCAN ZONE ─────────────────────────────────────────────────────
+function getScanZone(vw, vh) {
+  const h = Math.round(vh * 0.55), w = Math.round(vw * 0.99);
+  return { x: Math.round((vw-w)/2), y: vh-h-Math.round(vh*0.03), w, h };
+}
+
+function drawOverlay(matchCount) {
+  const dw_ = video.offsetWidth;
+  const dh_ = video.offsetHeight;
+  if (!dw_ || !dh_) return;
+
+  // Only resize canvas if needed (avoids clearing on every frame)
+  if (camOvl.width !== dw_ || camOvl.height !== dh_) {
+    camOvl.width  = dw_;
+    camOvl.height = dh_;
+  }
+
+  const vw = video.videoWidth  || dw_;
+  const vh = video.videoHeight || dh_;
+  const sx = dw_ / vw;
+  const sy = dh_ / vh;
+  const z  = getScanZone(vw, vh);
+  const dx = z.x*sx, dy = z.y*sy, dw = z.w*sx, dh = z.h*sy;
+
+  camCtx.clearRect(0, 0, dw_, dh_);
+
+  // Dark overlay outside scan zone
+  camCtx.fillStyle = 'rgba(0,0,0,0.45)';
+  camCtx.fillRect(0, 0, dw_, dh_);
+  camCtx.clearRect(dx, dy, dw, dh);
+
+  // Frame color by progress
+  const color = matchCount === 0 ? '#3b82f6'
+              : matchCount  <  3 ? '#f59e0b'
+              :                    '#10b981';
+
+  // Scan zone border
+  camCtx.strokeStyle = color;
+  camCtx.lineWidth   = 3;
+  camCtx.strokeRect(dx, dy, dw, dh);
+
+  // Corner marks
+  const cs = 22;
+  [[dx,dy,1,1],[dx+dw,dy,-1,1],[dx,dy+dh,1,-1],[dx+dw,dy+dh,-1,-1]].forEach(([cx,cy,ox,oy]) => {
+    camCtx.beginPath();
+    camCtx.strokeStyle = '#fff';
+    camCtx.lineWidth = 3;
+    camCtx.moveTo(cx+ox*cs, cy);
+    camCtx.lineTo(cx, cy);
+    camCtx.lineTo(cx, cy+oy*cs);
+    camCtx.stroke();
+  });
+
+  // ── Bounding boxes from last OCR ──────────────────────────────────
+  if (lastBBoxLines && lastBBoxLines.length) {
+    const vw3 = video.videoWidth  || dw_;
+    const vh3 = video.videoHeight || dh_;
+    const sxb = dw_ / vw3, syb = dh_ / vh3;
+    lastBBoxLines.forEach(line => {
+      const t = (line.text || '').toUpperCase().replace(/[^A-Z0-9<]/g,'').trim();
+      if (t.length < 8) return;
+      const isMRZLine = t.length >= 25 && /[A-Z0-9<]{20,}/.test(t);
+      const bColor = lastBBoxOk    ? 'rgba(16,185,129,.85)'
+                   : isMRZLine     ? 'rgba(245,158,11,.85)'
+                   :                 'rgba(59,130,246,.4)';
+      const bb = line.bbox;
+      if (!bb) return;
+      // Map mainC coords → video coords → cam overlay coords
+      // mainC covers (z.x, cropY..z.x+z.w, cropY+cropH) scaled by scale factor
+      const scaleX = z.w / (mainC.width || 1);
+      const scaleY = lastCropH / (mainC.height || 1);
+      const rx = (bb.x0 * scaleX + z.x)  * sxb;
+      const ry = (bb.y0 * scaleY + lastCropY) * syb;
+      const rw = (bb.x1 - bb.x0) * scaleX * sxb;
+      const rh = (bb.y1 - bb.y0) * scaleY * syb;
+      if (rw < 8 || rh < 2) return;
+      camCtx.strokeStyle = bColor;
+      camCtx.lineWidth   = isMRZLine ? 2 : 1;
+      camCtx.strokeRect(rx, ry, rw, rh);
+      if (isMRZLine) {
+        camCtx.fillStyle = bColor;
+        camCtx.font = 'bold 8px monospace';
+        const label = t.substring(0,18) + (t.length>18?'…':'');
+        camCtx.fillText(label, rx+2, ry > 12 ? ry-2 : ry+rh+9);
+      }
+    });
+  }
+
+  // Animate scan line inside MRZ zone
+  const scanEl = document.getElementById('scan-line');
+  if (scanEl) {
+    const topPct  = (dy / dh_ * 100).toFixed(1) + '%';
+    const botPct  = ((dy + dh) / dh_ * 100).toFixed(1) + '%';
+    scanEl.style.setProperty('--scan-top', topPct);
+    scanEl.style.setProperty('--scan-bot', botPct);
+    scanEl.style.display  = 'block';
+    scanEl.style.top      = topPct;
+    // Color matches state
+    const scanColor = matchCount === 0
+      ? 'linear-gradient(90deg,transparent,rgba(59,130,246,.7),transparent)'
+      : matchCount < 3
+      ? 'linear-gradient(90deg,transparent,rgba(245,158,11,.8),transparent)'
+      : 'linear-gradient(90deg,transparent,rgba(16,185,129,.9),transparent)';
+    scanEl.style.background   = scanColor;
+    scanEl.style.boxShadow    = matchCount >= 3
+      ? '0 0 12px rgba(16,185,129,.7)'
+      : '0 0 8px rgba(59,130,246,.5)';
+  }
+
+  // Scan zone label + pozisyon kılavuzu
+  camCtx.fillStyle = color;
+  camCtx.font = 'bold 11px -apple-system, sans-serif';
+  camCtx.fillText('MRZ TARAMA', dx+6, dy > 14 ? dy-5 : dy+14);
+
+  // MRZ satır kılavuz çizgileri — kullanıcıya nereye bakacağını göster
+  if (matchCount === 0) {
+    // 3 yatay ince çizgi — "MRZ satırları buraya gelecek" ipucu
+    const lineH = dh / 4;
+    camCtx.strokeStyle = 'rgba(255,255,255,0.15)';
+    camCtx.lineWidth = 1;
+    camCtx.setLineDash([6, 4]);
+    for (let i = 1; i <= 3; i++) {
+      const ly = dy + lineH * i;
+      camCtx.beginPath();
+      camCtx.moveTo(dx + 4, ly);
+      camCtx.lineTo(dx + dw - 4, ly);
+      camCtx.stroke();
+    }
+    camCtx.setLineDash([]);
+
+    // Kimlik şekli ipucu — ortada küçük dikdörtgen
+    const cw = dw * 0.6, ch2 = dh * 0.45;
+    const cx2 = dx + (dw - cw) / 2, cy2 = dy + (dh - ch2) / 2;
+    camCtx.strokeStyle = 'rgba(255,255,255,0.12)';
+    camCtx.lineWidth = 1.5;
+    camCtx.strokeRect(cx2, cy2, cw, ch2);
+  }
+}
+
+// Separate animation loop for overlay (runs every frame)
+let overlayLoopId = null;
+function toggleOCR() {
+  ocrActive = !ocrActive;
+  const btn = document.getElementById('scan-btn');
+  if (ocrActive) {
+    btn.textContent = '⏸ Durdur';
+    btn.className = 'btn red-ghost';
+    btn.style.flex = '2';
+    setHint('🔍 Taranıyor… Belgeyi kutuya hizalayın');
+    // reset state for new scan
+    voteBuffer = [];
+    l2Votes = {};
+    confirmedChecks = { passOk: false, dobOk: false, expOk: false, compOk: false };
+    lastValidCount = 0;
+    document.getElementById('cam-prog').style.width = '0%';
+    if (!loopId) loopId = setTimeout(() => scanLoop(), 200);
+  } else {
+    btn.textContent = '🔍 Tara';
+    btn.className = 'btn green';
+    btn.style.flex = '2';
+    setHint('Taramak için "Tara" butonuna basın');
+    if (loopId) { clearTimeout(loopId); loopId = null; }
+  }
+}
+
+function startOverlayLoop() {
+  function loop() {
+    if (scanning) drawOverlay(lastValidCount);
+    overlayLoopId = requestAnimationFrame(loop);
+  }
+  overlayLoopId = requestAnimationFrame(loop);
+}
+function stopOverlayLoop() {
+  if (overlayLoopId) { cancelAnimationFrame(overlayLoopId); overlayLoopId = null; }
+}
+
+// ── SCAN LOOP — sadece OCR, overlay ayrı loop'ta ─────────────────────
+// ── VOTING BUFFER ────────────────────────────────────────────────────
+const VOTE_SIZE = 4;
+let voteBuffer = [];
+
+function addVote(r) {
+  voteBuffer.push({ type:r.type, l1:r.lines[0], l2:r.lines[1], l3:r.lines[2]||'' });
+  if (voteBuffer.length > VOTE_SIZE) voteBuffer.shift();
+}
+function getBestVote() {
+  if (voteBuffer.length < 2) return null;
+  const freq = {};
+  for (const v of voteBuffer) {
+    const key = v.type + '|' + v.l2;
+    if (!freq[key]) freq[key] = [];
+    freq[key].push(v);
+  }
+  const best = Object.values(freq).sort((a,b)=>b.length-a.length)[0];
+  return (best && best.length >= 2) ? best[0] : null;
+}
+
+// ── HAREKET TESPİTİ ──────────────────────────────────────────────────
+let lastFrameHash = 0;
+let idleCount = 0;
+let lastBBoxLines = [];
+let lastBBoxMRZ = false;
+let lastBBoxOk  = false;
+let lastCropY = 0;
+let lastCropH = 0;
+let lastScale = 1;
+
+function getFrameHash(ctx, w, h) {
+  const sample = ctx.getImageData(0, 0, Math.min(w,60), Math.min(h,30));
+  let hash = 0;
+  for (let i = 0; i < sample.data.length; i += 12) {
+    hash = (hash * 31 + sample.data[i]) & 0xffffffff;
+  }
+  return hash;
+}
+
+async function scanLoop() {
+  if (!scanning || !workerReady) return;
+
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh || vw < 100 || vh < 100) {
+    setHint('⏳ Kamera başlatılıyor…');
+    if (scanning) loopId = setTimeout(() => scanLoop(), 500);
+    return;
+  }
+
+  const z = getScanZone(vw, vh);
+  if (z.w < 50 || z.h < 10) {
+    if (scanning) loopId = setTimeout(() => scanLoop(), 300);
+    return;
+  }
+
+  // ── Belge büyüklük kontrolü ──────────────────────────────────────
+  // Scan zone içindeki MRZ satırları ekranın en az %60'ını kaplamalı
+  // Pratik: scan zone genişliğinin video genişliğine oranı
+  const coverage = z.w / vw;
+  if (coverage < 0.55) {
+    setHint('📏 Belgeyi yaklaştırın — 3 MRZ satırı kutuda görünmeli', 'warn');
+    document.getElementById('cam-prog').style.width = '0%';
+    addLog('skip', `Belge küçük (%${Math.round(coverage*100)})`, ['OCR yapılmadı — daha yakına getirin']);
+    document.getElementById('cam-prog').style.width = '0%';
+    lastValidCount = 0;
+    if (scanning) loopId = setTimeout(() => scanLoop(), 200);
+    return;
+  }
+
+  // ── Canvas hazırla ────────────────────────────────────────────────
+  // Tüm scan zone'u al — TD1'de L1 üstte, L3 altta; crop yaparsak L1 kaçıyor
+  const MIN_W = 600;
+  const cropH = z.h;   // tüm yükseklik
+  const cropY = z.y;   // scan zone başından
+  const scale = z.w < MIN_W ? Math.ceil(MIN_W / z.w) : 1;
+  mainC.width  = z.w * scale;
+  mainC.height = cropH * scale;
+  lastCropY = cropY; lastCropH = cropH; lastScale = scale;
+  mainCtx.drawImage(video, z.x, cropY, z.w, cropH, 0, 0, mainC.width, mainC.height);
+
+  // ── Hareket tespiti — hareketsiz karelerde OCR yapma ─────────────
+  const frameHash = getFrameHash(mainCtx, mainC.width, mainC.height);
+  const hasMoved  = Math.abs(frameHash - lastFrameHash) > 800;
+  lastFrameHash   = frameHash;
+
+  if (!hasMoved && lastValidCount === 0) {
+    idleCount++;
+    // 2 hareketsiz kare sonra bekleme moduna geç
+    if (idleCount >= 2) {
+      setHint('📄 Kimliği YATAY tutun — MRZ satırlarını kutuya hizalayın');
+      if (scanning) loopId = setTimeout(() => scanLoop(), 150);
+      return;
+    }
+  } else {
+    idleCount = 0;
+  }
+
+  enhanceFast(mainCtx, mainC.width, mainC.height); // kamera: hızlı versiyon
+
+  // Hint zaten yukarıda ayarlandı
+
+  // Koordinat dönüşümü: mainC piksel → camOvl piksel
+  function bboxToCam(bbox, canvW, canvH) {
+    const vw2 = video.videoWidth, vh2 = video.videoHeight;
+    const dw2 = camOvl.width,    dh2 = camOvl.height;
+    const sx = dw2 / vw2, sy = dh2 / vh2;
+    // mainC covers (z.x, cropY, z.w, cropH) of video, scaled by 'scale'
+    const toVideoX = x => (x / mainC.width)  * z.w + z.x;
+    const toVideoY = y => (y / mainC.height) * cropH + cropY;
+    return {
+      x: toVideoX(bbox.x0) * sx,
+      y: toVideoY(bbox.y0) * sy,
+      w: (toVideoX(bbox.x1) - toVideoX(bbox.x0)) * sx,
+      h: (toVideoY(bbox.y1) - toVideoY(bbox.y0)) * sy,
+    };
+  }
+
+  // Draw bounding boxes for OCR lines onto cam overlay
+  function drawBBoxes(lines, mrzFound, allOk) {
+    // Store globally so drawOverlay can render them each frame
+    lastBBoxLines = lines || [];
+    lastBBoxMRZ   = mrzFound;
+    lastBBoxOk    = allOk;
+  }
+
+  try {
+    const { data } = await worker.recognize(mainC);
+    const text = data.text || '';
+    const lines = data.lines || [];
+    const mrzResult = extractMRZ(clean(text));
+
+    if (mrzResult) {
+      // ── MRZ satırları bulundu ──────────────────────────────────
+      const l2 = mrzResult.lines[1];
+      const l1 = mrzResult.lines[0];
+      const cs = mrzResult.type === 'TD1'
+        ? (() => {
+            const passOk = chk(l1.substring(5,14))===+l1[14];
+            const dobOk  = chk(l2.substring(0,6))===+l2[6];
+            const expOk  = chk(l2.substring(8,14))===+l2[14];
+            // TD1 composite: L1[5:30] + L2[0:7] + L2[8:15] + L2[18:29]
+            const compInput = l1.substring(5,30)+l2.substring(0,7)+l2.substring(8,15)+l2.substring(18,29);
+            const compOk = chk(compInput)===+l2[29];
+            return {passOk, dobOk, expOk, compOk};
+          })()
+        : getChecksums_TD3(l2);
+
+      // Biriken onaylar — asla geri gitme
+      if (cs.passOk) confirmedChecks.passOk = true;
+      if (cs.dobOk)  confirmedChecks.dobOk  = true;
+      if (cs.expOk)  confirmedChecks.expOk  = true;
+      if (cs.compOk) confirmedChecks.compOk = true;
+
+      // L2 oy sayacı
+      l2Votes[l2] = (l2Votes[l2] || 0) + 1;
+      addVote(mrzResult);
+
+      const validCount = [confirmedChecks.passOk, confirmedChecks.dobOk, confirmedChecks.expOk].filter(Boolean).length;
+      lastValidCount = validCount;
+      document.getElementById('cam-prog').style.width = Math.min(100, validCount / 2 * 100) + '%';
+
+      const compSatisfied = mrzResult.type !== 'TD1' ||
+                            confirmedChecks.compOk || cs.compOk ||
+                            cs.compOk === undefined || cs.compOk === null;
+
+      // Hızlı kabul: passOk + (dobOk veya expOk)
+      const checksumOk = (confirmedChecks.passOk || cs.passOk) &&
+                         (confirmedChecks.dobOk || confirmedChecks.expOk || cs.dobOk || cs.expOk) &&
+                         compSatisfied;
+
+      // Güvenlik ağı: L2 aynı 2+ kez görüldü VE dobOk+expOk birikmiş
+      const l2Stable = (l2Votes[l2] >= 2) &&
+                       (confirmedChecks.dobOk || cs.dobOk) &&
+                       (confirmedChecks.expOk || cs.expOk);
+
+      const passNow = checksumOk || l2Stable;
+
+      if (validCount === 0) setHint(`✓ ${mrzResult.type} okundu — sabit tutun`, 'ok');
+      else if (validCount === 1) setHint('● ○  Doğrulanıyor, sabit tutun…', 'ok');
+      else setHint('● ●  ✓ Onaylandı!', 'ok');
+
+      // Bounding box overlay — MRZ satırlarını çerçevele
+      drawBBoxes(lines, true, passNow);
+
+      addLog(
+        passNow ? 'ok' : 'warn',
+        `${mrzResult.type} bulundu${passNow ? ' → KABUL' : ' → bekleniyor'}`,
+        [
+          `L1: ${mrzResult.lines[0]}`,
+          `L2: ${l2} (${l2.length} char)`,
+          passNow ? '→ Checksum geçti' : `→ L2 ${l2Votes[l2]}. kez görüldü`,
+        ],
+        null, cs, captureThumb()
+      );
+
+      if (passNow) {
+        stopCamera();
+        saveAndShow(mrzResult);
+        return;
+      }
+
+    } else {
+      // ── MRZ bu karede bulunamadı — ham metni logla ─────────────
+      drawBBoxes(lines, false, false); // mevcut satırları mavi göster
+      const rawFull  = clean(text);
+      const rawShort = rawFull.replace(/\n/g,' ').substring(0, 100);
+      const tooShort = rawFull.replace(/\n/g,'').length < 60;
+      addLog('err', tooShort ? 'OCR yetersiz (<60 char)' : 'MRZ bulunamadı', [
+        `Ham (${rawFull.replace(/\n/g,'').length} char): ${rawShort}${rawFull.length>100?'…':''}`,
+        tooShort ? '→ Belgeyi daha net/yakın tutun' : '→ Taramaya devam',
+      ], null, null, captureThumb());
+      if (lastValidCount === 0) {
+        document.getElementById('cam-prog').style.width = '0%';
+        setHint('MRZ\'yi kutuya hizalayın — 3 satırın tamamı görünsün');
+      } else {
+        setHint('⟳ MRZ okundu, doğrulanıyor — sabit tutun', 'ok');
+      }
+    }
+  } catch(e) { console.warn('OCR:', e.message); }
+
+  if (scanning) loopId = setTimeout(() => scanLoop(), 150);
+}
+
+function setHint(msg, type='') {
+  const el = document.getElementById('cam-hint');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'cam-hint' + (type ? ' hint-' + type : '');
+}
+
+async function captureOnce() {
+  if (!workerReady) return;
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh) return;
+  const z = getScanZone(vw, vh);
+  mainC.width = z.w; mainC.height = z.h;
+  mainCtx.drawImage(video, z.x, z.y, z.w, z.h, 0, 0, z.w, z.h);
+  enhance(mainCtx, z.w, z.h);
+  scanning = false;
+  goScreen('s-processing');
+  await processCanvas(mainC);
+}
+
+// ── FILE UPLOAD ───────────────────────────────────────────────────────
+function cancelProcessing() {
+  processingCancelled = true;
+  addLog('skip', 'İşlem iptal edildi', ['Kullanıcı tarafından durduruldu']);
+  goHome();
+}
+
+function resetImageUpload() {
+  document.getElementById('img-preview-wrap').style.display = 'none';
+  document.getElementById('upload-zone-wrap').style.display = 'block';
+  document.getElementById('file-in').value = '';
+  loadedImg = null;
+}
+
+function onFile(e) {
+  const file = e.target.files[0]; if (!file) return;
+  stopCamera(); // kamerayı durdur
+
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const img = new Image();
+    img.onload = () => {
+      loadedImg = img;
+      // Önizleme göster
+      const preview = document.getElementById('img-preview');
+      const info    = document.getElementById('img-preview-info');
+      const wrap    = document.getElementById('img-preview-wrap');
+      const zone    = document.getElementById('upload-zone-wrap');
+      preview.src   = ev.target.result;
+      info.textContent = `${img.naturalWidth}×${img.naturalHeight}px · ${(file.size/1024).toFixed(0)} KB · ${file.name}`;
+      zone.style.display  = 'none';
+      wrap.style.display  = 'flex';
+      // Log'a yüklendi yaz
+      addLog('skip', `📁 Resim yüklendi`, [
+        `${img.naturalWidth}×${img.naturalHeight}px`,
+        file.name,
+        'Taramayı başlatmak için "Taramayı Başlat" butonuna basın',
+      ]);
+    };
+    img.onerror = () => addLog('err', 'Resim yüklenemedi', [file.name]);
+    img.src = ev.target.result;
+  };
+  reader.onerror = () => addLog('err', 'Dosya okunamadı', [file.name]);
+  reader.readAsDataURL(file);
+}
+
+async function startImageScan() {
+  if (!loadedImg) return;
+  if (!workerReady) {
+    goScreen('s-processing');
+    document.getElementById('proc-msg').textContent = 'OCR motoru bekleniyor…';
+    document.getElementById('proc-prog').style.width = '5%';
+    while (!workerReady) await new Promise(r => setTimeout(r, 200));
+  }
+  addLog('skip', '🔍 Tarama başlatıldı', [`${loadedImg.naturalWidth}×${loadedImg.naturalHeight}px`]);
+  processImage(loadedImg);
+}
+
+// Drag & drop
+const dz = document.getElementById('drop-zone');
+dz.addEventListener('dragover',  e => { e.preventDefault(); dz.classList.add('drag'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('drag'));
+dz.addEventListener('drop',      e => {
+  e.preventDefault(); dz.classList.remove('drag');
+  const f = e.dataTransfer.files[0];
+  if (f) onFile({ target: { files: [f] } });
+});
+
+async function processImage(img) {
+  processingCancelled = false;
+  goScreen('s-processing');
+  const cancelBtn = document.getElementById('proc-cancel-btn');
+  if (cancelBtn) cancelBtn.style.display = 'flex';
+
+  // Resmi base64'e çevir (max 1600px, orijinal kalite)
+  function imgToBase64(srcImg, deg=0, maxPx=1600) {
+    const swap = deg===90||deg===270;
+    const sw = swap ? srcImg.naturalHeight : srcImg.naturalWidth;
+    const sh = swap ? srcImg.naturalWidth  : srcImg.naturalHeight;
+    const scale = sw > maxPx ? maxPx/sw : 1;
+    const rw = Math.round(sw*scale), rh = Math.round(sh*scale);
+    const cv2 = document.createElement('canvas');
+    cv2.width=rw; cv2.height=rh;
+    const ctx2 = cv2.getContext('2d');
+    ctx2.save();
+    ctx2.translate(rw/2, rh/2);
+    ctx2.rotate(deg*Math.PI/180);
+    ctx2.scale(scale, scale);
+    ctx2.drawImage(srcImg, -srcImg.naturalWidth/2, -srcImg.naturalHeight/2);
+    ctx2.restore();
+    return cv2.toDataURL('image/jpeg', 0.92).split(',')[1];
+  }
+
+  async function scanWithClaude(base64Data, label) {
+    if (processingCancelled) return null;
+    document.getElementById('proc-msg').textContent = label;
+    addLog('skip', `🤖 Claude Vision → ${label}`, []);
+    try {
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 300,
+          messages: [{
+            role: 'user',
+            content: [
+              {
+                type: 'image',
+                source: { type: 'base64', media_type: 'image/jpeg', data: base64Data }
+              },
+              {
+                type: 'text',
+                text: `This is a passport or ID card. Extract the MRZ (Machine Readable Zone) lines exactly as they appear.
+MRZ lines contain only uppercase letters A-Z, digits 0-9, and < characters.
+TD1 format: exactly 3 lines of 30 characters each.
+TD3 format: exactly 2 lines of 44 characters each.
+Reply with ONLY the raw MRZ lines, one per line, nothing else.
+If no MRZ is visible, reply with: NO_MRZ`
+              }
+            ]
+          }]
+        })
+      });
+
+      if (!resp.ok) {
+        const err = await resp.text();
+        if (resp.status === 0 || resp.status >= 400) {
+          addLog('skip', `Claude Vision → localhost'ta çalışmaz, Tesseract'a geçiliyor`, []);
+        }
+        return null;
+      }
+
+      const data = await resp.json();
+      const text = data.content?.map(b => b.text||'').join('\n').trim();
+      addLog('skip', `Claude cevabı → ${label}`, [text.substring(0,120)]);
+
+      if (!text || text === 'NO_MRZ') return null;
+
+      // Parse MRZ lines
+      const lines = text.split('\n')
+        .map(l => l.trim().replace(/[^A-Z0-9<]/g,''))
+        .filter(l => l.length >= 28);
+
+      addLog('skip', `Parse → ${lines.length} satır`, lines.map(l => l.substring(0,40)));
+
+      const result = extractMRZ(lines.join('\n'));
+      if (result) {
+        const l2 = result.lines[1];
+        const cs = result.type === 'TD1'
+          ? { passOk: chk(result.lines[0].substring(5,14))===+result.lines[0][14],
+              dobOk:  chk(l2.substring(0,6))===+l2[6],
+              expOk:  chk(l2.substring(8,14))===+l2[14] }
+          : getChecksums_TD3(l2);
+        addLog('ok', `${result.type} bulundu → Claude Vision`, [
+          `L1: ${result.lines[0]}`,
+          `L2: ${l2}`,
+        ], null, cs);
+        return result;
+      }
+      // Claude doğrudan satırları verdi, direkt dene
+      if (lines.length >= 2) {
+        const l1 = lines[0], l2 = lines[1], l3 = lines[2]||'';
+        if (l1.length===30 && l2.length===30) {
+          const cs = { passOk: chk(l1.substring(5,14))===+l1[14],
+                       dobOk:  chk(l2.substring(0,6))===+l2[6],
+                       expOk:  chk(l2.substring(8,14))===+l2[14] };
+          addLog(cs.dobOk||cs.expOk?'ok':'warn', 'TD1 direkt parse', [`L1:${l1}`,`L2:${l2}`], null, cs);
+          if (cs.dobOk && cs.expOk) return {type:'TD1', lines:[l1,l2,l3]};
+        }
+        if (l1.length===44 && l2.length===44) {
+          const cs = getChecksums_TD3(l2);
+          addLog(cs.dobOk||cs.expOk?'ok':'warn', 'TD3 direkt parse', [`L1:${l1}`,`L2:${l2}`], null, cs);
+          if (cs.dobOk && cs.expOk) return {type:'TD3', lines:[l1,l2]};
+        }
+      }
+      return null;
+    } catch(e) {
+      // CORS/network hatası — localhost'ta beklenen, sessizce geç
+      return null;
+    }
+  }
+
+  let prog = 10;
+  document.getElementById('proc-prog').style.width = prog + '%';
+
+  // HTTPS'te Claude Vision, localhost'ta direkt Tesseract
+  const isHttps = window.location.protocol === 'https:';
+  if (isHttps) {
+    for (const deg of [0, 90, 270, 180]) {
+      if (processingCancelled) return;
+      prog = Math.min(prog + 22, 92);
+      document.getElementById('proc-prog').style.width = prog + '%';
+      const b64 = imgToBase64(img, deg);
+      const result = await scanWithClaude(b64, `${deg}° Claude Vision`);
+      if (result) {
+        document.getElementById('proc-prog').style.width = '100%';
+        if (cancelBtn) cancelBtn.style.display = 'none';
+        await new Promise(r => setTimeout(r, 100));
+        saveAndShow(result);
+        return;
+      }
+    }
+    addLog('skip', 'Claude Vision bulamadı, Tesseract deneniyor…', []);
+  }
+
+  await processImageTesseract(img);
+}
+
+// ── OpenCV ile kimlik/MRZ bölgesi tespiti ─────────────────────────
+// Resimden beyaz dikdörtgen (kimlik) bulur, crop eder
+function detectCardRegion(srcImg, deg=0) {
+  if (!cvReady || typeof cv === 'undefined' || !cv.Mat) return null;
+  try {
+    const swap  = deg===90||deg===270;
+    const sw    = swap ? srcImg.naturalHeight : srcImg.naturalWidth;
+    const sh    = swap ? srcImg.naturalWidth  : srcImg.naturalHeight;
+    const MAX   = 1200;
+    const scale = sw > MAX ? MAX/sw : 1;
+    const rw    = Math.round(sw*scale), rh = Math.round(sh*scale);
+
+    // Canvas'a çiz
+    const tmp = document.createElement('canvas');
+    tmp.width=rw; tmp.height=rh;
+    const ctx = tmp.getContext('2d');
+    ctx.save();
+    ctx.translate(rw/2, rh/2);
+    ctx.rotate(deg*Math.PI/180);
+    ctx.scale(scale,scale);
+    ctx.drawImage(srcImg, -srcImg.naturalWidth/2, -srcImg.naturalHeight/2);
+    ctx.restore();
+
+    // OpenCV Mat oluştur
+    const src = cv.imread(tmp);
+    const grey = new cv.Mat();
+    const blur = new cv.Mat();
+    const edges = new cv.Mat();
+    const kernel = cv.Mat.ones(3,3,cv.CV_8U);
+
+    cv.cvtColor(src, grey, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(grey, blur, new cv.Size(5,5), 0);
+    cv.Canny(blur, edges, 50, 150);
+    cv.dilate(edges, edges, kernel, new cv.Point(-1,-1), 2);
+
+    // Konturları bul
+    const contours  = new cv.MatVector();
+    const hierarchy = new cv.Mat();
+    cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+    let bestRect = null;
+    let bestArea = 0;
+    const minArea = (rw * rh) * 0.10; // en az %10 kaplasın
+
+    for (let i=0; i<contours.size(); i++) {
+      const cnt  = contours.get(i);
+      const rect = cv.boundingRect(cnt);
+      const area = rect.width * rect.height;
+      const ratio = rect.width / rect.height;
+      // Kimlik kartı oranı: ~1.58 (85.6mm × 54mm)
+      if (area > minArea && area > bestArea && ratio > 1.2 && ratio < 2.2) {
+        bestArea = area;
+        bestRect = rect;
+      }
+      cnt.delete();
+    }
+
+    // Cleanup
+    src.delete(); grey.delete(); blur.delete(); edges.delete();
+    kernel.delete(); contours.delete(); hierarchy.delete();
+
+    if (!bestRect) return null;
+
+    // %10 padding ekle
+    const pad = Math.round(Math.min(bestRect.width, bestRect.height) * 0.05);
+    const x = Math.max(0, bestRect.x - pad);
+    const y = Math.max(0, bestRect.y - pad);
+    const w = Math.min(rw - x, bestRect.width  + pad*2);
+    const h = Math.min(rh - y, bestRect.height + pad*2);
+
+    // Crop canvas
+    const out = document.createElement('canvas');
+    out.width=w; out.height=h;
+    out.getContext('2d').drawImage(tmp, x, y, w, h, 0, 0, w, h);
+
+    addLog('skip', `🔍 Kimlik tespit edildi → ${deg}°`, [
+      `Crop: ${x},${y} ${w}×${h} (orijinal ${rw}×${rh})`
+    ]);
+    return out;
+  } catch(e) {
+    console.warn('OpenCV detectCard error:', e);
+    return null;
+  }
+}
+
+async function processImageTesseract(img) {
+  const cancelBtn = document.getElementById('proc-cancel-btn');
+
+  function prepCanvas(srcImg, deg) {
+    const swap  = deg === 90 || deg === 270;
+    const sw    = swap ? srcImg.naturalHeight : srcImg.naturalWidth;
+    const sh    = swap ? srcImg.naturalWidth  : srcImg.naturalHeight;
+    const MAX   = 1600;
+    const scale = sw > MAX ? MAX / sw : 1;
+    const rw    = Math.round(sw * scale), rh = Math.round(sh * scale);
+    const cv2 = document.createElement('canvas');
+    cv2.width = rw; cv2.height = rh;
+    const ctx = cv2.getContext('2d', {willReadFrequently: true});
+    ctx.save();
+    ctx.translate(rw/2, rh/2);
+    ctx.rotate(deg * Math.PI / 180);
+    ctx.scale(scale, scale);
+    ctx.drawImage(srcImg, -srcImg.naturalWidth/2, -srcImg.naturalHeight/2);
+    ctx.restore();
+    return cv2;
+  }
+
+  const imgConfirmed = { passOk:false, dobOk:false, expOk:false, compOk:false };
+  let imgBestResult = null;
+
+  function checkImgConfirmed() {
+    if (imgBestResult && imgConfirmed.passOk && (imgConfirmed.dobOk || imgConfirmed.expOk)) {
+      document.getElementById('proc-prog').style.width = '100%';
+      if (cancelBtn) cancelBtn.style.display = 'none';
+      addLog('ok', 'Biriken checksum\u2019larla kabul', []);
+      saveAndShow(imgBestResult);
+      return true;
+    }
+    return false;
+  }
+
+  // ── Deskew: Hough transform ile eğikliği düzelt ─────────────────
+  function deskew(srcCanvas) {
+    try {
+      const w = srcCanvas.width, h = srcCanvas.height;
+      const ctx = srcCanvas.getContext('2d', {willReadFrequently:true});
+      const id  = ctx.getImageData(0,0,w,h);
+      const px  = id.data;
+
+      // Greyscale + threshold
+      const grey = new Uint8Array(w*h);
+      for (let i=0;i<w*h;i++) {
+        const g = 0.299*px[i*4]+0.587*px[i*4+1]+0.114*px[i*4+2];
+        grey[i] = g < 128 ? 1 : 0; // dark pixels = 1
+      }
+
+      // Simplified Hough line angle detection (-15° to +15°)
+      const steps = 15, best = {angle:0, count:0};
+      for (let a=-steps;a<=steps;a++) {
+        const rad = a * Math.PI / 180;
+        const cos = Math.cos(rad), sin = Math.sin(rad);
+        let count = 0;
+        // Sample horizontal lines
+        for (let y=Math.floor(h*0.5);y<Math.floor(h*0.85);y+=4) {
+          let prev = -1, run = 0;
+          for (let x=0;x<w;x++) {
+            const nx = Math.round(x*cos - (y-h/2)*sin + w/2);
+            const ny = Math.round(x*sin + (y-h/2)*cos + h/2);
+            if (nx<0||nx>=w||ny<0||ny>=h) continue;
+            const v = grey[ny*w+nx];
+            if (v===prev) run++; else { if(run>10) count+=run; run=1; }
+            prev = v;
+          }
+        }
+        if (count > best.count) { best.count=count; best.angle=a; }
+      }
+
+      if (Math.abs(best.angle) < 1) return srcCanvas; // no deskew needed
+
+      // Apply rotation
+      const out = document.createElement('canvas');
+      out.width=w; out.height=h;
+      const octx = out.getContext('2d');
+      octx.translate(w/2,h/2);
+      octx.rotate(-best.angle*Math.PI/180);
+      octx.drawImage(srcCanvas,-w/2,-h/2);
+      return out;
+    } catch(e) { return srcCanvas; }
+  }
+
+  async function tryScan(canvas, label, applyDeskew=true) {
+    if (processingCancelled) return null;
+    if (!canvas || canvas.width < 3 || canvas.height < 3) return null;
+    document.getElementById('proc-msg').textContent = label;
+    try {
+      // Deskew uygula (sadece crop edilmiş canvas'larda — tam resimde zaten düz)
+      const src = (applyDeskew && canvas.width < 1000) ? deskew(canvas) : canvas;
+      const { data: { text } } = await worker.recognize(src);
+      const cleaned = clean(text);
+      const chars   = cleaned.replace(/\n/g,'').length;
+      const result  = extractMRZ(cleaned);
+      const rawText = cleaned.replace(/\n/g,' ');
+      if (/CUMHUR|REPUBLIC|KIMLIK|IDENTITY|CARD/.test(rawText.toUpperCase()) && !result)
+        addLog('warn', `Ön yüz → ${label}`, ['⚠ ARKA YÜZÜ yükleyin']);
+      if (result) {
+        const l2 = result.lines[1];
+        const cs = result.type==='TD1'
+          ? {passOk:chk(result.lines[0].substring(5,14))===+result.lines[0][14],
+             dobOk:chk(l2.substring(0,6))===+l2[6], expOk:chk(l2.substring(8,14))===+l2[14]}
+          : getChecksums_TD3(l2);
+        if (cs.passOk) imgConfirmed.passOk=true;
+        if (cs.dobOk)  imgConfirmed.dobOk=true;
+        if (cs.expOk)  imgConfirmed.expOk=true;
+        if (cs.passOk||cs.dobOk||cs.expOk) imgBestResult=result;
+        const passNow = (imgConfirmed.passOk||cs.passOk)&&(imgConfirmed.dobOk||imgConfirmed.expOk||cs.dobOk||cs.expOk);
+        addLog(passNow?'ok':'warn', `${result.type} ${passNow?'→ KABUL':'bulundu'} → ${label}`,
+          [`L1:${result.lines[0]}`,`L2:${l2}`], null, cs);
+        if (passNow) return result;
+      } else {
+        addLog('err', `Bulunamadı → ${label}`, [`Ham (${chars}): ${rawText.substring(0,70)}`]);
+      }
+      return null;
+    } catch(e) {
+      addLog('err', `Hata → ${label}`, [e.message]); return null;
+    }
+  }
+
+  let prog = 5;
+  for (const deg of [0, 90, 270, 180]) {
+    if (processingCancelled) return;
+    prog = Math.min(prog+8, 88);
+    document.getElementById('proc-prog').style.width = prog+'%';
+
+    // OpenCV ile kimlik bölgesini tespit et — varsa crop kullan
+    const cvCrop = detectCardRegion(img, deg);
+
+    // Dene 1: OpenCV crop — MRZ alt bölgesi rectangle ile
+    if (cvCrop) {
+      // 1a: Sadece alt 1/3 (MRZ bölgesi) — rectangle parametresi ile
+      const mrzRect = {
+        left:   0,
+        top:    Math.round(cvCrop.height * 0.60),
+        width:  cvCrop.width,
+        height: Math.round(cvCrop.height * 0.40),
+      };
+      const r0rect = await worker.recognize(cvCrop, { rectangle: mrzRect })
+        .then(({data:{text}}) => {
+          const cleaned = clean(text);
+          const result  = extractMRZ(cleaned);
+          if (result) {
+            const l2 = result.lines[1];
+            const cs = result.type==='TD1'
+              ? {passOk:chk(result.lines[0].substring(5,14))===+result.lines[0][14],
+                 dobOk:chk(l2.substring(0,6))===+l2[6], expOk:chk(l2.substring(8,14))===+l2[14]}
+              : getChecksums_TD3(l2);
+            if (cs.passOk) imgConfirmed.passOk=true;
+            if (cs.dobOk)  imgConfirmed.dobOk=true;
+            if (cs.expOk)  imgConfirmed.expOk=true;
+            if (cs.passOk||cs.dobOk||cs.expOk) imgBestResult=result;
+            const passNow=(imgConfirmed.passOk||cs.passOk)&&(imgConfirmed.dobOk||imgConfirmed.expOk||cs.dobOk||cs.expOk);
+            addLog(passNow?'ok':'warn', `${result.type} ${passNow?'→ KABUL':'bulundu'} → rect ${deg}°`,
+              [`L1:${result.lines[0]}`,`L2:${l2}`], null, cs);
+            return passNow ? result : null;
+          }
+          addLog('err', `Bulunamadı → rect ${deg}°`, [`Ham: ${cleaned.replace(/\n/g,' ').substring(0,60)}`]);
+          return null;
+        }).catch(()=>null);
+      if (r0rect) { document.getElementById('proc-prog').style.width='100%'; if(cancelBtn)cancelBtn.style.display='none'; await new Promise(r=>setTimeout(r,100)); saveAndShow(r0rect); return; }
+      if (checkImgConfirmed()) return;
+
+      // 1b: Tam crop (fallback)
+      const r0 = await tryScan(cvCrop, `OpenCV crop ${deg}°`);
+      if (r0) { document.getElementById('proc-prog').style.width='100%'; if(cancelBtn)cancelBtn.style.display='none'; await new Promise(r=>setTimeout(r,100)); saveAndShow(r0); return; }
+      if (checkImgConfirmed()) return;
+      // Enhanced crop
+      const cvEnh = detectCardRegion(img, deg);
+      if (cvEnh) {
+        enhance(cvEnh.getContext('2d',{willReadFrequently:true}), cvEnh.width, cvEnh.height);
+        const rE = await tryScan(cvEnh, `OpenCV crop ${deg}° enh`);
+        if (rE) { document.getElementById('proc-prog').style.width='100%'; if(cancelBtn)cancelBtn.style.display='none'; await new Promise(r=>setTimeout(r,100)); saveAndShow(rE); return; }
+        if (checkImgConfirmed()) return;
+      }
+    }
+
+    // Dene 2: Tam resim (fallback)
+    if (processingCancelled) return;
+    const co = prepCanvas(img, deg);
+    const r1 = await tryScan(co, `Tesseract ${deg}°`);
+    if (r1) { document.getElementById('proc-prog').style.width='100%'; if(cancelBtn)cancelBtn.style.display='none'; await new Promise(r=>setTimeout(r,100)); saveAndShow(r1); return; }
+    if (checkImgConfirmed()) return;
+  }
+
+  if (cancelBtn) cancelBtn.style.display = 'none';
+  addLog('err','Tüm denemeler başarısız',['💡 Kimliğin MRZ olan ARKA YÜZÜNÜ yükleyin']);
+  showError('MRZ tespit edilemedi.\n\n💡 Kimliğin arka yüzünü yükleyin veya Elle Gir sekmesini kullanın.');
+}
+
+
+async function processCanvas(c) {
+  const { data: { text } } = await worker.recognize(c);
+  const mrzResult = extractMRZ(clean(text));
+  if (mrzResult) { stopScan(); saveAndShow(mrzResult); }
+  else { showError('MRZ bu karede bulunamadı. Yeniden deneyin.'); }
+}
+
+// ── RE-READ NAME LINE at 4x scale, focused on top MRZ line only ──────
+async function rereadNameLine(videoEl, z) {
+  try {
+    // Top half of scan zone = line 1 (name line)
+    const lineH = Math.round(z.h * 0.45); // just the top line
+    const SCALE = 4;
+    const tmp = document.createElement('canvas');
+    tmp.width  = z.w * SCALE;
+    tmp.height = lineH * SCALE;
+    const tc = tmp.getContext('2d', {willReadFrequently: true});
+    tc.drawImage(videoEl, z.x, z.y, z.w, lineH, 0, 0, tmp.width, tmp.height);
+    enhanceName(tc, tmp.width, tmp.height);
+    const { data: { text } } = await worker.recognize(tmp);
+    const cleaned = clean(text);
+    // Find a valid 44-char L1 in the result
+    const chunks = cleaned.match(/.{44}/g) || [];
+    return chunks.find(isL1_TD3) || null;
+  } catch(e) { return null; }
+}
+
+// ── Enhanced preprocessing specifically for name line ─────────────────
+function enhanceName(ctx, w, h) {
+  const d = ctx.getImageData(0, 0, w, h);
+  const p = d.data;
+  const grey = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    grey[i] = Math.round(0.299*p[i*4] + 0.587*p[i*4+1] + 0.114*p[i*4+2]);
+  }
+  // Otsu threshold
+  const hist = new Int32Array(256);
+  for (let g of grey) hist[g]++;
+  let total = grey.length, sum = 0;
+  for (let i = 0; i < 256; i++) sum += i * hist[i];
+  let sumB=0, wB=0, max=0, thresh=128;
+  for (let i = 0; i < 256; i++) {
+    wB += hist[i]; if(!wB) continue;
+    const wF = total-wB; if(!wF) break;
+    sumB += i*hist[i];
+    const mB=sumB/wB, mF=(sum-sumB)/wF;
+    const between = wB*wF*(mB-mF)*(mB-mF);
+    if(between>max){max=between;thresh=i;}
+  }
+  // Apply threshold — slightly lower to catch thin strokes
+  const t = thresh * 0.85;
+  for (let i = 0; i < w*h; i++) {
+    const v = grey[i] > t ? 255 : 0;
+    p[i*4]=p[i*4+1]=p[i*4+2]=v; p[i*4+3]=255;
+  }
+  ctx.putImageData(d, 0, 0);
+}
+
+
+// Hızlı enhance — kamera için (bilateral atlanır)
+function enhanceFast(ctx, w, h) {
+  const d = ctx.getImageData(0,0,w,h); const p = d.data; const n = w*h;
+  const grey = new Uint8Array(n);
+  for (let i=0;i<n;i++) grey[i] = Math.round(0.299*p[i*4]+0.587*p[i*4+1]+0.114*p[i*4+2]);
+  // Sadece kontrast boost + Otsu threshold
+  const hist = new Int32Array(256);
+  for (let g of grey) hist[g]++;
+  let total=n, sum=0;
+  for (let i=0;i<256;i++) sum+=i*hist[i];
+  let sumB=0,wB=0,max=0,thresh=128;
+  for (let i=0;i<256;i++) {
+    wB+=hist[i]; if(!wB) continue;
+    const wF=total-wB; if(!wF) break;
+    sumB+=i*hist[i];
+    const mB=sumB/wB, mF=(sum-sumB)/wF;
+    const b=wB*wF*(mB-mF)*(mB-mF);
+    if(b>max){max=b;thresh=i;}
+  }
+  thresh=Math.max(80,Math.min(180,thresh));
+  for (let i=0;i<n;i++) {
+    const g=grey[i]; let v;
+    if(g>thresh+20) v=255; else if(g<thresh-20) v=0;
+    else v=Math.round(((g-(thresh-20))/40)*255);
+    p[i*4]=p[i*4+1]=p[i*4+2]=v; p[i*4+3]=255;
+  }
+  ctx.putImageData(d,0,0);
+}
+
+// Tam enhance pipeline — resim yükleme için (yavaş ama doğru)
+function enhance(ctx, w, h) {
+  const d = ctx.getImageData(0, 0, w, h);
+  const p = d.data;
+  const n = w * h;
+
+  // ── 1. Greyscale ──────────────────────────────────────────────────
+  const grey = new Uint8Array(n);
+  for (let i = 0; i < n; i++)
+    grey[i] = Math.round(0.299*p[i*4] + 0.587*p[i*4+1] + 0.114*p[i*4+2]);
+
+  // ── 2. Bilateral Filter (denoising, kenar koruyan) ────────────────
+  // Gürültüyü kaldırır ama MRZ karakter kenarlarını korur
+  const bilat = new Uint8Array(n);
+  const sigmaS = 3, sigmaR = 25; // spatial, radiometric
+  const radius  = 3;
+  const twoSS   = 2 * sigmaS * sigmaS;
+  const twoRR   = 2 * sigmaR * sigmaR;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const ci   = y * w + x;
+      const cv2  = grey[ci];
+      let sumW = 0, sumV = 0;
+      for (let dy = -radius; dy <= radius; dy++) {
+        const ny = y + dy;
+        if (ny < 0 || ny >= h) continue;
+        for (let dx = -radius; dx <= radius; dx++) {
+          const nx = x + dx;
+          if (nx < 0 || nx >= w) continue;
+          const ni  = ny * w + nx;
+          const nv  = grey[ni];
+          const wS  = Math.exp(-(dx*dx + dy*dy) / twoSS);
+          const wR  = Math.exp(-(cv2-nv)*(cv2-nv) / twoRR);
+          const wt  = wS * wR;
+          sumW += wt;
+          sumV += wt * nv;
+        }
+      }
+      bilat[ci] = Math.round(sumV / sumW);
+    }
+  }
+
+  // ── 3. CLAHE (Contrast Limited Adaptive Histogram Equalization) ───
+  // Global kontrast yerine lokal — eşitsiz aydınlatmayı düzeltir
+  const tileW = Math.max(1, Math.round(w / 8));
+  const tileH = Math.max(1, Math.round(h / 4));
+  const clahe  = new Uint8Array(n);
+  const clipLimit = 3.0; // gürültü amplifikasyonunu sınırla
+
+  for (let ty = 0; ty < h; ty += tileH) {
+    for (let tx = 0; tx < w; tx += tileW) {
+      // Tile histogramı
+      const hist = new Int32Array(256);
+      const x1 = tx, x2 = Math.min(tx + tileW, w);
+      const y1 = ty, y2 = Math.min(ty + tileH, h);
+      const tileN = (x2-x1) * (y2-y1);
+
+      for (let y = y1; y < y2; y++)
+        for (let x = x1; x < x2; x++)
+          hist[bilat[y*w+x]]++;
+
+      // Clip limit uygula — aşırı amplifikasyonu engelle
+      const clipVal = Math.round(clipLimit * tileN / 256);
+      let excess = 0;
+      for (let i = 0; i < 256; i++) {
+        if (hist[i] > clipVal) { excess += hist[i] - clipVal; hist[i] = clipVal; }
+      }
+      // Fazlalığı dağıt
+      const add = Math.floor(excess / 256);
+      for (let i = 0; i < 256; i++) hist[i] += add;
+
+      // CDF hesapla
+      const cdf = new Int32Array(256);
+      cdf[0] = hist[0];
+      for (let i = 1; i < 256; i++) cdf[i] = cdf[i-1] + hist[i];
+      const cdfMin = cdf.find(v => v > 0) || 0;
+
+      // Tile piksellerini eşitle
+      for (let y = y1; y < y2; y++) {
+        for (let x = x1; x < x2; x++) {
+          const i = y*w+x;
+          const v = bilat[i];
+          clahe[i] = tileN > cdfMin
+            ? Math.round(((cdf[v] - cdfMin) / (tileN - cdfMin)) * 255)
+            : v;
+        }
+      }
+    }
+  }
+
+  // ── 4. Unsharp Masking (keskinleştirme) ───────────────────────────
+  // Bulanık görüntülerdeki MRZ karakterlerini netleştirir
+  // Gaussian blur (radius 1)
+  const blur = new Uint8Array(n);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let sum = 0, cnt = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x+dx, ny = y+dy;
+          if (nx>=0&&nx<w&&ny>=0&&ny<h) { sum+=clahe[ny*w+nx]; cnt++; }
+        }
+      }
+      blur[y*w+x] = Math.round(sum/cnt);
+    }
+  }
+  const sharp = new Uint8Array(n);
+  const amount = 1.5; // keskinleştirme miktarı
+  for (let i = 0; i < n; i++) {
+    const v = Math.round(clahe[i] + amount * (clahe[i] - blur[i]));
+    sharp[i] = Math.max(0, Math.min(255, v));
+  }
+
+  // ── 5. Adaptive Threshold (binarization) ─────────────────────────
+  // Global Otsu yerine lokal adaptif — eşitsiz aydınlatmada çok daha iyi
+  const blockSize = Math.max(15, Math.round(Math.min(w,h) * 0.05) | 1); // tek sayı
+  const C = 8; // eşik offset
+  const out = new Uint8Array(n);
+  // Integral image (summed area table) — hızlı ortalama hesabı
+  const integral = new Float64Array((w+1)*(h+1));
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      integral[(y+1)*(w+1)+(x+1)] =
+        sharp[y*w+x]
+        + integral[y*(w+1)+(x+1)]
+        + integral[(y+1)*(w+1)+x]
+        - integral[y*(w+1)+x];
+    }
+  }
+  const half = Math.floor(blockSize/2);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const x1 = Math.max(0, x-half),   x2 = Math.min(w-1, x+half);
+      const y1 = Math.max(0, y-half),   y2 = Math.min(h-1, y+half);
+      const area = (x2-x1+1)*(y2-y1+1);
+      const sum2 = integral[(y2+1)*(w+1)+(x2+1)]
+                 - integral[y1*(w+1)+(x2+1)]
+                 - integral[(y2+1)*(w+1)+x1]
+                 + integral[y1*(w+1)+x1];
+      const mean = sum2 / area;
+      out[y*w+x] = sharp[y*w+x] < (mean - C) ? 0 : 255;
+    }
+  }
+
+  // ── Sonucu canvas'a yaz ───────────────────────────────────────────
+  for (let i = 0; i < n; i++) {
+    p[i*4] = p[i*4+1] = p[i*4+2] = out[i];
+    p[i*4+3] = 255;
+  }
+  ctx.putImageData(d, 0, 0);
+}
+
+// ── OCR HELPERS ───────────────────────────────────────────────────────
+// cleanLine: removes non-MRZ chars from a single line
+function cleanLine(t) { return t.toUpperCase().replace(/[^A-Z0-9<]/g, ''); }
+// clean: preserves newlines so line-based extractMRZ works correctly
+function clean(t) {
+  return t.toUpperCase()
+    .split('\n')
+    .map(l => l.replace(/[^A-Z0-9<]/g, ''))
+    .join('\n');
+}
+
+// ── TD3: Pasaport — 2 × 44 karakter ──────────────────────────────────
+function isL1_TD3(l) {
+  return l && l.length===44 && l[0]==='P' && /^[A-Z<]{3}/.test(l.substring(1)) && /^[A-Z0-9<]{44}$/.test(l);
+}
+function isL2_TD3(l) {
+  if (!l || l.length !== 44 || !/^[A-Z0-9<]{44}$/.test(l)) return false;
+  const dob = l.substring(13,19), exp = l.substring(21,27);
+  if (!/^\d{6}$/.test(dob) || !/^\d{6}$/.test(exp)) return false;
+  const dobMM = +dob.substring(2,4), dobDD = +dob.substring(4,6);
+  const expMM = +exp.substring(2,4), expDD = +exp.substring(4,6);
+  if (dobMM < 1 || dobMM > 12 || dobDD < 1 || dobDD > 31) return false;
+  if (expMM < 1 || expMM > 12 || expDD < 1 || expDD > 31) return false;
+  return true;
+}
+
+// ── TD1: TC Kimlik / ID Kartı — 3 × 30 karakter ──────────────────────
+function isL1_TD1(l) {
+  if (!l || l.length !== 30 || !/^[A-Z0-9<]{30}$/.test(l)) return false;
+  // Must start with I, A, or C (with optional leading noise already stripped by fixToLen)
+  return /^[IAC][A-Z<]/.test(l);
+}
+
+// Try stripping leading noise from a potential L1 line
+function tryFixL1_TD1(l) {
+  if (!l) return null;
+  // Try stripping up to 3 leading noise chars
+  for (let skip = 0; skip <= 3; skip++) {
+    const s = l.substring(skip);
+    if (s.length < 27) break;
+    // Exact 30 → test directly
+    if (s.length === 30 && isL1_TD1(s)) return s;
+    // 29 chars → pad with < at end (last char was trailing padding)
+    if (s.length === 29) {
+      const padded = s + '<';
+      if (isL1_TD1(padded)) return padded;
+    }
+    // 31 chars → strip one from end
+    if (s.length === 31) {
+      const trimmed = s.substring(0, 30);
+      if (isL1_TD1(trimmed)) return trimmed;
+    }
+  }
+  return null;
+}
+function isL2_TD1(l) {
+  if (!l || l.length !== 30 || !/^[A-Z0-9<]{30}$/.test(l)) return false;
+  // DOB (0-5) and expiry (8-13) must be all digits, month/day valid
+  if (!/^\d{6}/.test(l)) return false;           // DOB must be digits
+  if (!/^\d{6}$/.test(l.substring(8,14))) return false; // expiry must be digits
+  const dobMM = +l.substring(2,4), dobDD = +l.substring(4,6);
+  const expMM = +l.substring(10,12), expDD = +l.substring(12,14);
+  if (dobMM < 1 || dobMM > 12 || dobDD < 1 || dobDD > 31) return false;
+  if (expMM < 1 || expMM > 12 || expDD < 1 || expDD > 31) return false;
+  return true;
+}
+function isL3_TD1(l) {
+  // Line 3: name line — contains << separator
+  return l && l.length===30 && /^[A-Z0-9<]{30}$/.test(l) && l.includes('<<');
+}
+
+// ── MRZ EXTRACTION — satır bazlı (line-based) ───────────────────────
+function fixToLen(s, n) {
+  if (!s) return null;
+  if (s.length === n) return s;
+  // Fazla char: tüm offset'leri dene — prefix noise olabilir
+  if (s.length > n && s.length - n <= 5) {
+    for (let skip = 0; skip <= s.length - n; skip++) {
+      const candidate = s.substring(skip, skip + n);
+      // TD1 L1 kontrolü
+      if (n === 30 && /^[IAC]/.test(candidate)) return candidate;
+      // TD3 L1 kontrolü
+      if (n === 44 && candidate[0] === 'P') return candidate;
+    }
+    // L2/L3 için baştan al
+    return s.substring(0, n);
+  }
+  // 1 char eksik
+  if (s.length === n - 1) return s;
+  return null;
+}
+
+// Recover dropped first char of L2 by trying all digits and picking
+// the one that passes the most checksums
+function fixL2WithRecovery(s, type) {
+  if (!s) return null;
+  const target = type === 'TD1' ? 30 : 44;
+
+  // Önce prefix noise strip dene — 1-4 char fazla olabilir
+  if (s.length > target && s.length - target <= 5) {
+    for (let skip = 0; skip <= s.length - target; skip++) {
+      const c = s.substring(skip, skip + target);
+      if (type === 'TD1') {
+        const dobOk = /^\d{6}/.test(c) && chk(c.substring(0,6)) === +c[6];
+        const expOk = /^\d{6}$/.test(c.substring(8,14)) && chk(c.substring(8,14)) === +c[14];
+        if (dobOk || expOk) return c;
+      } else {
+        const dobOk = chk(c.substring(13,19)) === +c[19];
+        const expOk = chk(c.substring(21,27)) === +c[27];
+        if (dobOk || expOk) return c;
+      }
+    }
+    return s.substring(0, target); // fallback baştan al
+  }
+
+  if (s.length === target) return s;
+  if (s.length === target - 1) {
+    let best = null, bestScore = -1;
+    for (const d of '0123456789') {
+      const c = d + s;
+      let score = 0;
+      if (type === 'TD1' && c.length === 30) {
+        if (/^\d/.test(c) && chk(c.substring(0,6))  === +c[6])  score += 2;
+        if (chk(c.substring(8,14)) === +c[14]) score += 2;
+      } else if (type === 'TD3' && c.length === 44) {
+        if (chk(c.substring(13,19)) === +c[19]) score += 2;
+        if (chk(c.substring(21,27)) === +c[27]) score += 2;
+      }
+      if (score > bestScore) { bestScore = score; best = c; }
+    }
+    return best;
+  }
+  if (s.length > target && s.length - target <= 4) return s.slice(0, target);
+  return null;
+}
+
+// Fix common OCR errors in numeric positions of L2
+// In L2: positions 0-5=DOB, 7=sex, 8-13=expiry are all digits
+// B→8, O→0, D→0, S→5, G→6, Z→2, I→1, L→1 in digit positions
+function fixDigitChar(c) {
+  const map = {'B':'8','O':'0','D':'0','S':'5','G':'6','Z':'2','I':'1','L':'1','Q':'0','U':'0'};
+  return map[c] !== undefined ? map[c] : c;
+}
+
+function fixL1_TD1(s) {
+  if (!s || s.length !== 30) return s;
+  const a = s.split('');
+  // pos 0: must be I, A, or C
+  if (!/[IAC]/.test(a[0])) a[0] = 'I';
+  // pos 2-4: issuing country — letters only
+  for (let i=2;i<=4;i++) { if (/\d/.test(a[i])) a[i] = 'O'; }
+  // pos 5-13: doc number — alphanumeric, fix common letter→digit mistakes
+  // MRZ doc numbers can be letters+digits, but B/O/I confusions are common
+  // Try to fix so checksum passes
+  const docOrig = a.slice(5,14).join('');
+  const chk14orig = +a[14];
+  if (!isNaN(chk14orig) && chk(docOrig) !== chk14orig) {
+    // Try fixing each position in doc number
+    for (let i = 5; i <= 13; i++) {
+      const orig = a[i];
+      const fixed = fixDigitChar(orig);
+      if (fixed !== orig) {
+        a[i] = fixed;
+        if (chk(a.slice(5,14).join('')) === chk14orig) break; // found fix
+        a[i] = orig; // revert if didn't help
+      }
+    }
+  }
+  // pos 14: doc number check digit
+  a[14] = fixCheckDigit(a[14]);
+  // pos 29: final check digit
+  a[29] = fixCheckDigit(a[29]);
+  return a.join('');
+}
+
+function fixCheckDigit(c) {
+  // Check digit positions must be 0-9
+  // fixDigitChar handles B→8, O→0 etc.
+  // Additionally: C looks like 0 with missing serif
+  const fixed = fixDigitChar(c);
+  if (/^\d$/.test(fixed)) return fixed;
+  // Extra mappings for check digit only
+  const extra = {'C':'0','G':'6','T':'7','E':'3','F':'5'};
+  return extra[c] || '0'; // fallback to 0
+}
+
+function fixL2_TD1(s) {
+  if (!s || s.length !== 30) return s;
+  const a = s.split('');
+  for (let i=0;i<=5;i++) a[i] = fixDigitChar(a[i]);
+  a[6]  = fixCheckDigit(a[6]);
+  for (let i=8;i<=13;i++) a[i] = fixDigitChar(a[i]);
+  a[14] = fixCheckDigit(a[14]);
+  a[29] = fixCheckDigit(a[29]);
+  return a.join('');
+}
+
+function fixL2_TD3(s) {
+  if (!s || s.length !== 44) return s;
+  const a = s.split('');
+  // pos 0-8: passport number (alphanumeric — keep letters)
+  // pos 9: check digit
+  a[9] = fixDigitChar(a[9]);
+  // pos 13-18: DOB
+  for (let i=13;i<=18;i++) a[i] = fixDigitChar(a[i]);
+  a[19] = fixDigitChar(a[19]);
+  // pos 21-26: expiry
+  for (let i=21;i<=26;i++) a[i] = fixDigitChar(a[i]);
+  a[27] = fixDigitChar(a[27]);
+  a[43] = fixDigitChar(a[43]);
+  return a.join('');
+}
+
+function extractMRZ(rawOCR) {
+  if (!rawOCR || rawOCR.length < 60) return null;
+
+  // ── 1. Split into lines ───────────────────────────────────────────
+  const rawLines = rawOCR.split(/\n+/).map(l => l.trim()).filter(l => l.length > 10);
+
+  // ── 2. Clean each line to MRZ chars only ─────────────────────────
+  const lines = rawLines.map(l => l.toUpperCase().replace(/[^A-Z0-9<]/g, ''));
+
+  // ── 3. Fix to target length + apply digit corrections ────────────
+  const fixed30 = lines.map(l => fixToLen(l, 30));
+  const fixed44 = lines.map(l => fixToLen(l, 44));
+
+  // ── 4. Try TD1 (3×30) ────────────────────────────────────────────
+  for (let i = 0; i < fixed30.length - 1; i++) {
+    for (let j = i; j < Math.min(i+3, fixed30.length); j++) {
+      const l1candidate = fixed30[j] ? (isL1_TD1(fixed30[j]) ? fixed30[j] : tryFixL1_TD1(fixed30[j])) : null;
+      if (!l1candidate) continue;
+      const l1fixed = fixL1_TD1(l1candidate);
+      for (let k = j+1; k < Math.min(j+3, fixed30.length); k++) {
+        const raw2 = fixed30[k] || (lines[k] && lines[k].length === 29 ? lines[k] : null);
+        const l2c = raw2 ? fixL2_TD1(fixL2WithRecovery(raw2, 'TD1') || raw2) : null;
+        if (!l2c || !isL2_TD1(l2c)) continue;
+        for (let m = k+1; m < Math.min(k+3, fixed30.length); m++) {
+          if (fixed30[m] && isL3_TD1(fixed30[m]))
+            return { type:'TD1', lines:[l1fixed, l2c, fixed30[m]] };
+        }
+      }
+    }
+  }
+
+  // ── 5. Try TD3 (2×44) ────────────────────────────────────────────
+  for (let i = 0; i < fixed44.length; i++) {
+    if (!fixed44[i] || !isL1_TD3(fixed44[i])) continue;
+    for (let j = i+1; j < Math.min(i+3, fixed44.length); j++) {
+      const raw2 = fixed44[j] || (lines[j] && lines[j].length === 43 ? lines[j] : null);
+      const l2c = raw2 ? fixL2_TD3(fixL2WithRecovery(raw2, 'TD3') || raw2) : null;
+      if (l2c && isL2_TD3(l2c))
+        return { type:'TD3', lines:[fixed44[i], l2c] };
+    }
+  }
+
+  // ── 6. Fallback: flat sliding window ─────────────────────────────
+  const flat = lines.join('');
+  if (flat.length >= 88) {
+    for (let i = 0; i <= flat.length - 88; i++) {
+      const l1 = flat.substring(i, i+44);
+      const l2 = fixL2_TD3(flat.substring(i+44, i+88));
+      if (isL1_TD3(l1) && isL2_TD3(l2)) return { type:'TD3', lines:[l1, l2] };
+    }
+  }
+  if (flat.length >= 90) {
+    for (let i = 0; i <= flat.length - 90; i++) {
+      const l1raw = flat.substring(i,i+30);
+      const l1    = isL1_TD1(l1raw) ? l1raw : tryFixL1_TD1(l1raw);
+      const l2    = l1 ? fixL2_TD1(fixL2WithRecovery(flat.substring(i+30,i+60),'TD1') || flat.substring(i+30,i+60)) : null;
+      const l3    = flat.substring(i+60,i+90);
+      if (l1 && l2 && isL2_TD1(l2) && isL3_TD1(l3)) return { type:'TD1', lines:[l1,l2,l3] };
+    }
+  }
+
+  return null;
+}
+
+// ── SAVE & SHOW ───────────────────────────────────────────────────────
+function saveAndShow(mrzResult) {
+  const parsed = mrzResult.type === 'TD1'
+    ? parseTD1(mrzResult.lines)
+    : parseTD3(mrzResult.lines[0], mrzResult.lines[1]);
+
+  const entry = {
+    id: 'pp_' + Date.now(),
+    line1: mrzResult.lines[0],
+    line2: mrzResult.lines[1],
+    line3: mrzResult.lines[2] || '',
+    type:  mrzResult.type,
+    name:  parsed.surname + (parsed.given ? ', ' + parsed.given : ''),
+    nation: parsed.nation,
+    addedAt: Date.now()
+  };
+  const saved = loadPassports();
+  saved.push(entry);
+  savePassports(saved);
+  const all = getAllPassports();
+  currentIdx = all.findIndex(p => p.id === entry.id);
+  showParsed(parsed, entry, true);
+}
+
+// ── PARSE TD3 (Pasaport 2×44) ─────────────────────────────────────────
+function parseTD3(l1, l2) {
+  const namePart   = l1.substring(5, 44);
+  const dblIdx     = namePart.indexOf('<<');
+  const surnameRaw = dblIdx >= 0 ? namePart.substring(0, dblIdx) : namePart;
+  const givenRaw   = dblIdx >= 0 ? namePart.substring(dblIdx+2) : '';
+  // Strip leading OCR noise (digits + known < lookalikes: B,C,I,L) then extract surname
+  const cleanSurname = (raw) => {
+    let s = raw;
+    while (s.length > 0 && /^[0-9BJL]/.test(s)) s = s.substring(1);
+    // C + 5+ harf = OCR gürültüsü (CELIK=4 → korunur, CGUCEL=5 → strip)
+    if (/^C[A-Z]{5,}/.test(s)) s = s.substring(1);
+    return s.replace(/</g,' ').trim();
+  };
+  const surname    = cleanSurname(surnameRaw);
+  const given      = givenRaw.split('<<')[0].replace(/</g,' ').trim();
+  const cs = getChecksums_TD3(l2);
+  return {
+    docType: 'Pasaport',
+    surname, given,
+    passNo:  l2.substring(0,9).replace(/</g,''),
+    nation:  l2.substring(10,13).replace(/</g,''),
+    issuer:  l1.substring(2,5).replace(/</g,''),
+    dob:     l2.substring(13,19),
+    sex:     l2[20],
+    expiry:  l2.substring(21,27),
+    cs,
+  };
+}
+
+// ── PARSE TD1 (TC Kimlik 3×30) ────────────────────────────────────────
+function parseTD1(lines) {
+  const [l1, l2, l3] = lines;
+  // L1: type(2) + issuer(3) + docNo(9) + docNoChk(1) + optional(15)
+  const issuer = l1.substring(2,5).replace(/</g,'');
+  const docNo  = l1.substring(5,14).replace(/</g,'');
+
+  // L2: dob(6) + dobChk(1) + sex(1) + expiry(6) + expChk(1) + nation(3) + optional(11) + compositeChk(1)
+  const dob    = l2.substring(0,6);
+  const dobChk = +l2[6];
+  const sex    = l2[7];
+  const expiry = l2.substring(8,14);
+  const expChk = +l2[14];
+  const nation = l2.substring(15,18).replace(/</g,'');
+
+  // L3: surname<<givennames (name line)
+  const namePart   = l3 || '';
+  const dblIdx     = namePart.indexOf('<<');
+  const surnameRaw = dblIdx >= 0 ? namePart.substring(0, dblIdx) : namePart;
+  const givenRaw   = dblIdx >= 0 ? namePart.substring(dblIdx+2) : '';
+
+  // Strip leading OCR noise then extract real surname
+  const surname = (() => {
+    // Step 1: strip leading digits and known < lookalikes (B,C,I,L) one by one
+    let s = surnameRaw;
+    while (s.length > 0 && /^[0-9BJL]/.test(s)) s = s.substring(1);
+    // C + 5+ harf = OCR gürültüsü (CELIK=4 → korunur, CGUCEL=5 → strip)
+    if (/^C[A-Z]{5,}/.test(s)) s = s.substring(1);
+    return s.replace(/</g,' ').trim();
+  })();
+  const given = givenRaw.split('<<')[0].replace(/</g,' ').trim();
+
+  // Checksums
+  const dobOk  = chk(dob)                 === dobChk;
+  const expOk  = chk(expiry)              === expChk;
+  const passOk = chk(l1.substring(5,14)) === +l1[14];
+
+  return {
+    docType: 'TC Kimlik',
+    surname, given,
+    passNo:  docNo,
+    nation,  issuer,
+    dob, sex, expiry,
+    cs: { passOk, dobOk, expOk, compOk: null },
+  };
+}
+
+function getChecksums_TD3(l2) {
+  try {
+    return {
+      passOk: chk(l2.substring(0,9))  === +l2[9],
+      dobOk:  chk(l2.substring(13,19))=== +l2[19],
+      expOk:  chk(l2.substring(21,27))=== +l2[27],
+      compOk: chk(l2.substring(0,10)+l2.substring(13,20)+l2.substring(21,43)) === +l2[43],
+    };
+  } catch { return {passOk:false,dobOk:false,expOk:false,compOk:false}; }
+}
+
+// ── PARSE NAMES (legacy — for stored TD3 entries) ─────────────────────
+function parseNames(l1) {
+  const namePart   = l1.substring(5, 44);
+  const dblIdx     = namePart.indexOf('<<');
+  const surnameRaw = dblIdx >= 0 ? namePart.substring(0, dblIdx) : namePart;
+  const givenRaw   = dblIdx >= 0 ? namePart.substring(dblIdx+2) : '';
+  return {
+    surname: surnameRaw.replace(/</g,' ').trim(),
+    given:   givenRaw.split('<<')[0].replace(/</g,' ').trim()
+  };
+}
+
+function showResult(l1, l2, isNew) {
+  // Legacy wrapper for stored entries
+  showParsed(parseTD3(l1, l2), {line1:l1,line2:l2,type:'TD3'}, isNew);
+}
+
+function showParsed(p, entry, isNew) {
+  const cs = p.cs || {};
+  function ck(v) {
+    if (v===null||v===undefined) return '';
+    return `<span class="${v?'ok':'fail'}" style="font-size:.8rem;margin-left:4px">${v?'✓':'✗'}</span>`;
+  }
+
+  // Populate editable name fields
+  document.getElementById('edit-surname').value = p.surname || '';
+  document.getElementById('edit-given').value   = p.given   || '';
+
+  document.getElementById('res-fields').innerHTML = [
+    ['Belge Tipi',     p.docType  || '—',                                  ''],
+    ['Pasaport/Doc No',p.passNo   || '—',                                  ck(cs.passOk)],
+    ['Uyruk',          p.nation   || '—',                                  ''],
+    ['Veren Ülke',     p.issuer   || '—',                                  ''],
+    ['Doğum Tarihi',   fmtDate(p.dob),                                     ck(cs.dobOk)],
+    ['Cinsiyet',       p.sex==='M'?'Erkek':p.sex==='F'?'Kadın':(p.sex||'—'), ''],
+    ['Son Geçerlilik', fmtDate(p.expiry),                                  ck(cs.expOk)],
+    ...(cs.compOk!==null ? [['Kompozit', '', ck(cs.compOk)]] : []),
+  ].map(([l,v,b]) => `
+    <div class="row">
+      <div class="rl">${l}</div>
+      <div class="rv">${v}${b}</div>
+    </div>`).join('');
+
+  const allOk = cs.passOk && cs.dobOk && cs.expOk;
+  const banner = document.getElementById('res-banner');
+  banner.className = 'banner ' + (allOk ? 'b-ok' : 'b-warn');
+  document.getElementById('res-icon').textContent = allOk ? '✅' : '⚠️';
+  document.getElementById('res-txt').textContent  = allOk
+    ? `${p.docType} — Tüm checksum'lar geçerli ✓`
+    : `${p.docType} — MRZ okundu`;
+
+  const rawLines = [entry.line1, entry.line2, entry.line3].filter(Boolean).join('\n');
+  document.getElementById('del-btn').style.display = 'flex';
+
+  // Show "next passport" button in serial mode
+  if (serialMode) {
+    serialCount++;
+    document.getElementById('next-scan-btn').style.display = 'flex';
+    document.getElementById('next-scan-btn').textContent =
+      `📷 Sonraki Pasaport → (${serialCount} tarandı)`;
+  } else {
+    document.getElementById('next-scan-btn').style.display = 'none';
+  }
+
+  document.getElementById('mrz-raw').textContent = rawLines;
+  goScreen('s-result');
+}
+
+function updateSavedName() {
+  const surname = document.getElementById('edit-surname').value.trim();
+  const given   = document.getElementById('edit-given').value.trim();
+  const name    = surname + (given ? ', ' + given : '');
+  // Update in storage
+  const all = getAllPassports();
+  const p   = all[currentIdx];
+  if (!p || p.id.startsWith('demo_')) return;
+  const saved = loadPassports();
+  const idx   = saved.findIndex(x => x.id === p.id);
+  if (idx >= 0) { saved[idx].name = name; savePassports(saved); }
+}
+
+// ── CHECKSUM ─────────────────────────────────────────────────────────
+const CW = [7,3,1];
+function cv(c) { if(c==='<')return 0; if(c>='0'&&c<='9')return+c; return c.charCodeAt(0)-55; }
+function chk(s) { return [...s].reduce((a,c,i) => a+cv(c)*CW[i%3], 0) % 10; }
+function getChecksums(l2) { return getChecksums_TD3(l2); }
+
+// ── DATE ─────────────────────────────────────────────────────────────
+function fmtDate(d) {
+  if (!d || d.length < 6) return d || '—';
+  const yy=+d.substring(0,2), mm=d.substring(2,4), dd=d.substring(4,6);
+  const currentYY = new Date().getFullYear() % 100;
+  // If 2-digit year > current year + 10, assume past century
+  const year = yy <= (currentYY + 10) ? 2000+yy : 1900+yy;
+  return `${dd}/${mm}/${year}`;
+}
+
+// ── MANUAL ENTRY ─────────────────────────────────────────────────────
+function addManual() {
+  const l1 = document.getElementById('l1').value.trim();
+  const l2 = document.getElementById('l2').value.trim();
+  // Accept TD3 (44 chars) or TD1 (30 chars)
+  const isTD3 = l1.length === 44 && l2.length === 44;
+  const isTD1 = l1.length === 30 && l2.length === 30;
+  if (!isTD3 && !isTD1) {
+    showError(`TD3 (pasaport): 2×44 karakter\nTD1 (kimlik): 2×30 karakter\nSatır 1: ${l1.length}, Satır 2: ${l2.length}`);
+    return;
+  }
+  document.getElementById('l1').value = '';
+  document.getElementById('l2').value = '';
+  if (isTD3) saveAndShow({ type:'TD3', lines:[l1, l2] });
+  else        saveAndShow({ type:'TD1', lines:[l1, l2, ''] });
+}
+
+function viewPassport(idx) {
+  currentIdx = idx;
+  const p = getAllPassports()[idx];
+  if (!p) return;
+  const type = p.type || 'TD3';
+  const lines = type === 'TD1'
+    ? [p.line1, p.line2, p.line3 || '']
+    : [p.line1, p.line2];
+  showParsed(
+    type === 'TD1' ? parseTD1(lines) : parseTD3(p.line1, p.line2),
+    {...p, type, lines},
+    false
+  );
+}
+
+function onTA(el, cId) {
+  el.value = el.value.toUpperCase().replace(/[^A-Z0-9<]/g,'');
+  const n  = el.value.length;
+  const c  = document.getElementById(cId);
+  c.textContent = n + ' / 44';
+  c.classList.toggle('full', n===44);
+  el.style.borderColor = n===44 ? 'var(--green)' : n>0 ? 'var(--blue)' : 'var(--border)';
+}
+
+function showError(msg) {
+  document.getElementById('err-msg').textContent = msg;
+  goScreen('s-error');
+}
+
+// ── NETWORK STATUS ────────────────────────────────────────────────────
+function checkNetwork() {
+  if (!navigator.onLine) updatePill('offline');
+}
+window.addEventListener('offline', () => updatePill('offline'));
+window.addEventListener('online',  () => workerReady && updatePill('ready'));
+
+// ── SCAN SCREEN INIT ──────────────────────────────────────────────────
+// goScreen already defined above — no override needed
+// Camera start/stop is handled by setTab() and stopScan()
+
+// ── LOG SİSTEMİ ───────────────────────────────────────────────────────
+const MAX_LOGS = 30;
+let logEntries  = [];
+let scanCounter = 0;
+let logOpen     = false;
+
+function toggleLog() {
+  logOpen = !logOpen;
+  const panel = document.getElementById('log-panel');
+  panel.classList.toggle('open', logOpen);
+  if (logOpen) setTimeout(() => document.getElementById('log-entries').scrollTop = 0, 50);
+}
+
+function toggleFullscreen() {
+  const panel = document.getElementById('log-panel');
+  const btn   = document.getElementById('fs-btn');
+  const isFull = panel.classList.toggle('fullscreen');
+  btn.textContent = isFull ? '⊡' : '⛶';
+  btn.title = isFull ? 'Küçült' : 'Tam Ekran';
+}
+
+function clearLog() {
+  logEntries = [];
+  scanCounter = 0;
+  renderLog();
+}
+
+function addLog(type, main, details = [], mrz = null, cs = null, thumbDataURL = null) {
+  scanCounter++;
+  const now  = new Date();
+  const time = now.toTimeString().slice(0,8);
+  logEntries.unshift({ type, time, scan: scanCounter, main, details, mrz, cs, thumb: thumbDataURL });
+  if (logEntries.length > MAX_LOGS) logEntries.pop();
+  renderLog();
+}
+
+// Capture current canvas as thumbnail for log
+function captureThumb() {
+  try {
+    if (!mainC || mainC.width < 10 || mainC.height < 10) return null;
+    const t = document.createElement('canvas');
+    const maxW = 240, maxH = 120;
+    const ratio = Math.min(maxW / mainC.width, maxH / mainC.height);
+    t.width  = Math.round(mainC.width  * ratio);
+    t.height = Math.round(mainC.height * ratio);
+    t.getContext('2d').drawImage(mainC, 0, 0, t.width, t.height);
+    return t.toDataURL('image/jpeg', 0.6);
+  } catch(e) { return null; }
+}
+
+function renderLog() {
+  const el    = document.getElementById('log-entries');
+  const badge = document.getElementById('log-badge');
+  const count = document.getElementById('log-scan-count');
+  if (!el) return;
+  badge.textContent = logEntries.length;
+  if (count) count.textContent = `(${scanCounter} tarama)`;
+
+  const icons = {ok:'✅', warn:'⚡', err:'❌', skip:'⏭'};
+  const clr   = {ok:'log-ok', warn:'log-warn', err:'log-err', skip:'log-skip'};
+  const bgs   = {ok:'rgba(16,185,129,.04)', warn:'rgba(245,158,11,.03)', err:'rgba(239,68,68,.04)', skip:''};
+
+  el.innerHTML = logEntries.map((e, idx) => {
+    const icon = icons[e.type] || '•';
+    const cc   = clr[e.type]   || 'log-skip';
+    const bg   = bgs[e.type]   || '';
+
+    // Checksum badge'leri
+    const csBadges = e.cs ? `<div class="log-cs">
+      ${['passOk','dobOk','expOk'].map(k => {
+        const ok  = e.cs[k];
+        const lbl = {passOk:'Pass',dobOk:'DOB',expOk:'EXP'}[k];
+        return `<span class="cs-badge ${ok?'cs-ok-badge':'cs-fail-badge'}">${lbl}${ok?'✓':'✗'}</span>`;
+      }).join('')}
+    </div>` : '';
+
+    // Detail satırları — truncated, hover'da full
+    const details = e.details.map(d =>
+      `<div class="log-detail" title="${d.replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,"'")}">${
+        d.replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      }</div>`
+    ).join('');
+
+    // Thumbnail
+    const thumb = e.thumb
+      ? `<img class="log-thumb-img" src="${e.thumb}"
+           onclick="event.stopPropagation();showThumb(${idx})"
+           title="Büyütmek için tıkla">`
+      : '';
+
+    return `<div class="log-row${bg?' log-row-'+e.type:''}" id="log-entry-${idx}"
+               onclick="copyEntry(${idx})" style="${bg?'background:'+bg:''}" >
+      <div class="log-col-time">${e.time}</div>
+      <div class="log-col-icon">${icon}</div>
+      <div class="log-col-body">
+        <div class="log-main ${cc}" title="[#${e.scan}] ${e.main}">[#${e.scan}] ${e.main}</div>
+        ${details}
+        ${csBadges}
+        ${thumb}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// Copy single entry to clipboard
+function copyEntry(idx) {
+  const e = logEntries[idx];
+  if (!e) return;
+  const lines = [
+    `[${e.time}] [#${e.scan}] ${e.main}`,
+    ...e.details,
+    e.cs ? `PassNo:${e.cs.passOk?'✓':'✗'} DOB:${e.cs.dobOk?'✓':'✗'} EXP:${e.cs.expOk?'✓':'✗'}` : '',
+  ].filter(Boolean).join('\n');
+  navigator.clipboard.writeText(lines).then(() => {
+    const el = document.getElementById(`log-entry-${idx}`);
+    if (el) { el.classList.add('copied'); setTimeout(() => el.classList.remove('copied'), 400); }
+  });
+}
+
+// Copy all logs as text
+function copyLog() {
+  const text = logEntries.map(e => [
+    `[${e.time}] [#${e.scan}] ${e.main}`,
+    ...e.details,
+    e.cs ? `  PassNo:${e.cs.passOk?'✓':'✗'} DOB:${e.cs.dobOk?'✓':'✗'} EXP:${e.cs.expOk?'✓':'✗'}` : '',
+  ].filter(Boolean).join('\n')).join('\n─────\n');
+
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('log-copy');
+    if (btn) { btn.textContent = '✓'; setTimeout(() => btn.textContent = '📋', 1200); }
+  });
+}
+
+// Export full log as JSON (includes thumbnails)
+function exportLog() {
+  const data = JSON.stringify(logEntries.map(e => ({
+    time: e.time, scan: e.scan, type: e.type,
+    main: e.main, details: e.details, cs: e.cs,
+    hasThumb: !!e.thumb
+  })), null, 2);
+  const blob = new Blob([data], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `mrz-log-${new Date().toISOString().slice(0,16).replace(/[T:]/g,'-')}.json`;
+  a.click();
+}
+
+// Lightbox for thumbnail
+function showThumb(idx) {
+  const e = logEntries[+idx];
+  if (!e || !e.thumb) return;
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;display:flex;align-items:center;justify-content:center;cursor:zoom-out;';
+  const img = document.createElement('img');
+  img.src = e.thumb;
+  img.style.cssText = 'max-width:90vw;max-height:80vh;border-radius:10px;border:2px solid #fff;';
+  overlay.appendChild(img);
+  overlay.onclick = () => document.body.removeChild(overlay);
+  document.body.appendChild(overlay);
+}
+
+// ── START ─────────────────────────────────────────────────────────────
+init();
+</script>
+
+<!-- ── DEBUG LOG PANEL ── -->
+<button id="log-toggle" onclick="toggleLog()">
+  <span>📋 Log</span>
+  <span class="badge" id="log-badge">0</span>
+</button>
+
+<div id="log-panel">
+  <div id="log-header">
+    <div class="log-hdr-left">
+      <span>📋 Tarama Logu</span>
+      <span id="log-scan-count" style="color:#4a5568;font-weight:400;font-size:0.72rem;"></span>
+    </div>
+    <div class="log-hdr-right">
+      <button class="log-btn" onclick="copyLog()" title="Kopyala">📋</button>
+      <button class="log-btn" onclick="exportLog()" title="İndir">💾</button>
+      <button class="log-btn" onclick="toggleFullscreen()" id="fs-btn" title="Tam Ekran">⛶</button>
+      <button class="log-btn red" onclick="clearLog()">Temizle</button>
+      <button class="log-btn" onclick="toggleLog()" title="Kapat" style="font-size:1rem;padding:2px 8px;">✕</button>
+    </div>
+  </div>
+  <div id="log-entries"></div>
+</div>
+
+</body>
+</html>
