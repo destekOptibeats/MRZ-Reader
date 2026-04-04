@@ -1455,14 +1455,19 @@ function makeCanvas(img, deg) {
   ctx.restore(); return c;
 }
 
-// Alt bölgeyi crop et
+// Alt bölgeyi crop et — explicit dimensions, clamped to source bounds
 function cropBottom(srcCanvas, ratio) {
-  const cropH = Math.round(srcCanvas.height * ratio);
+  const sw = srcCanvas.width, sh = srcCanvas.height;
+  if (!sw || !sh) return srcCanvas; // safety
+  const cropH = Math.min(Math.round(sh * ratio), sh);
+  const sy = Math.max(sh - cropH, 0);
+  const cropW = sw;
   const c = document.createElement('canvas');
-  c.width = srcCanvas.width; c.height = cropH;
+  c.width = cropW;
+  c.height = cropH;
   c.getContext('2d').drawImage(srcCanvas,
-    0, srcCanvas.height - cropH, srcCanvas.width, cropH,
-    0, 0, srcCanvas.width, cropH);
+    0, sy, cropW, cropH,
+    0, 0, cropW, cropH);
   return c;
 }
 
@@ -1935,9 +1940,8 @@ async function loadImageFast(file) {
 function resizeForOCR(img, maxSide) {
   maxSide = maxSide || 1400;
   // ImageBitmap has .width/.height; HTMLImageElement has .naturalWidth/.naturalHeight
-  let w = img.width || img.naturalWidth || 0;
-  let h = img.height || img.naturalHeight || 0;
-  // Safety: if dimensions are still invalid, return null
+  const w = img.width || img.naturalWidth || 0;
+  const h = img.height || img.naturalHeight || 0;
   if (w <= 50 || h <= 50) return null;
   const longSide = Math.max(w, h);
   const scale = longSide > maxSide ? maxSide / longSide : 1;
@@ -1945,17 +1949,20 @@ function resizeForOCR(img, maxSide) {
   if (rw <= 50 || rh <= 50) return null;
   const c = document.createElement('canvas');
   c.width = rw; c.height = rh;
-  c.getContext('2d').drawImage(img, 0, 0, rw, rh);
+  // Explicit 9-param drawImage: source full rect → dest full rect
+  c.getContext('2d').drawImage(img, 0, 0, w, h, 0, 0, rw, rh);
   return c;
 }
 
 // Lightweight preprocessing for batch (grayscale + contrast, no sharpen)
 function batchPreprocess(srcCanvas) {
+  const sw = srcCanvas.width, sh = srcCanvas.height;
+  if (!sw || !sh) return srcCanvas; // safety
   const c = document.createElement('canvas');
-  c.width = srcCanvas.width; c.height = srcCanvas.height;
+  c.width = sw; c.height = sh;
   const ctx = c.getContext('2d');
   ctx.filter = 'grayscale(1) contrast(1.6)';
-  ctx.drawImage(srcCanvas, 0, 0);
+  ctx.drawImage(srcCanvas, 0, 0, sw, sh, 0, 0, sw, sh);
   ctx.filter = 'none';
   return c;
 }
@@ -1969,10 +1976,11 @@ function longestOCRLine(text) {
 }
 
 async function fastBatchOCR(resized, timings, ocrWorker) {
-  const w = ocrWorker || worker;
+  const wr = ocrWorker || worker;
 
   // Debug: resized canvas dimensions
   timings.resizedSize = resized.width + 'x' + resized.height;
+  console.log('[BatchOCR] resized:', resized.width, 'x', resized.height);
 
   // Orientation detection using canvas-rendered dimensions
   const isLandscape = resized.width > resized.height;
@@ -1996,16 +2004,21 @@ async function fastBatchOCR(resized, timings, ocrWorker) {
     const enhanced = batchPreprocess(canvas);
     if (i === 0) timings.crop = Math.round(performance.now() - t);
 
-    // Debug: OCR input dimensions for this attempt
+    // Debug: each stage dimensions
     timings['sz' + (i+1)] = enhanced.width + 'x' + enhanced.height;
+    console.log('[BatchOCR] attempt', i+1, 'crop:', canvas.width, 'x', canvas.height, '→ enhanced:', enhanced.width, 'x', enhanced.height);
 
-    // Validate OCR input dimensions
-    if (enhanced.width <= 50 || enhanced.height <= 50) continue;
+    // Validate OCR input dimensions — must be > 100px
+    if (enhanced.width <= 100 || enhanced.height <= 100) {
+      console.warn('[BatchOCR] attempt', i+1, 'SKIPPED: too small', enhanced.width, 'x', enhanced.height);
+      continue;
+    }
 
     t = performance.now();
     try {
-      const { data: { text } } = await w.recognize(enhanced);
+      const { data: { text } } = await wr.recognize(enhanced);
       timings[attemptKey] = Math.round(performance.now() - t);
+      console.log('[BatchOCR] attempt', i+1, 'OCR done, longest line:', longestOCRLine(text));
 
       // Line-length heuristic: if longest line < 30, crop is too small
       if (longestOCRLine(text) < 30 && ratio < 1.0) {
@@ -2015,11 +2028,13 @@ async function fastBatchOCR(resized, timings, ocrWorker) {
 
       const result = extractMRZ(clean(text));
       if (result && validateMRZ(result).valid) {
+        console.log('[BatchOCR] SUCCESS at attempt', i+1);
         return { extracted: result, diag: diagnoseMRZ(text), attempts: i + 1 };
       }
       lastDiag = diagnoseMRZ(text);
     } catch(e) {
       timings[attemptKey] = Math.round(performance.now() - t);
+      console.error('[BatchOCR] attempt', i+1, 'error:', e.message);
     }
   }
 
