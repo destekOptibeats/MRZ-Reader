@@ -1954,7 +1954,7 @@ function resizeForOCR(img, maxSide) {
   return c;
 }
 
-// MRZ-optimized preprocessing: grayscale → histogram stretch → Otsu threshold
+// Simple stable MRZ preprocessing: grayscale + fixed threshold + alpha=255
 function batchPreprocessMRZ(srcCanvas) {
   const sw = srcCanvas.width, sh = srcCanvas.height;
   if (!sw || !sh) return srcCanvas;
@@ -1965,59 +1965,39 @@ function batchPreprocessMRZ(srcCanvas) {
   ctx.drawImage(srcCanvas, 0, 0, sw, sh, 0, 0, sw, sh);
 
   const imgData = ctx.getImageData(0, 0, sw, sh);
-  const d = imgData.data;
-  const gray = new Uint8Array(sw * sh);
+  const data = imgData.data;
 
-  // Step 1: Grayscale
-  for (let i = 0; i < sw * sh; i++) {
-    gray[i] = Math.round(0.299 * d[i*4] + 0.587 * d[i*4+1] + 0.114 * d[i*4+2]);
-  }
+  // Simple grayscale + fixed threshold
+  let nonZero = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
 
-  // Step 2: Histogram stretch (safe contrast normalization)
-  let min = 255, max = 0;
-  for (let i = 0; i < gray.length; i++) {
-    if (gray[i] < min) min = gray[i];
-    if (gray[i] > max) max = gray[i];
-  }
-  // Clamp: don't stretch if range is already wide or too narrow
-  const range = max - min;
-  if (range > 30 && range < 250) {
-    for (let i = 0; i < gray.length; i++) {
-      gray[i] = Math.round(((gray[i] - min) / range) * 255);
-    }
-  }
+    const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+    const val = gray > 140 ? 255 : 0;
 
-  // Step 3: Otsu threshold → binary black/white
-  // Build histogram
-  const hist = new Uint32Array(256);
-  for (let i = 0; i < gray.length; i++) hist[gray[i]]++;
+    data[i]     = val;
+    data[i + 1] = val;
+    data[i + 2] = val;
+    data[i + 3] = 255; // always opaque
 
-  // Otsu's method
-  const total = gray.length;
-  let sumAll = 0;
-  for (let i = 0; i < 256; i++) sumAll += i * hist[i];
-
-  let sumB = 0, wB = 0, wF = 0, maxVar = 0, threshold = 128;
-  for (let t = 0; t < 256; t++) {
-    wB += hist[t];
-    if (wB === 0) continue;
-    wF = total - wB;
-    if (wF === 0) break;
-    sumB += t * hist[t];
-    const mB = sumB / wB;
-    const mF = (sumAll - sumB) / wF;
-    const variance = wB * wF * (mB - mF) * (mB - mF);
-    if (variance > maxVar) { maxVar = variance; threshold = t; }
-  }
-
-  // Apply threshold — MRZ text is dark on light background
-  for (let i = 0; i < gray.length; i++) {
-    const v = gray[i] < threshold ? 0 : 255;
-    d[i*4] = d[i*4+1] = d[i*4+2] = v;
-    d[i*4+3] = 255;
+    if (val !== 0) nonZero++;
   }
 
   ctx.putImageData(imgData, 0, 0);
+
+  // Validation: log pixel health
+  const totalPixels = sw * sh;
+  const pct = ((nonZero / totalPixels) * 100).toFixed(1);
+  console.log('[Preprocess]', sw + 'x' + sh, 'non-zero:', nonZero + '/' + totalPixels, '(' + pct + '%)');
+  if (nonZero < totalPixels * 0.01) {
+    console.warn('[Preprocess] WARNING: almost all pixels are black — image may be too dark');
+  }
+  if (nonZero > totalPixels * 0.99) {
+    console.warn('[Preprocess] WARNING: almost all pixels are white — image may be too bright');
+  }
+
   return c;
 }
 
