@@ -1057,6 +1057,8 @@ function updatePill(state) {
 }
 
 // ── CAMERA ──────────────────────────────────────────────────────────────
+let scanDebugCount = 0;
+
 async function startCamera() {
   if (stream) return;
   try {
@@ -1070,19 +1072,33 @@ async function startCamera() {
     video.srcObject = stream;
     await new Promise(r => video.onloadedmetadata = r);
     video.play();
-    await new Promise(r => {
+
+    // Robust readiness: wait for readyState >= 3 + valid dimensions
+    await new Promise((resolve) => {
+      let attempts = 0;
       const check = () => {
-        if (video.readyState >= 2 && video.videoWidth >= 100 && video.videoHeight >= 100) r();
-        else { video.addEventListener('canplay', r, {once:true}); setTimeout(r, 3000); }
+        attempts++;
+        if (video.readyState >= 3 && video.videoWidth > 0 && video.videoHeight > 0) {
+          resolve();
+        } else if (attempts > 30) {
+          // Fallback after 3s: accept readyState >= 2
+          if (video.readyState >= 2 && video.videoWidth > 0) resolve();
+          else resolve(); // give up waiting, let scanLoop handle it
+        } else {
+          setTimeout(check, 100);
+        }
       };
       check();
     });
-    await new Promise(r => setTimeout(r, 300));
+    await new Promise(r => setTimeout(r, 200));
 
-    // Overlay canvas boyutunu video görsel boyutuna eşitle
+    console.log('[Camera] ready — videoWidth:', video.videoWidth, 'videoHeight:', video.videoHeight,
+      'readyState:', video.readyState);
+
     resizeOverlay();
 
     scanning = true;
+    scanDebugCount = 0;
     lastFrameHash = 0;
     lastL2 = null;
     l2Count = 0;
@@ -1280,6 +1296,23 @@ function drawOverlayState(state) {
   camCtx.fillStyle = 'rgba(255,255,255,0.45)';
   camCtx.fillText('📘 Pasaport  ·  💳 Kimlik  ·  📗 Ehliyet', dx + ddw / 2, dy + 8);
 
+  // ── OCR INPUT debug border — exact crop region used for OCR ──
+  // OCR crops bottom 40% of scanZone in video pixel space
+  const ocrCropH = ddh * 0.40;
+  const ocrCropY = dy + ddh - ocrCropH;
+  camCtx.strokeStyle = '#ff0000';
+  camCtx.lineWidth = 1.5;
+  camCtx.setLineDash([4, 3]);
+  camCtx.strokeRect(dx + 1, ocrCropY, ddw - 2, ocrCropH);
+  camCtx.setLineDash([]);
+  // Label
+  const ocrLabelSize = Math.max(8, Math.round(ddw * 0.022));
+  camCtx.font = '600 ' + ocrLabelSize + 'px monospace';
+  camCtx.textAlign = 'right';
+  camCtx.textBaseline = 'top';
+  camCtx.fillStyle = '#ff0000';
+  camCtx.fillText('OCR INPUT', dx + ddw - 4, ocrCropY + 2);
+
   // Hint mesajı güncelle
   const hintType = state === 'accepted' ? 'ok' : state === 'searching' ? '' : 'warn';
   setHint(hints[state] || hints.searching, hintType);
@@ -1310,6 +1343,19 @@ async function scanLoop() {
   mainCtx.filter = 'grayscale(1) contrast(1.4)';
   mainCtx.drawImage(video, z.x, cropY, z.w, cropH, 0, 0, mainC.width, mainC.height);
   mainCtx.filter = 'none';
+
+  // Debug first 3 frames
+  if (scanDebugCount < 3) {
+    scanDebugCount++;
+    const videoRect = video.getBoundingClientRect();
+    console.log('[ScanDebug] frame', scanDebugCount, '{',
+      'videoNatural:', vw + 'x' + vh,
+      'videoDOM:', Math.round(videoRect.width) + 'x' + Math.round(videoRect.height),
+      'scanZone: {x:' + z.x + ' y:' + z.y + ' w:' + z.w + ' h:' + z.h + '}',
+      'ocrCrop: {x:' + z.x + ' y:' + cropY + ' w:' + z.w + ' h:' + cropH + '}',
+      'ocrCanvas:', mainC.width + 'x' + mainC.height,
+    '}');
+  }
 
   if (!isSharpEnough(mainC)) {
     drawOverlayState('blurry');
