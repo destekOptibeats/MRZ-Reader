@@ -108,7 +108,8 @@ html,body{
   overflow:hidden;
   background:#000;
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: 280px;
+  aspect-ratio: 4/3;
 }
 video{
   width:100%;
@@ -406,7 +407,6 @@ input[type="text"] {
   <button class="btn blue" onclick="startSerialScan()" id="serial-btn">
     🚀 Seri Tarama Başlat
   </button>
-  <button class="btn ghost" onclick="goScreen('s-add')">⌨️ Elle Gir</button>
   <button class="btn ghost" onclick="document.getElementById('batch-file-in').click()">🧪 Batch Test</button>
   <input type="file" id="batch-file-in" accept="image/*" multiple style="display:none" onchange="startBatchTest(this.files)">
   <div style="width:100%;max-width:460px;margin-top:8px;">
@@ -547,27 +547,6 @@ input[type="text"] {
   </div>
 </div>
 
-<!-- S5: ELLE GİR -->
-<div class="screen" id="s-add">
-  <div class="title">Elle Gir</div>
-  <div class="sub">Her satır tam 44 karakter</div>
-  <textarea id="l1" rows="2" maxlength="44"
-    placeholder="Satır 1 — P ile başlar"
-    oninput="onTA(this,'c1')"></textarea>
-  <div class="char-row">
-    <span style="font-size:.74rem;color:var(--muted)">A-Z · 0-9 · &lt;</span>
-    <span class="cnt" id="c1">0 / 44</span>
-  </div>
-  <textarea id="l2" rows="2" maxlength="44"
-    placeholder="Satır 2 — pasaport no ile başlar"
-    oninput="onTA(this,'c2')"></textarea>
-  <div class="char-row">
-    <span style="font-size:.74rem;color:var(--muted)">A-Z · 0-9 · &lt;</span>
-    <span class="cnt" id="c2">0 / 44</span>
-  </div>
-  <button class="btn green" onclick="addManual()">💾 Kaydet</button>
-  <button class="btn ghost" onclick="goHome()">← Geri</button>
-</div>
 
 <!-- S6: HATA -->
 <div class="screen" id="s-error">
@@ -746,34 +725,46 @@ function startSerialScan() {
   setTimeout(() => startCamera(), 100);
 }
 
+function makeSerialKey(parsed) {
+  return [
+    (parsed.passNo || '').replace(/</g,'').trim(),
+    (parsed.surname || '').trim(),
+    (parsed.given || '').trim(),
+    (parsed.dob || '').trim()
+  ].join('|');
+}
+
 function addSerialResult(mrzResult) {
   const parsed = parseResult(mrzResult);
   const docId = (parsed.passNo || '').replace(/</g,'').trim();
+  const compositeKey = makeSerialKey(parsed);
 
   // Her okumada toplam çekim artır
   serialTotalShots++;
   document.getElementById('serial-total-shots').textContent = serialTotalShots;
   bounceStat('serial-total-shots');
 
-  // Duplicate kontrolü — sayacı artır
-  if (serialScannedIds.includes(docId)) {
+  // Duplicate kontrolü — composite key ile karşılaştır
+  const existingIdx = serialEntries.findIndex(e => e.compositeKey === compositeKey);
+  if (existingIdx >= 0) {
     const dupName = (parsed.surname || '') + (parsed.given ? ' ' + parsed.given : '');
     showCamToast('⚠️ Bu belge zaten eklendi: ' + dupName, 3000);
     flashScan('dup');
-    const countEl = document.getElementById('sr-count-' + docId);
+    const countEl = document.getElementById('sr-count-' + serialEntries[existingIdx].docId);
     if (countEl) {
       let c = parseInt(countEl.textContent) || 1;
       countEl.textContent = (c + 1) + 'x';
     }
-    // Track readCount on existing entry
-    const existing = serialEntries.find(e => e.docId === docId);
-    if (existing) existing.readCount++;
+    serialEntries[existingIdx].readCount++;
     lastFrameHash = 0; lastL2 = null; l2Count = 0; checksumPassed = false;
     startSerialCooldown();
     return;
   }
 
   flashScan('new');
+
+  // Timing: record read time BEFORE cooldown
+  const readTime = Date.now();
 
   // localStorage'a kaydet
   const photo = captureDocPhoto();
@@ -786,21 +777,22 @@ function addSerialResult(mrzResult) {
     name:  parsed.surname + (parsed.given ? ', ' + parsed.given : ''),
     nation: parsed.nation,
     photo: photo || '',
-    addedAt: Date.now()
+    addedAt: readTime
   };
   const saved = loadPassports();
   saved.push(entry);
   savePassports(saved);
 
-  // Duplicate listesine ekle + session entry
+  // Session entry — composite key based
   serialScannedIds.push(docId);
   serialCount++;
   serialEntries.push({
     docId,
+    compositeKey,
     name: parsed.surname + (parsed.given ? ' ' + parsed.given : ''),
     type: mrzResult.type === 'TD1' ? 'TC Kimlik' : 'Pasaport',
     readCount: 1,
-    firstReadTime: Date.now()
+    firstReadTime: readTime
   });
 
   // UI güncelle
@@ -837,23 +829,15 @@ function startSerialCooldown() {
   if (!serialMode) return;
   serialCooldown = true;
   if (serialCooldownTimer) clearTimeout(serialCooldownTimer);
-  let remaining = 3;
-  function tick() {
-    remaining--;
-    if (remaining > 0) {
-      setHint('Sonraki belge için hazır: ' + remaining + 's...', 'warn');
-      serialCooldownTimer = setTimeout(tick, 1000);
-    } else {
-      serialCooldown = false;
-      serialCooldownTimer = null;
-      if (scanning) {
-        setHint('📏 MRZ satırlarını çerçeveye hizalayın', '');
-        drawOverlayState('searching');
-      }
+  setHint('Sonraki belge için hazır...', 'warn');
+  serialCooldownTimer = setTimeout(() => {
+    serialCooldown = false;
+    serialCooldownTimer = null;
+    if (scanning) {
+      setHint('📏 MRZ satırlarını çerçeveye hizalayın', '');
+      drawOverlayState('searching');
     }
-  }
-  setHint('Sonraki belge için hazır: 2s...', 'warn');
-  serialCooldownTimer = setTimeout(tick, 1000);
+  }, 1000);
 }
 
 function finishSerialScan() {
@@ -1683,29 +1667,6 @@ function fmtDate(d) {
   return `${dd}/${mm}/${year}`;
 }
 
-function addManual() {
-  const l1 = document.getElementById('l1').value.trim();
-  const l2 = document.getElementById('l2').value.trim();
-  const isTD3 = l1.length === 44 && l2.length === 44;
-  const isTD1 = l1.length === 30 && l2.length === 30;
-  if (!isTD3 && !isTD1) {
-    showError(`TD3 (pasaport): 2×44 karakter\nTD1 (kimlik): 2×30 karakter\nSatır 1: ${l1.length}, Satır 2: ${l2.length}`);
-    return;
-  }
-  document.getElementById('l1').value = '';
-  document.getElementById('l2').value = '';
-  if (isTD3) saveAndShow({ type:'TD3', lines:[l1, l2] });
-  else        saveAndShow({ type:'TD1', lines:[l1, l2, ''] });
-}
-
-function onTA(el, cId) {
-  el.value = el.value.toUpperCase().replace(/[^A-Z0-9<]/g,'');
-  const n  = el.value.length;
-  const c  = document.getElementById(cId);
-  c.textContent = n + ' / 44';
-  c.classList.toggle('full', n===44);
-  el.style.borderColor = n===44 ? 'var(--green)' : n>0 ? 'var(--blue)' : 'var(--border)';
-}
 
 function showError(msg) {
   document.getElementById('err-msg').textContent = msg;
