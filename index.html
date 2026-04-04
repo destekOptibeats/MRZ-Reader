@@ -89,11 +89,17 @@ html,body{
 /* ── video — MOBİL KRİTİK ── */
 #s-scan {
   justify-content: flex-start;
-  padding-top: max(env(safe-area-inset-top, 0px), 16px);
-  padding-bottom: max(env(safe-area-inset-bottom, 0px), 16px);
-  gap: 10px;
+  padding-top: max(env(safe-area-inset-top, 0px), 8px);
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), 8px);
+  gap: 6px;
+  height: 100vh;
+  height: -webkit-fill-available;
   min-height: unset;
+  overflow: hidden;
 }
+#s-scan .title { font-size:1.1rem; flex-shrink:0; }
+#s-scan .tabs  { flex-shrink:0; }
+#tab-cam-content { flex:1; min-height:0; display:flex; flex-direction:column; }
 #video-wrap{
   position:relative;
   width:100%;
@@ -101,14 +107,15 @@ html,body{
   border-radius:14px;
   overflow:hidden;
   background:#000;
-  aspect-ratio: 4/3;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 video{
   width:100%;
   height:100%;
   position:absolute;
   top:0; left:0;
-  object-fit: cover;
+  object-fit: fill;
   display:block;
 }
 #cam-overlay{
@@ -174,9 +181,7 @@ textarea::placeholder{color:var(--muted);letter-spacing:0;font-family:inherit;fo
 #tab-cam-content {
   width: 100%;
   max-width: 460px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   align-items: stretch;
 }
 
@@ -310,15 +315,15 @@ input[type="text"] {
   font-size: 16px; /* 16px altı Safari'de zoom yapar */
 }
 .version-tag{
-  position:fixed;top:8px;right:12px;z-index:9999;
-  background:rgba(255,255,255,.08);color:var(--muted);
-  font-size:.7rem;padding:3px 8px;border-radius:6px;
-  pointer-events:none;backdrop-filter:blur(4px);
+  position:fixed;bottom:6px;left:10px;z-index:9999;
+  background:rgba(255,255,255,.06);color:var(--muted);
+  font-size:.65rem;padding:2px 7px;border-radius:5px;
+  pointer-events:none;opacity:.5;
 }
 </style>
 </head>
 <body>
-<div class="version-tag">v1.0.2</div>
+<div class="version-tag">v1.0.3</div>
 
 <!-- cache status pill -->
 <div id="cache-pill"><div class="pill-dot"></div><span id="pill-txt">Yükleniyor…</span></div>
@@ -753,18 +758,6 @@ function resizeOverlay() {
   }
 }
 
-// object-fit:cover offset hesabı — video'nun container içinde görünen bölgesini döndürür
-function getCoverTransform() {
-  const wrap = document.getElementById('video-wrap');
-  const cw = wrap.offsetWidth, ch = wrap.offsetHeight;
-  const vw = video.videoWidth, vh = video.videoHeight;
-  if (!cw || !ch || !vw || !vh) return { scale: 1, ox: 0, oy: 0 };
-  const scale = Math.max(cw / vw, ch / vh);
-  const ox = (vw * scale - cw) / 2;
-  const oy = (vh * scale - ch) / 2;
-  return { scale, ox, oy };
-}
-
 function stopCamera() {
   scanning = false;
   if (loopId) { clearTimeout(loopId); loopId = null; }
@@ -864,13 +857,14 @@ function drawOverlayState(state) {
   camCtx.fillStyle = 'rgba(0,0,0,0.45)';
   camCtx.fillRect(0, 0, vw, vh);
 
-  // object-fit:cover — video ortalanıp kırpılır, offset hesapla
-  const t = getCoverTransform();
+  // object-fit:fill — video tam container'ı kaplar, birebir oran
+  const sx = vw / video.videoWidth;
+  const sy = vh / video.videoHeight;
   const z = getScanZone(video.videoWidth, video.videoHeight);
-  const dx  = z.x * t.scale - t.ox;
-  const dy  = z.y * t.scale - t.oy;
-  const ddw = z.w * t.scale;
-  const ddh = z.h * t.scale;
+  const dx  = z.x * sx;
+  const dy  = z.y * sy;
+  const ddw = z.w * sx;
+  const ddh = z.h * sy;
 
   camCtx.clearRect(dx, dy, ddw, ddh);
 
