@@ -1782,47 +1782,66 @@ async function convertHEIC(file) {
   return Array.isArray(blob) ? blob[0] : blob;
 }
 
-// Fast image loading: createImageBitmap > Image+objectURL > FileReader fallback
+// Load image via HTMLImageElement + objectURL (reliable, works everywhere)
+function loadImageElement(blob) {
+  const objectURL = URL.createObjectURL(blob);
+  return new Promise((resolve, reject) => {
+    const im = new Image();
+    im.onload = () => {
+      if (im.naturalWidth > 50 && im.naturalHeight > 50) {
+        resolve({ img: im, cleanup: () => URL.revokeObjectURL(objectURL) });
+      } else {
+        URL.revokeObjectURL(objectURL);
+        reject(new Error('Image too small: ' + im.naturalWidth + 'x' + im.naturalHeight));
+      }
+    };
+    im.onerror = () => { URL.revokeObjectURL(objectURL); reject(new Error('Image decode failed')); };
+    im.src = objectURL;
+  });
+}
+
+// Fast image loading: createImageBitmap (validated) > HTMLImageElement fallback
 async function loadImageFast(file) {
   let blob = file;
-  let objectURL = null;
 
   // HEIC conversion
   if (isHEIC(file)) {
-    try { blob = await convertHEIC(file); }
-    catch(e) { throw new Error('HEIC dönüştürülemedi: ' + e.message); }
+    try {
+      blob = await convertHEIC(file);
+      // Validate converted blob
+      if (!blob || blob.size < 100) throw new Error('Converted blob too small');
+    } catch(e) { throw new Error('HEIC dönüştürülemedi: ' + e.message); }
   }
 
-  // Try createImageBitmap first (fastest, no DOM)
+  // Try createImageBitmap first — validate dimensions before accepting
   if (typeof createImageBitmap === 'function') {
-    try { return { img: await createImageBitmap(blob), cleanup: () => {} }; }
-    catch(e) { /* fallback */ }
+    try {
+      const bmp = await createImageBitmap(blob);
+      if (bmp.width > 50 && bmp.height > 50) {
+        return { img: bmp, cleanup: () => {} };
+      }
+      // Dimensions invalid, close bitmap and fall through
+      bmp.close();
+    } catch(e) { /* fallback to HTMLImageElement */ }
   }
 
-  // Fallback: objectURL + Image element
-  objectURL = URL.createObjectURL(blob);
-  try {
-    const img = await new Promise((resolve, reject) => {
-      const im = new Image();
-      im.onload = () => resolve(im);
-      im.onerror = () => reject(new Error('Image decode failed'));
-      im.src = objectURL;
-    });
-    return { img, cleanup: () => URL.revokeObjectURL(objectURL) };
-  } catch(e) {
-    URL.revokeObjectURL(objectURL);
-    throw e;
-  }
+  // Fallback: HTMLImageElement + objectURL
+  return loadImageElement(blob);
 }
 
 // Resize so long side = maxSide, preserve aspect ratio
+// Dimension order: img.width/height first (works for ImageBitmap), then naturalWidth/Height (HTMLImageElement)
 function resizeForOCR(img, maxSide) {
   maxSide = maxSide || 1400;
-  const w = img.naturalWidth || img.width;
-  const h = img.naturalHeight || img.height;
+  // ImageBitmap has .width/.height; HTMLImageElement has .naturalWidth/.naturalHeight
+  let w = img.width || img.naturalWidth || 0;
+  let h = img.height || img.naturalHeight || 0;
+  // Safety: if dimensions are still invalid, return null
+  if (w <= 50 || h <= 50) return null;
   const longSide = Math.max(w, h);
   const scale = longSide > maxSide ? maxSide / longSide : 1;
   const rw = Math.round(w * scale), rh = Math.round(h * scale);
+  if (rw <= 50 || rh <= 50) return null;
   const c = document.createElement('canvas');
   c.width = rw; c.height = rh;
   c.getContext('2d').drawImage(img, 0, 0, rw, rh);
@@ -1851,6 +1870,9 @@ function longestOCRLine(text) {
 async function fastBatchOCR(resized, timings, ocrWorker) {
   const w = ocrWorker || worker;
 
+  // Debug: resized canvas dimensions
+  timings.resizedSize = resized.width + 'x' + resized.height;
+
   // Orientation detection using canvas-rendered dimensions
   const isLandscape = resized.width > resized.height;
 
@@ -1873,6 +1895,12 @@ async function fastBatchOCR(resized, timings, ocrWorker) {
     const enhanced = batchPreprocess(canvas);
     if (i === 0) timings.crop = Math.round(performance.now() - t);
 
+    // Debug: OCR input dimensions for this attempt
+    timings['sz' + (i+1)] = enhanced.width + 'x' + enhanced.height;
+
+    // Validate OCR input dimensions
+    if (enhanced.width <= 50 || enhanced.height <= 50) continue;
+
     t = performance.now();
     try {
       const { data: { text } } = await w.recognize(enhanced);
@@ -1881,7 +1909,7 @@ async function fastBatchOCR(resized, timings, ocrWorker) {
       // Line-length heuristic: if longest line < 30, crop is too small
       if (longestOCRLine(text) < 30 && ratio < 1.0) {
         lastDiag = diagnoseMRZ(text);
-        continue; // move to next attempt
+        continue;
       }
 
       const result = extractMRZ(clean(text));
@@ -1988,6 +2016,11 @@ async function startBatchTest(files) {
         continue;
       }
 
+      // Debug: source image dimensions
+      const srcW = imgData.img.width || imgData.img.naturalWidth || 0;
+      const srcH = imgData.img.height || imgData.img.naturalHeight || 0;
+      timings.srcSize = srcW + 'x' + srcH;
+
       // Resize to max 1400px long side
       t = performance.now();
       const resized = resizeForOCR(imgData.img, 1400);
@@ -1996,12 +2029,20 @@ async function startBatchTest(files) {
       // Cleanup objectURL
       imgData.cleanup();
 
-      // Fast OCR with dedicated batch worker (max 2 attempts)
+      // Validate resized canvas
+      if (!resized || resized.width <= 50 || resized.height <= 50) {
+        rows.push({ name: file.name, ok: false, type: '—', cs: '—', time: Math.round(performance.now() - t0), timing: 'src:' + timings.srcSize, reason: 'Resize failed: invalid dimensions' });
+        continue;
+      }
+
+      // Fast OCR with dedicated batch worker (max 3 attempts)
       const ocrResult = await fastBatchOCR(resized, timings, batchWorker);
 
       timings.total = Math.round(performance.now() - t0);
       totalTime += timings.total;
-      const timingStr = 'D:' + timings.decode + ' R:' + timings.resize + ' C:' + timings.crop +
+      const timingStr = 'src:' + timings.srcSize + ' rs:' + (timings.resizedSize||'?') +
+        (timings.sz1 ? ' a1:' + timings.sz1 : '') + (timings.sz2 ? ' a2:' + timings.sz2 : '') + (timings.sz3 ? ' a3:' + timings.sz3 : '') +
+        ' D:' + timings.decode + ' R:' + timings.resize + ' C:' + (timings.crop||0) +
         ' O1:' + (timings.ocr1||0) + (timings.ocr2 ? ' O2:' + timings.ocr2 : '') + (timings.ocr3 ? ' O3:' + timings.ocr3 : '') + ' T:' + timings.total + 'ms';
 
       if (ocrResult.extracted) {
