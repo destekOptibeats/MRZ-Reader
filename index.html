@@ -90,7 +90,9 @@ html,body{
 #s-scan {
   justify-content: flex-start;
   padding-top: max(env(safe-area-inset-top, 0px), 16px);
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), 16px);
   gap: 10px;
+  min-height: unset;
 }
 #video-wrap{
   position:relative;
@@ -99,15 +101,14 @@ html,body{
   border-radius:14px;
   overflow:hidden;
   background:#000;
-  /* Sabit aspect ratio — layout kaymasını önler */
   aspect-ratio: 4/3;
 }
 video{
-  position: absolute;
-  top:0; left:0;
   width:100%;
   height:100%;
-  object-fit: cover;
+  position:absolute;
+  top:0; left:0;
+  object-fit:fill;
   display:block;
 }
 #cam-overlay{
@@ -844,32 +845,13 @@ function drawOverlayState(state) {
   camCtx.fillStyle = 'rgba(0,0,0,0.45)';
   camCtx.fillRect(0, 0, vw, vh);
 
-  // Video içerik boyutu ile ekran boyutu arasındaki oran
-  // video object-fit:cover olduğu için gerçek görüntü alanını hesapla
-  const videoAspect = video.videoWidth / video.videoHeight;
-  const wrapAspect  = vw / vh;
-
-  let renderedW, renderedH, offsetX, offsetY;
-  if (videoAspect > wrapAspect) {
-    // Video yüksekliğe göre sığdırılmış, yanlar kırpılmış
-    renderedH = vh;
-    renderedW = vh * videoAspect;
-    offsetX   = (vw - renderedW) / 2;
-    offsetY   = 0;
-  } else {
-    // Video genişliğe göre sığdırılmış, üst/alt kırpılmış
-    renderedW = vw;
-    renderedH = vw / videoAspect;
-    offsetX   = 0;
-    offsetY   = (vh - renderedH) / 2;
-  }
-
-  const sx = renderedW / video.videoWidth;
-  const sy = renderedH / video.videoHeight;
+  // object-fit:fill — video tüm kutuyu kaplar, basit oran hesabı
+  const sx = vw / video.videoWidth;
+  const sy = vh / video.videoHeight;
 
   const z = getScanZone(video.videoWidth, video.videoHeight);
-  const dx  = offsetX + z.x * sx;
-  const dy  = offsetY + z.y * sy;
+  const dx  = z.x * sx;
+  const dy  = z.y * sy;
   const ddw = z.w * sx;
   const ddh = z.h * sy;
 
