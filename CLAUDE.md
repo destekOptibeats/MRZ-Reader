@@ -7,3 +7,6 @@ Her görev tamamlandıktan sonra onay beklemeden otomatik olarak:
 1. git add -u
 2. git commit -m "fix: [değişiklik açıklaması]"
 3. git push origin main
+
+## Çalışma Dizini Kuralı
+Her zaman ~/Desktop/MRZ-Reader ana klasöründe çalış, asla worktree veya alt dizin kullanma.
