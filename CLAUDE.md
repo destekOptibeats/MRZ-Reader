@@ -10,3 +10,9 @@ Her görev tamamlandıktan sonra onay beklemeden otomatik olarak:
 
 ## Çalışma Dizini Kuralı
 Her zaman ~/Desktop/MRZ-Reader ana klasöründe çalış, asla worktree veya alt dizin kullanma.
+
+## Deploy Bildirimi
+Her başarılı git push işleminden sonra şu komutu çalıştır:
+```
+osascript -e 'display notification "Test edebilirsin! 🚀" with title "MRZ Deploy Tamamlandı" subtitle "GitHub güncellendi"'
+```
