@@ -177,6 +177,16 @@ textarea::placeholder{color:var(--muted);letter-spacing:0;font-family:inherit;fo
 .cam-hint.hint-warn { color:#f59e0b; font-size:0.95rem; }
 .cam-hint.hint-ok   { color:#10b981; font-size:0.95rem; }
 
+/* ── serial scan rows ── */
+.serial-row{
+  display:flex;align-items:center;gap:8px;
+  background:var(--card);border:1px solid var(--border);
+  border-radius:10px;padding:9px 12px;font-size:0.82rem;
+}
+.serial-row .sr-name{flex:1;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.serial-row .sr-docno{color:var(--muted);font-size:0.76rem;white-space:nowrap;}
+.serial-row .sr-flag{font-size:1.1rem;flex-shrink:0;}
+
 /* ── Tab cam content — tam genişlik ── */
 #tab-cam-content {
   width: 100%;
@@ -323,7 +333,7 @@ input[type="text"] {
 </style>
 </head>
 <body>
-<div class="version-tag">v1.0.4</div>
+<div class="version-tag">v1.1.0</div>
 
 <!-- cache status pill -->
 <div id="cache-pill"><div class="pill-dot"></div><span id="pill-txt">Yükleniyor…</span></div>
@@ -345,7 +355,7 @@ input[type="text"] {
     <div class="sub" style="margin-top:4px">Kayıtlı pasaportunuzu seçin<br>veya yenisini tarayın</div>
   </div>
   <button class="btn green" onclick="goScreen('s-scan')">📷 Yeni Pasaport Tara</button>
-  <button class="btn blue" onclick="startSerialScan()" id="serial-btn" style="display:none">
+  <button class="btn blue" onclick="startSerialScan()" id="serial-btn">
     🚀 Seri Tarama Başlat
   </button>
   <button class="btn ghost" onclick="goScreen('s-add')">⌨️ Elle Gir</button>
@@ -361,6 +371,7 @@ input[type="text"] {
     </button>
     <div id="pp-list-wrap" style="display:none;margin-top:6px;">
       <div class="pp-list" id="pp-list"></div>
+      <button class="btn red-ghost" id="delete-all-btn" onclick="deleteAllPassports()" style="margin-top:10px;display:none">🗑 Hepsini Sil</button>
     </div>
   </div>
 </div>
@@ -380,7 +391,13 @@ input[type="text"] {
       <canvas id="cam-overlay"></canvas>
     </div>
     <div id="cam-hint" class="cam-hint">MRZ'yi kutuya hizalayın</div>
-    <button class="btn red-ghost" onclick="stopScan()">✕ İptal</button>
+    <!-- Serial scan results panel -->
+    <div id="serial-panel" style="display:none;flex-direction:column;gap:4px;width:100%;overflow-y:auto;flex:0 1 auto;max-height:30vh;">
+      <div id="serial-counter" style="font-size:0.85rem;font-weight:600;color:var(--green);text-align:center;padding:2px 0;">0 belge okundu</div>
+      <div id="serial-list" style="display:flex;flex-direction:column;gap:4px;"></div>
+    </div>
+    <button class="btn green" id="serial-finish-btn" onclick="finishSerialScan()" style="display:none;flex-shrink:0;">✓ Bitir</button>
+    <button class="btn red-ghost" id="cam-cancel-btn" onclick="stopScan()">✕ İptal</button>
   </div>
 
   <!-- Photo tab -->
@@ -556,12 +573,84 @@ function toggleList() {
 
 let serialMode = false;
 let serialCount = 0;
+let serialScannedIds = [];
 
 function startSerialScan() {
   serialMode = true;
   serialCount = 0;
+  serialScannedIds = [];
+  document.getElementById('serial-panel').style.display = 'flex';
+  document.getElementById('serial-finish-btn').style.display = 'flex';
+  document.getElementById('serial-counter').textContent = '0 belge okundu';
+  document.getElementById('serial-list').innerHTML = '';
+  document.getElementById('cam-cancel-btn').style.display = 'none';
   goScreen('s-scan');
   setTimeout(() => startCamera(), 100);
+}
+
+function addSerialResult(mrzResult) {
+  const parsed = parseResult(mrzResult);
+  const docId = (parsed.passNo || '').replace(/</g,'').trim();
+
+  // Duplicate kontrolü
+  if (serialScannedIds.includes(docId)) {
+    setHint('Bu belge zaten tarandı', 'warn');
+    lastFrameHash = 0; lastL2 = null; l2Count = 0; checksumPassed = false;
+    return;
+  }
+
+  // localStorage'a kaydet
+  const entry = {
+    id: 'pp_' + Date.now(),
+    line1: mrzResult.lines[0],
+    line2: mrzResult.lines[1],
+    line3: mrzResult.lines[2] || '',
+    type:  mrzResult.type,
+    name:  parsed.surname + (parsed.given ? ', ' + parsed.given : ''),
+    nation: parsed.nation,
+    addedAt: Date.now()
+  };
+  const saved = loadPassports();
+  saved.push(entry);
+  savePassports(saved);
+
+  // Duplicate listesine ekle
+  serialScannedIds.push(docId);
+  serialCount++;
+
+  // UI güncelle
+  document.getElementById('serial-counter').textContent = serialCount + ' belge okundu';
+
+  const displayName = (parsed.surname || '') + (parsed.given ? ' ' + parsed.given : '');
+  const row = document.createElement('div');
+  row.className = 'serial-row';
+  row.innerHTML = '<span class="sr-flag">' + flag(parsed.nation) + '</span>' +
+    '<span class="sr-name">' + displayName + '</span>' +
+    '<span class="sr-docno">' + docId + '</span>';
+  const listEl = document.getElementById('serial-list');
+  listEl.insertBefore(row, listEl.firstChild);
+  document.getElementById('serial-panel').scrollTop = 0;
+
+  // Scan state sıfırla
+  lastFrameHash = 0;
+  lastL2 = null;
+  l2Count = 0;
+  checksumPassed = false;
+
+  // Kısa görsel geri bildirim
+  setHint('✓ ' + displayName + ' okundu', 'ok');
+  drawOverlayState('accepted');
+  setTimeout(() => { if (scanning) drawOverlayState('searching'); }, 800);
+}
+
+function finishSerialScan() {
+  serialMode = false;
+  stopCamera();
+  document.getElementById('serial-panel').style.display = 'none';
+  document.getElementById('serial-finish-btn').style.display = 'none';
+  document.getElementById('cam-cancel-btn').style.display = '';
+  renderList();
+  goScreen('s-home');
 }
 
 function nextScan() {
@@ -574,7 +663,9 @@ function renderList() {
   const el   = document.getElementById('pp-list');
   const hasSaved = loadPassports().length > 0;
   const sb = document.getElementById('serial-btn');
-  if (sb) sb.style.display = hasSaved ? 'flex' : 'none';
+  if (sb) sb.style.display = 'flex';
+  const delBtn = document.getElementById('delete-all-btn');
+  if (delBtn) delBtn.style.display = hasSaved ? 'flex' : 'none';
   if (!list.length) {
     el.innerHTML = `<div class="empty-state">Henüz kayıtlı pasaport yok.</div>`;
     return;
@@ -588,6 +679,14 @@ function renderList() {
       </div>
       <span style="color:var(--muted);font-size:1.1rem">›</span>
     </div>`).join('');
+}
+
+function deleteAllPassports() {
+  const saved = loadPassports();
+  if (!saved.length) return;
+  if (!confirm(saved.length + ' kayıtlı belge silinecek. Emin misiniz?')) return;
+  savePassports([]);
+  renderList();
 }
 
 function viewPassport(idx) {
@@ -765,7 +864,12 @@ function stopCamera() {
 }
 
 function stopScan() {
+  serialMode = false;
   stopCamera();
+  document.getElementById('serial-panel').style.display = 'none';
+  document.getElementById('serial-finish-btn').style.display = 'none';
+  document.getElementById('cam-cancel-btn').style.display = '';
+  renderList();
   goScreen('s-home');
 }
 
@@ -946,6 +1050,11 @@ async function scanLoop() {
   if (checksumPassed && l2Count >= 2) {
     drawOverlayState('accepted');
     addLog('ok', `${result.type} → KABUL`, [`L2: ${l2}`], null, cs);
+    if (serialMode) {
+      addSerialResult(result);
+      setTimeout(scanLoop, 500);
+      return;
+    }
     setTimeout(() => { stopCamera(); saveAndShow(result); }, 250);
     return;
   }
