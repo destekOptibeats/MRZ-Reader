@@ -333,7 +333,7 @@ input[type="text"] {
 </style>
 </head>
 <body>
-<div class="version-tag">v1.1.1</div>
+<div class="version-tag">v1.2.0</div>
 
 <!-- cache status pill -->
 <div id="cache-pill"><div class="pill-dot"></div><span id="pill-txt">Yükleniyor…</span></div>
@@ -1125,6 +1125,88 @@ dz.addEventListener('drop',      e => {
 });
 
 // ── PROCESS IMAGE ──────────────────────────────────────────────────────
+
+// Resmi max genişliğe ölçekle + döndür
+function makeCanvas(img, deg) {
+  const swap = deg === 90 || deg === 270;
+  const sw = swap ? img.naturalHeight : img.naturalWidth;
+  const sh = swap ? img.naturalWidth  : img.naturalHeight;
+  const MAX = 1600, scale = sw > MAX ? MAX / sw : 1;
+  const rw = Math.round(sw * scale), rh = Math.round(sh * scale);
+  const c = document.createElement('canvas');
+  c.width = rw; c.height = rh;
+  const ctx = c.getContext('2d');
+  ctx.save(); ctx.translate(rw/2, rh/2);
+  ctx.rotate(deg * Math.PI / 180); ctx.scale(scale, scale);
+  ctx.drawImage(img, -img.naturalWidth/2, -img.naturalHeight/2);
+  ctx.restore(); return c;
+}
+
+// Alt bölgeyi crop et
+function cropBottom(srcCanvas, ratio) {
+  const cropH = Math.round(srcCanvas.height * ratio);
+  const c = document.createElement('canvas');
+  c.width = srcCanvas.width; c.height = cropH;
+  c.getContext('2d').drawImage(srcCanvas,
+    0, srcCanvas.height - cropH, srcCanvas.width, cropH,
+    0, 0, srcCanvas.width, cropH);
+  return c;
+}
+
+// Grayscale + contrast + sharpen ön işleme
+function preprocessForOCR(srcCanvas) {
+  const w = srcCanvas.width, h = srcCanvas.height;
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+
+  // contrast(1.6) + grayscale(1) CSS filtresi
+  ctx.filter = 'grayscale(1) contrast(1.6)';
+  ctx.drawImage(srcCanvas, 0, 0);
+  ctx.filter = 'none';
+
+  // Unsharp mask (sharpen)
+  const imgData = ctx.getImageData(0, 0, w, h);
+  const d = imgData.data;
+  const orig = new Uint8ClampedArray(d);
+  const amount = 0.6, threshold = 4;
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = (y * w + x) * 4;
+      for (let ch = 0; ch < 3; ch++) {
+        const blur = (
+          orig[((y-1)*w+x-1)*4+ch] + orig[((y-1)*w+x)*4+ch]*2 + orig[((y-1)*w+x+1)*4+ch] +
+          orig[(y*w+x-1)*4+ch]*2   + orig[i+ch]*4              + orig[(y*w+x+1)*4+ch]*2 +
+          orig[((y+1)*w+x-1)*4+ch] + orig[((y+1)*w+x)*4+ch]*2 + orig[((y+1)*w+x+1)*4+ch]
+        ) / 16;
+        const diff = orig[i+ch] - blur;
+        if (Math.abs(diff) > threshold) {
+          d[i+ch] = Math.min(255, Math.max(0, orig[i+ch] + diff * amount));
+        }
+      }
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
+  return c;
+}
+
+// OCR ile MRZ tanıma denemesi — başarılıysa result döner, değilse null
+async function tryRecognize(canvas) {
+  try {
+    const { data: { text } } = await worker.recognize(canvas);
+    const result = extractMRZ(clean(text));
+    if (result) {
+      const l2 = result.lines[1];
+      const cs = result.type === 'TD1'
+        ? { passOk: chk(result.lines[0].substring(5,14)) === +result.lines[0][14],
+            dobOk: chk(l2.substring(0,6)) === +l2[6], expOk: chk(l2.substring(8,14)) === +l2[14] }
+        : getChecksums_TD3(l2);
+      if (cs.passOk || (cs.dobOk && cs.expOk)) return result;
+    }
+  } catch(e) { /* devam */ }
+  return null;
+}
+
 async function processImage(img) {
   if (!workerReady) return;
   processingCancelled = false;
@@ -1133,48 +1215,40 @@ async function processImage(img) {
   const procProg = document.getElementById('proc-prog');
   const procMsg  = document.getElementById('proc-msg');
 
-  function makeCanvas(deg) {
-    const swap = deg === 90 || deg === 270;
-    const sw = swap ? img.naturalHeight : img.naturalWidth;
-    const sh = swap ? img.naturalWidth  : img.naturalHeight;
-    const MAX = 1600, scale = sw > MAX ? MAX / sw : 1;
-    const rw = Math.round(sw * scale), rh = Math.round(sh * scale);
-    const c = document.createElement('canvas');
-    c.width = rw; c.height = rh;
-    const ctx = c.getContext('2d');
-    ctx.save(); ctx.translate(rw/2, rh/2);
-    ctx.rotate(deg * Math.PI / 180); ctx.scale(scale, scale);
-    ctx.drawImage(img, -img.naturalWidth/2, -img.naturalHeight/2);
-    ctx.restore(); return c;
-  }
-
   procProg.style.width = '10%';
+
   for (const deg of [0, 90, 270]) {
     if (processingCancelled) return;
-    procProg.style.width = (30 + deg/3) + '%';
-    procMsg.textContent = `Tesseract ${deg}° taranıyor…`;
-    const full = makeCanvas(deg);
-    const bandH = Math.round(full.height * 0.45);
-    const band = document.createElement('canvas');
-    band.width = full.width; band.height = bandH;
-    band.getContext('2d').drawImage(full, 0, full.height - bandH, full.width, bandH, 0, 0, full.width, bandH);
-    try {
-      const { data: { text } } = await worker.recognize(band);
-      const result = extractMRZ(clean(text));
-      if (result) {
-        const l2 = result.lines[1];
-        const cs = result.type === 'TD1'
-          ? { passOk: chk(result.lines[0].substring(5,14)) === +result.lines[0][14],
-              dobOk: chk(l2.substring(0,6)) === +l2[6], expOk: chk(l2.substring(8,14)) === +l2[14] }
-          : getChecksums_TD3(l2);
-        if (cs.passOk || (cs.dobOk && cs.expOk)) {
-          procProg.style.width = '100%';
-          document.getElementById('proc-cancel-btn').style.display = 'none';
-          saveAndShow(result); return;
-        }
-      }
-    } catch(e) { /* devam */ }
+    const pct = deg === 0 ? 15 : deg === 90 ? 40 : 65;
+    procProg.style.width = pct + '%';
+
+    const full = makeCanvas(img, deg);
+
+    // Adım 1: Alt %40 crop + preprocessing ile dene
+    procMsg.textContent = `${deg}° alt bölge taranıyor…`;
+    const band = cropBottom(full, 0.40);
+    const enhanced = preprocessForOCR(band);
+    let result = await tryRecognize(enhanced);
+    if (result) { procProg.style.width='100%'; document.getElementById('proc-cancel-btn').style.display='none'; saveAndShow(result); return; }
+
+    // Adım 2: Alt %40 crop ham (preprocessing'siz) dene
+    if (processingCancelled) return;
+    result = await tryRecognize(band);
+    if (result) { procProg.style.width='100%'; document.getElementById('proc-cancel-btn').style.display='none'; saveAndShow(result); return; }
+
+    // Adım 3: Tam resim + preprocessing ile fallback
+    if (processingCancelled) return;
+    procMsg.textContent = `${deg}° tam resim taranıyor…`;
+    const fullEnhanced = preprocessForOCR(full);
+    result = await tryRecognize(fullEnhanced);
+    if (result) { procProg.style.width='100%'; document.getElementById('proc-cancel-btn').style.display='none'; saveAndShow(result); return; }
+
+    // Adım 4: Tam resim ham fallback
+    if (processingCancelled) return;
+    result = await tryRecognize(full);
+    if (result) { procProg.style.width='100%'; document.getElementById('proc-cancel-btn').style.display='none'; saveAndShow(result); return; }
   }
+
   document.getElementById('proc-cancel-btn').style.display = 'none';
   showError('MRZ tespit edilemedi. Kimliğin arka yüzünü yükleyin.');
 }
