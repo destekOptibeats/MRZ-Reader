@@ -1842,41 +1842,59 @@ function batchPreprocess(srcCanvas) {
 
 // Fast batch OCR: crop 32% → fallback 45%, max 2 OCR attempts total
 // ocrWorker param: allows passing a dedicated batch worker or the global worker
+// Check longest line in OCR output — if < 30 chars, crop is insufficient
+function longestOCRLine(text) {
+  if (!text) return 0;
+  return text.split('\n').reduce((max, l) => Math.max(max, l.replace(/[^A-Z0-9<]/gi, '').length), 0);
+}
+
 async function fastBatchOCR(resized, timings, ocrWorker) {
   const w = ocrWorker || worker;
-  // Attempt 1: crop bottom 32% + preprocess
-  let t = performance.now();
-  const band1 = cropBottom(resized, 0.32);
-  const enhanced1 = batchPreprocess(band1);
-  timings.crop = Math.round(performance.now() - t);
 
-  t = performance.now();
-  try {
-    const { data: { text } } = await w.recognize(enhanced1);
-    timings.ocr1 = Math.round(performance.now() - t);
-    const result = extractMRZ(clean(text));
-    if (result && validateMRZ(result).valid) {
-      return { extracted: result, diag: diagnoseMRZ(text), attempts: 1 };
+  // Orientation detection using canvas-rendered dimensions
+  const isLandscape = resized.width > resized.height;
+
+  // 3-attempt crop strategy: portrait vs landscape ratios
+  const crops = [
+    isLandscape ? 0.50 : 0.45,  // Attempt 1
+    isLandscape ? 0.65 : 0.60,  // Attempt 2
+    1.0,                         // Attempt 3: full image
+  ];
+
+  let lastDiag = null;
+  let t;
+
+  for (let i = 0; i < crops.length; i++) {
+    const ratio = crops[i];
+    const attemptKey = 'ocr' + (i + 1);
+
+    t = performance.now();
+    const canvas = ratio >= 1.0 ? resized : cropBottom(resized, ratio);
+    const enhanced = batchPreprocess(canvas);
+    if (i === 0) timings.crop = Math.round(performance.now() - t);
+
+    t = performance.now();
+    try {
+      const { data: { text } } = await w.recognize(enhanced);
+      timings[attemptKey] = Math.round(performance.now() - t);
+
+      // Line-length heuristic: if longest line < 30, crop is too small
+      if (longestOCRLine(text) < 30 && ratio < 1.0) {
+        lastDiag = diagnoseMRZ(text);
+        continue; // move to next attempt
+      }
+
+      const result = extractMRZ(clean(text));
+      if (result && validateMRZ(result).valid) {
+        return { extracted: result, diag: diagnoseMRZ(text), attempts: i + 1 };
+      }
+      lastDiag = diagnoseMRZ(text);
+    } catch(e) {
+      timings[attemptKey] = Math.round(performance.now() - t);
     }
-  } catch(e) { timings.ocr1 = Math.round(performance.now() - t); }
-
-  // Attempt 2 (fallback): crop bottom 45% + preprocess
-  const band2 = cropBottom(resized, 0.45);
-  const enhanced2 = batchPreprocess(band2);
-
-  t = performance.now();
-  try {
-    const { data: { text } } = await w.recognize(enhanced2);
-    timings.ocr2 = Math.round(performance.now() - t);
-    const result = extractMRZ(clean(text));
-    if (result && validateMRZ(result).valid) {
-      return { extracted: result, diag: diagnoseMRZ(text), attempts: 2 };
-    }
-    return { extracted: null, diag: diagnoseMRZ(text), attempts: 2 };
-  } catch(e) {
-    timings.ocr2 = Math.round(performance.now() - t);
-    return { extracted: null, diag: null, attempts: 2 };
   }
+
+  return { extracted: null, diag: lastDiag, attempts: crops.length };
 }
 
 // Create a dedicated batch Tesseract worker (isolated from global worker)
@@ -1984,7 +2002,7 @@ async function startBatchTest(files) {
       timings.total = Math.round(performance.now() - t0);
       totalTime += timings.total;
       const timingStr = 'D:' + timings.decode + ' R:' + timings.resize + ' C:' + timings.crop +
-        ' O1:' + timings.ocr1 + (timings.ocr2 ? ' O2:' + timings.ocr2 : '') + ' T:' + timings.total + 'ms';
+        ' O1:' + (timings.ocr1||0) + (timings.ocr2 ? ' O2:' + timings.ocr2 : '') + (timings.ocr3 ? ' O3:' + timings.ocr3 : '') + ' T:' + timings.total + 'ms';
 
       if (ocrResult.extracted) {
         successCount++;
