@@ -197,6 +197,10 @@ textarea::placeholder{color:var(--muted);letter-spacing:0;font-family:inherit;fo
 .serial-row .sr-name{flex:1;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .serial-row .sr-docno{color:var(--muted);font-size:0.76rem;white-space:nowrap;}
 .serial-row .sr-flag{font-size:1.1rem;flex-shrink:0;}
+.serial-row .sr-count{
+  background:#f59e0b;color:#000;font-size:0.68rem;font-weight:700;
+  padding:2px 6px;border-radius:6px;flex-shrink:0;min-width:22px;text-align:center;
+}
 
 /* ── Tab cam content — tam genişlik ── */
 #tab-cam-content {
@@ -336,15 +340,16 @@ input[type="text"] {
   font-size: 16px; /* 16px altı Safari'de zoom yapar */
 }
 .version-tag{
-  position:fixed;bottom:6px;left:10px;z-index:9999;
-  background:rgba(255,255,255,.06);color:var(--muted);
-  font-size:.65rem;padding:2px 7px;border-radius:5px;
-  pointer-events:none;opacity:.5;
+  position:fixed;bottom:8px;left:10px;z-index:9999;
+  background:rgba(255,255,255,.12);color:var(--text);
+  font-size:.78rem;padding:4px 10px;border-radius:6px;
+  pointer-events:none;opacity:.7;font-weight:600;
+  border:1px solid rgba(255,255,255,.08);
 }
 </style>
 </head>
 <body>
-<div class="version-tag">v1.3.1</div>
+<div class="version-tag">v1.4.0</div>
 
 <!-- cache status pill -->
 <div id="cache-pill"><div class="pill-dot"></div><span id="pill-txt">Yükleniyor…</span></div>
@@ -449,6 +454,15 @@ input[type="text"] {
 <!-- S4: SONUÇ -->
 <div class="screen" id="s-result">
   <div class="banner" id="res-banner"><span id="res-icon">✅</span><span id="res-txt"></span></div>
+  <!-- Belge fotoğrafı -->
+  <div id="doc-photo-wrap" style="display:none;width:100%;max-width:460px;cursor:pointer;" onclick="toggleFullPhoto()">
+    <img id="doc-photo" style="width:100%;border-radius:12px;border:1px solid var(--border);display:block;">
+  </div>
+  <!-- Tam ekran fotoğraf -->
+  <div id="photo-fullscreen" onclick="toggleFullPhoto()" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.92);align-items:center;justify-content:center;cursor:pointer;">
+    <img id="doc-photo-full" style="max-width:95vw;max-height:90vh;object-fit:contain;border-radius:8px;">
+    <div style="position:absolute;top:max(env(safe-area-inset-top,12px),12px);right:14px;color:#fff;font-size:1.5rem;font-weight:700;">✕</div>
+  </div>
   <div class="card" style="max-width:460px">
     <div style="font-size:0.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:10px">
       ✏️ İsim alanları — gerekirse düzeltin
@@ -615,15 +629,22 @@ function addSerialResult(mrzResult) {
   const parsed = parseResult(mrzResult);
   const docId = (parsed.passNo || '').replace(/</g,'').trim();
 
-  // Duplicate kontrolü
+  // Duplicate kontrolü — sayacı artır
   if (serialScannedIds.includes(docId)) {
     const dupName = (parsed.surname || '') + (parsed.given ? ' ' + parsed.given : '');
     showCamToast('⚠️ Bu belge zaten eklendi: ' + dupName, 3000);
+    // Sayacı artır
+    const countEl = document.getElementById('sr-count-' + docId);
+    if (countEl) {
+      let c = parseInt(countEl.textContent) || 1;
+      countEl.textContent = (c + 1) + 'x';
+    }
     lastFrameHash = 0; lastL2 = null; l2Count = 0; checksumPassed = false;
     return;
   }
 
   // localStorage'a kaydet
+  const photo = captureDocPhoto();
   const entry = {
     id: 'pp_' + Date.now(),
     line1: mrzResult.lines[0],
@@ -632,6 +653,7 @@ function addSerialResult(mrzResult) {
     type:  mrzResult.type,
     name:  parsed.surname + (parsed.given ? ', ' + parsed.given : ''),
     nation: parsed.nation,
+    photo: photo || '',
     addedAt: Date.now()
   };
   const saved = loadPassports();
@@ -650,7 +672,8 @@ function addSerialResult(mrzResult) {
   row.className = 'serial-row';
   row.innerHTML = '<span class="sr-flag">' + flag(parsed.nation) + '</span>' +
     '<span class="sr-name">' + displayName + '</span>' +
-    '<span class="sr-docno">' + docId + '</span>';
+    '<span class="sr-docno">' + docId + '</span>' +
+    '<span class="sr-count" id="sr-count-' + docId + '">1x</span>';
   const listEl = document.getElementById('serial-list');
   listEl.insertBefore(row, listEl.firstChild);
   document.getElementById('serial-panel').scrollTop = 0;
@@ -1313,8 +1336,20 @@ async function processImage(img) {
 }
 
 // ── SAVE & SHOW ─────────────────────────────────────────────────────────
+function captureDocPhoto() {
+  try {
+    if (!video || !video.videoWidth) return null;
+    const c = document.createElement('canvas');
+    c.width = Math.min(video.videoWidth, 800);
+    c.height = Math.round(c.width * video.videoHeight / video.videoWidth);
+    c.getContext('2d').drawImage(video, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.6);
+  } catch(e) { return null; }
+}
+
 function saveAndShow(mrzResult) {
   const parsed = parseResult(mrzResult);
+  const photo = captureDocPhoto();
   const entry = {
     id: 'pp_' + Date.now(),
     line1: mrzResult.lines[0],
@@ -1323,6 +1358,7 @@ function saveAndShow(mrzResult) {
     type:  mrzResult.type,
     name:  parsed.surname + (parsed.given ? ', ' + parsed.given : ''),
     nation: parsed.nation,
+    photo: photo || '',
     addedAt: Date.now()
   };
   const saved = loadPassports();
@@ -1333,12 +1369,30 @@ function saveAndShow(mrzResult) {
   showParsed(parsed, entry, true);
 }
 
+function toggleFullPhoto() {
+  const fs = document.getElementById('photo-fullscreen');
+  fs.style.display = fs.style.display === 'flex' ? 'none' : 'flex';
+}
+
 function showParsed(p, entry, isNew) {
   const cs = p.cs || {};
   function ck(v) {
     if (v===null||v===undefined) return '';
     return `<span class="${v?'ok':'fail'}">${v?'✓':'✗'}</span>`;
   }
+
+  // Belge fotoğrafı göster
+  const photoWrap = document.getElementById('doc-photo-wrap');
+  const photoEl = document.getElementById('doc-photo');
+  const photoFull = document.getElementById('doc-photo-full');
+  if (entry.photo) {
+    photoEl.src = entry.photo;
+    photoFull.src = entry.photo;
+    photoWrap.style.display = 'block';
+  } else {
+    photoWrap.style.display = 'none';
+  }
+  document.getElementById('photo-fullscreen').style.display = 'none';
 
   document.getElementById('edit-surname').value = p.surname || '';
   document.getElementById('edit-given').value   = p.given   || '';
