@@ -1844,7 +1844,7 @@ async function startBulkSerialScan(files) {
     imgData.cleanup();
 
     const timings = {};
-    const ocrResult = await fastBatchOCR(resized, timings);
+    const ocrResult = await fastBatchOCR(resized, timings, null, files[i].name, i);
     if (ocrResult.extracted) {
       addSerialResult(ocrResult.extracted);
     }
@@ -1954,16 +1954,83 @@ function resizeForOCR(img, maxSide) {
   return c;
 }
 
-// Lightweight preprocessing for batch (grayscale + contrast, no sharpen)
-function batchPreprocess(srcCanvas) {
+// MRZ-optimized preprocessing: grayscale → histogram stretch → Otsu threshold
+function batchPreprocessMRZ(srcCanvas) {
   const sw = srcCanvas.width, sh = srcCanvas.height;
-  if (!sw || !sh) return srcCanvas; // safety
+  if (!sw || !sh) return srcCanvas;
+
   const c = document.createElement('canvas');
   c.width = sw; c.height = sh;
   const ctx = c.getContext('2d');
-  ctx.filter = 'grayscale(1) contrast(1.6)';
   ctx.drawImage(srcCanvas, 0, 0, sw, sh, 0, 0, sw, sh);
-  ctx.filter = 'none';
+
+  const imgData = ctx.getImageData(0, 0, sw, sh);
+  const d = imgData.data;
+  const gray = new Uint8Array(sw * sh);
+
+  // Step 1: Grayscale
+  for (let i = 0; i < sw * sh; i++) {
+    gray[i] = Math.round(0.299 * d[i*4] + 0.587 * d[i*4+1] + 0.114 * d[i*4+2]);
+  }
+
+  // Step 2: Histogram stretch (safe contrast normalization)
+  let min = 255, max = 0;
+  for (let i = 0; i < gray.length; i++) {
+    if (gray[i] < min) min = gray[i];
+    if (gray[i] > max) max = gray[i];
+  }
+  // Clamp: don't stretch if range is already wide or too narrow
+  const range = max - min;
+  if (range > 30 && range < 250) {
+    for (let i = 0; i < gray.length; i++) {
+      gray[i] = Math.round(((gray[i] - min) / range) * 255);
+    }
+  }
+
+  // Step 3: Otsu threshold → binary black/white
+  // Build histogram
+  const hist = new Uint32Array(256);
+  for (let i = 0; i < gray.length; i++) hist[gray[i]]++;
+
+  // Otsu's method
+  const total = gray.length;
+  let sumAll = 0;
+  for (let i = 0; i < 256; i++) sumAll += i * hist[i];
+
+  let sumB = 0, wB = 0, wF = 0, maxVar = 0, threshold = 128;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t];
+    if (wB === 0) continue;
+    wF = total - wB;
+    if (wF === 0) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB;
+    const mF = (sumAll - sumB) / wF;
+    const variance = wB * wF * (mB - mF) * (mB - mF);
+    if (variance > maxVar) { maxVar = variance; threshold = t; }
+  }
+
+  // Apply threshold — MRZ text is dark on light background
+  for (let i = 0; i < gray.length; i++) {
+    const v = gray[i] < threshold ? 0 : 255;
+    d[i*4] = d[i*4+1] = d[i*4+2] = v;
+    d[i*4+3] = 255;
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+  return c;
+}
+
+// Simple upscale for small crop canvases
+function batchUpscaleIfNeeded(canvas) {
+  if (canvas.height >= 400) return canvas;
+  const factor = 2;
+  const c = document.createElement('canvas');
+  c.width = canvas.width * factor;
+  c.height = canvas.height * factor;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, c.width, c.height);
   return c;
 }
 
@@ -1975,21 +2042,20 @@ function longestOCRLine(text) {
   return text.split('\n').reduce((max, l) => Math.max(max, l.replace(/[^A-Z0-9<]/gi, '').length), 0);
 }
 
-async function fastBatchOCR(resized, timings, ocrWorker) {
+// fileIndex=0 enables debug preview for first file only
+async function fastBatchOCR(resized, timings, ocrWorker, fileName, fileIndex) {
   const wr = ocrWorker || worker;
+  const isFirstFile = (fileIndex === 0);
 
-  // Debug: resized canvas dimensions
   timings.resizedSize = resized.width + 'x' + resized.height;
-  console.log('[BatchOCR] resized:', resized.width, 'x', resized.height);
+  console.log('[BatchOCR]', fileName || '', 'resized:', resized.width, 'x', resized.height);
 
-  // Orientation detection using canvas-rendered dimensions
   const isLandscape = resized.width > resized.height;
 
-  // 3-attempt crop strategy: portrait vs landscape ratios
   const crops = [
-    isLandscape ? 0.50 : 0.45,  // Attempt 1
-    isLandscape ? 0.65 : 0.60,  // Attempt 2
-    1.0,                         // Attempt 3: full image
+    isLandscape ? 0.50 : 0.45,
+    isLandscape ? 0.65 : 0.60,
+    1.0,
   ];
 
   let lastDiag = null;
@@ -2000,28 +2066,39 @@ async function fastBatchOCR(resized, timings, ocrWorker) {
     const attemptKey = 'ocr' + (i + 1);
 
     t = performance.now();
-    const canvas = ratio >= 1.0 ? resized : cropBottom(resized, ratio);
-    const enhanced = batchPreprocess(canvas);
+    const cropped = ratio >= 1.0 ? resized : cropBottom(resized, ratio);
+    const preprocessed = batchPreprocessMRZ(cropped);
+    const ocrInput = batchUpscaleIfNeeded(preprocessed);
     if (i === 0) timings.crop = Math.round(performance.now() - t);
 
-    // Debug: each stage dimensions
-    timings['sz' + (i+1)] = enhanced.width + 'x' + enhanced.height;
-    console.log('[BatchOCR] attempt', i+1, 'crop:', canvas.width, 'x', canvas.height, '→ enhanced:', enhanced.width, 'x', enhanced.height);
+    timings['sz' + (i+1)] = ocrInput.width + 'x' + ocrInput.height;
+    console.log('[BatchOCR] attempt', i+1,
+      'crop:', cropped.width + 'x' + cropped.height,
+      '→ preprocess:', preprocessed.width + 'x' + preprocessed.height,
+      '→ OCR input:', ocrInput.width + 'x' + ocrInput.height);
 
-    // Validate OCR input dimensions — must be > 100px
-    if (enhanced.width <= 100 || enhanced.height <= 100) {
-      console.warn('[BatchOCR] attempt', i+1, 'SKIPPED: too small', enhanced.width, 'x', enhanced.height);
+    // Visual crop debug — first file only
+    if (isFirstFile) {
+      try {
+        console.log('[BatchOCR] Crop attempt', i+1, 'preview (raw):', cropped.toDataURL('image/jpeg', 0.5));
+        console.log('[BatchOCR] Crop attempt', i+1, 'preview (processed):', ocrInput.toDataURL('image/jpeg', 0.5));
+      } catch(e) {}
+    }
+
+    if (ocrInput.width <= 100 || ocrInput.height <= 100) {
+      console.warn('[BatchOCR] attempt', i+1, 'SKIPPED: too small');
       continue;
     }
 
     t = performance.now();
     try {
-      const { data: { text } } = await wr.recognize(enhanced);
+      const { data: { text } } = await wr.recognize(ocrInput);
       timings[attemptKey] = Math.round(performance.now() - t);
-      console.log('[BatchOCR] attempt', i+1, 'OCR done, longest line:', longestOCRLine(text));
+      const longest = longestOCRLine(text);
+      console.log('[BatchOCR] attempt', i+1, 'longest line:', longest, 'chars');
+      if (isFirstFile) console.log('[BatchOCR] OCR raw text:', text.substring(0, 200));
 
-      // Line-length heuristic: if longest line < 30, crop is too small
-      if (longestOCRLine(text) < 30 && ratio < 1.0) {
+      if (longest < 30 && ratio < 1.0) {
         lastDiag = diagnoseMRZ(text);
         continue;
       }
@@ -2152,7 +2229,7 @@ async function startBatchTest(files) {
       }
 
       // Fast OCR with dedicated batch worker (max 3 attempts)
-      const ocrResult = await fastBatchOCR(resized, timings, batchWorker);
+      const ocrResult = await fastBatchOCR(resized, timings, batchWorker, file.name, i);
 
       timings.total = Math.round(performance.now() - t0);
       totalTime += timings.total;
