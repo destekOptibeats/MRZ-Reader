@@ -309,9 +309,16 @@ input[type="text"] {
   border-radius: 8px;
   font-size: 16px; /* 16px altı Safari'de zoom yapar */
 }
+.version-tag{
+  position:fixed;top:8px;right:12px;z-index:9999;
+  background:rgba(255,255,255,.08);color:var(--muted);
+  font-size:.7rem;padding:3px 8px;border-radius:6px;
+  pointer-events:none;backdrop-filter:blur(4px);
+}
 </style>
 </head>
 <body>
+<div class="version-tag">v1.0.0</div>
 
 <!-- cache status pill -->
 <div id="cache-pill"><div class="pill-dot"></div><span id="pill-txt">Yükleniyor…</span></div>

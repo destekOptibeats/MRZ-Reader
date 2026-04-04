@@ -1,0 +1,34 @@
+name: Bump patch version
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '.github/workflows/**'
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bump version in index.html
+        run: |
+          current=$(grep -oP 'v\d+\.\d+\.\d+' index.html | head -1)
+          major=$(echo "$current" | cut -d. -f1 | tr -d 'v')
+          minor=$(echo "$current" | cut -d. -f2)
+          patch=$(echo "$current" | cut -d. -f3)
+          new="v${major}.${minor}.$((patch + 1))"
+          sed -i "s/$current/$new/" index.html
+          echo "Bumped $current -> $new"
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "chore: bump version"
+          git push
