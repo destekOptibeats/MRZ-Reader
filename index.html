@@ -177,6 +177,17 @@ textarea::placeholder{color:var(--muted);letter-spacing:0;font-family:inherit;fo
 .cam-hint.hint-warn { color:#f59e0b; font-size:0.95rem; }
 .cam-hint.hint-ok   { color:#10b981; font-size:0.95rem; }
 
+/* ── cam toast ── */
+#cam-toast{
+  position:absolute;top:12px;left:50%;transform:translateX(-50%);
+  z-index:100;padding:8px 16px;border-radius:10px;
+  background:rgba(0,0,0,.85);backdrop-filter:blur(6px);
+  color:#f59e0b;font-size:0.82rem;font-weight:600;
+  text-align:center;white-space:nowrap;
+  opacity:0;transition:opacity .3s;pointer-events:none;
+}
+#cam-toast.show{opacity:1;}
+
 /* ── serial scan rows ── */
 .serial-row{
   display:flex;align-items:center;gap:8px;
@@ -333,7 +344,7 @@ input[type="text"] {
 </style>
 </head>
 <body>
-<div class="version-tag">v1.2.1</div>
+<div class="version-tag">v1.3.0</div>
 
 <!-- cache status pill -->
 <div id="cache-pill"><div class="pill-dot"></div><span id="pill-txt">Yükleniyor…</span></div>
@@ -389,6 +400,7 @@ input[type="text"] {
     <div id="video-wrap">
       <video id="video" autoplay playsinline muted></video>
       <canvas id="cam-overlay"></canvas>
+      <div id="cam-toast"></div>
     </div>
     <div id="cam-hint" class="cam-hint">MRZ'yi kutuya hizalayın</div>
     <!-- Serial scan results panel -->
@@ -574,6 +586,17 @@ function toggleList() {
 let serialMode = false;
 let serialCount = 0;
 let serialScannedIds = [];
+let toastTimer = null;
+
+function showCamToast(msg, duration) {
+  duration = duration || 2500;
+  const el = document.getElementById('cam-toast');
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.add('show');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), duration);
+}
 
 function startSerialScan() {
   serialMode = true;
@@ -594,7 +617,8 @@ function addSerialResult(mrzResult) {
 
   // Duplicate kontrolü
   if (serialScannedIds.includes(docId)) {
-    setHint('Bu belge zaten tarandı', 'warn');
+    const dupName = (parsed.surname || '') + (parsed.given ? ' ' + parsed.given : '');
+    showCamToast('⚠️ Bu belge zaten eklendi: ' + dupName, 3000);
     lastFrameHash = 0; lastL2 = null; l2Count = 0; checksumPassed = false;
     return;
   }
@@ -943,12 +967,16 @@ function drawOverlayState(state) {
     found:      '#f59e0b',
     confirming: '#f59e0b',
     accepted:   '#10b981',
+    blurry:     '#ef4444',
   };
+
+  // Dinamik yönlendirme mesajları
   const hints = {
-    searching:  'MRZ satırlarını kutuya hizalayın',
-    found:      'Sabit tutun…',
-    confirming: 'Doğrulanıyor…',
-    accepted:   '✓ Okundu',
+    searching:  '📏 MRZ satırlarını çerçeveye hizalayın',
+    found:      '✋ Sabit tutun…',
+    confirming: '✓ Sabit tutun...',
+    accepted:   '✅ Okundu!',
+    blurry:     '✋ Sabit tutun',
   };
 
   // Canvas boyutunu video-wrap ile senkronize et
@@ -970,22 +998,53 @@ function drawOverlayState(state) {
   const ddw = z.w * sx;
   const ddh = z.h * sy;
 
+  // Belge çerçevesi temizle
   camCtx.clearRect(dx, dy, ddw, ddh);
 
+  // MRZ bandı — alt %40
   const bandH = ddh * 0.40;
   const bandY = dy + ddh - bandH;
-  const color = colors[state];
+  const color = colors[state] || colors.searching;
 
-  camCtx.fillStyle   = color + '22';
+  // MRZ bandı arka plan + kenarlık
+  camCtx.fillStyle = color + '18';
   camCtx.fillRect(dx, bandY, ddw, bandH);
   camCtx.strokeStyle = color;
-  camCtx.lineWidth   = 2;
+  camCtx.lineWidth = 2;
   camCtx.strokeRect(dx, bandY, ddw, bandH);
 
-  drawCorners(dx, dy, ddw, ddh, color, 18);
+  // Köşe işaretleri
+  drawCorners(dx, dy, ddw, ddh, color, 20);
 
+  // ── "MRZ ALANI" etiketi — bandın üst kenarında ──
+  const labelFontSize = Math.max(9, Math.round(ddw * 0.028));
+  camCtx.font = '600 ' + labelFontSize + 'px -apple-system, sans-serif';
+  camCtx.textAlign = 'center';
+  camCtx.textBaseline = 'bottom';
+  // Arka plan pill
+  const labelText = 'MRZ ALANI';
+  const labelW = camCtx.measureText(labelText).width + 14;
+  const labelH = labelFontSize + 8;
+  const labelX = dx + ddw / 2 - labelW / 2;
+  const labelY = bandY - 6;
+  camCtx.fillStyle = 'rgba(0,0,0,0.65)';
+  camCtx.beginPath();
+  camCtx.roundRect(labelX, labelY - labelH, labelW, labelH, 4);
+  camCtx.fill();
+  camCtx.fillStyle = color;
+  camCtx.fillText(labelText, dx + ddw / 2, labelY - 4);
+
+  // ── Belge tipi ipuçları — çerçevenin üstünde ──
+  const tipFontSize = Math.max(8, Math.round(ddw * 0.024));
+  camCtx.font = tipFontSize + 'px -apple-system, sans-serif';
+  camCtx.textAlign = 'center';
+  camCtx.textBaseline = 'top';
+  camCtx.fillStyle = 'rgba(255,255,255,0.45)';
+  camCtx.fillText('📘 Pasaport  ·  💳 Kimlik  ·  📗 Ehliyet', dx + ddw / 2, dy + 8);
+
+  // Hint mesajı güncelle
   const hintType = state === 'accepted' ? 'ok' : state === 'searching' ? '' : 'warn';
-  setHint(hints[state], hintType);
+  setHint(hints[state] || hints.searching, hintType);
 }
 
 // ── SCAN LOOP ───────────────────────────────────────────────────────────
@@ -1013,7 +1072,7 @@ async function scanLoop() {
   mainCtx.filter = 'none';
 
   if (!isSharpEnough(mainC)) {
-    setHint('Belgeyi sabit ve net tutun', 'warn');
+    drawOverlayState('blurry');
     setTimeout(scanLoop, SCAN_INTERVAL); return;
   }
 
