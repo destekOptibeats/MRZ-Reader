@@ -177,9 +177,30 @@ textarea::placeholder{color:var(--muted);letter-spacing:0;font-family:inherit;fo
 .cam-hint.hint-warn { color:#f59e0b; font-size:0.95rem; }
 .cam-hint.hint-ok   { color:#10b981; font-size:0.95rem; }
 
+/* ── scan flash overlay ── */
+#scan-flash{
+  position:absolute;inset:0;z-index:90;pointer-events:none;
+  opacity:0;transition:opacity .15s;border-radius:14px;
+}
+#scan-flash.flash-green{background:rgba(16,185,129,.35);opacity:1;}
+#scan-flash.flash-orange{background:rgba(245,158,11,.35);opacity:1;}
+@keyframes bounce-up{
+  0%{transform:translateY(0);opacity:1;}
+  30%{transform:translateY(-12px);opacity:.7;}
+  60%{transform:translateY(-4px);opacity:1;}
+  100%{transform:translateY(0);opacity:1;}
+}
+.stat-bounce{animation:bounce-up .4s ease;}
+
+/* ── serial stats bar ── */
+#serial-stats{
+  display:flex;justify-content:center;gap:14px;flex-wrap:wrap;
+  font-size:.78rem;color:var(--muted);padding:2px 0;
+}
+#serial-stats span{white-space:nowrap;}
+#serial-stats .stat-val{color:var(--text);font-weight:700;}
+
 /* ── batch test ── */
-#batch-btn{display:none;}
-@media(min-width:768px){#batch-btn{display:flex;}}
 .batch-table{width:100%;max-width:600px;border-collapse:collapse;font-size:.78rem;}
 .batch-table th{text-align:left;padding:8px 6px;border-bottom:2px solid var(--border);color:var(--muted);font-size:.7rem;text-transform:uppercase;}
 .batch-table td{padding:7px 6px;border-bottom:1px solid var(--border);vertical-align:top;}
@@ -360,7 +381,7 @@ input[type="text"] {
 </style>
 </head>
 <body>
-<div class="version-tag">v2.0.1</div>
+<div class="version-tag">v2.1.0</div>
 
 <!-- cache status pill -->
 <div id="cache-pill"><div class="pill-dot"></div><span id="pill-txt">Yükleniyor…</span></div>
@@ -386,7 +407,7 @@ input[type="text"] {
     🚀 Seri Tarama Başlat
   </button>
   <button class="btn ghost" onclick="goScreen('s-add')">⌨️ Elle Gir</button>
-  <button class="btn ghost" id="batch-btn" onclick="goScreen('s-batch')">🧪 Batch Test</button>
+  <button class="btn ghost" onclick="document.getElementById('batch-file-in').click()">🧪 Batch Test</button>
   <input type="file" id="batch-file-in" accept="image/*" multiple style="display:none" onchange="startBatchTest(this.files)">
   <div style="width:100%;max-width:460px;margin-top:8px;">
     <button onclick="toggleList()" id="list-toggle-btn"
@@ -411,6 +432,7 @@ input[type="text"] {
   <div class="tabs">
     <button class="tab active" id="tab-cam" onclick="setTab('cam')">📷 Kamera</button>
     <button class="tab" id="tab-img" onclick="setTab('img')">🖼️ Fotoğraf</button>
+    <button class="tab" id="tab-bulk" onclick="setTab('bulk')" style="display:none">📁 Toplu</button>
   </div>
 
   <!-- Camera tab -->
@@ -419,11 +441,17 @@ input[type="text"] {
       <video id="video" autoplay playsinline muted></video>
       <canvas id="cam-overlay"></canvas>
       <div id="cam-toast"></div>
+      <div id="scan-flash"></div>
     </div>
     <div id="cam-hint" class="cam-hint">MRZ'yi kutuya hizalayın</div>
     <!-- Serial scan results panel -->
     <div id="serial-panel" style="display:none;flex-direction:column;gap:4px;width:100%;overflow-y:auto;flex:0 1 auto;max-height:30vh;">
-      <div id="serial-counter" style="font-size:0.85rem;font-weight:600;color:var(--green);text-align:center;padding:2px 0;">0 belge okundu</div>
+      <div id="serial-stats">
+        <span>📷 Toplam Çekim: <span class="stat-val" id="serial-total-shots">0</span></span>
+        <span>📄 Belge: <span class="stat-val" id="serial-counter">0</span></span>
+        <span>⏱ <span class="stat-val" id="serial-timer">00:00</span></span>
+        <span>📊 Ort: <span class="stat-val" id="serial-avg">0.0s</span></span>
+      </div>
       <div id="serial-list" style="display:flex;flex-direction:column;gap:4px;"></div>
     </div>
     <button class="btn green" id="serial-finish-btn" onclick="finishSerialScan()" style="display:none;flex-shrink:0;">✓ Bitir</button>
@@ -451,6 +479,21 @@ input[type="text"] {
       </div>
     </div>
     <input type="file" id="file-in" accept="image/*" style="display:none" onchange="onFile(event)">
+    <button class="btn ghost" onclick="stopScan()">✕ İptal</button>
+  </div>
+
+  <!-- Bulk upload tab (serial mode only) -->
+  <div id="tab-bulk-content" style="display:none;width:100%;max-width:460px;flex-direction:column;gap:12px;align-items:center;">
+    <div class="upload-zone" onclick="document.getElementById('bulk-file-in').click()">
+      <div style="font-size:2.4rem;margin-bottom:10px">📁</div>
+      <h3 style="font-size:1rem;margin-bottom:5px">Toplu Fotoğraf Seç</h3>
+      <p style="color:var(--muted);font-size:0.82rem">Birden fazla belge fotoğrafı seçin</p>
+    </div>
+    <input type="file" id="bulk-file-in" accept="image/*" multiple style="display:none" onchange="startBulkSerialScan(this.files)">
+    <div id="bulk-progress" style="display:none;width:100%;">
+      <div class="prog-wrap"><div class="prog" id="bulk-prog" style="width:0%"></div></div>
+      <div class="sub" id="bulk-status" style="margin-top:6px;"></div>
+    </div>
     <button class="btn ghost" onclick="stopScan()">✕ İptal</button>
   </div>
 </div>
@@ -628,6 +671,9 @@ let serialMode = false;
 let serialCount = 0;
 let serialScannedIds = [];
 let toastTimer = null;
+let serialTotalShots = 0;
+let serialStartTime = 0;
+let serialTimerInterval = null;
 
 function showCamToast(msg, duration) {
   duration = duration || 2500;
@@ -639,15 +685,50 @@ function showCamToast(msg, duration) {
   toastTimer = setTimeout(() => el.classList.remove('show'), duration);
 }
 
+function flashScan(type) {
+  const el = document.getElementById('scan-flash');
+  if (!el) return;
+  el.className = '';
+  void el.offsetWidth; // reflow
+  el.classList.add(type === 'dup' ? 'flash-orange' : 'flash-green');
+  setTimeout(() => el.className = '', 300);
+}
+
+function bounceStat(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.remove('stat-bounce');
+  void el.offsetWidth;
+  el.classList.add('stat-bounce');
+}
+
+function updateSerialStats() {
+  const elapsed = Math.floor((Date.now() - serialStartTime) / 1000);
+  const mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
+  const ss = String(elapsed % 60).padStart(2, '0');
+  document.getElementById('serial-timer').textContent = mm + ':' + ss;
+  if (serialTotalShots > 0) {
+    document.getElementById('serial-avg').textContent = (elapsed / serialTotalShots).toFixed(1) + 's';
+  }
+}
+
 function startSerialScan() {
   serialMode = true;
   serialCount = 0;
   serialScannedIds = [];
+  serialTotalShots = 0;
+  serialStartTime = Date.now();
   document.getElementById('serial-panel').style.display = 'flex';
   document.getElementById('serial-finish-btn').style.display = 'flex';
-  document.getElementById('serial-counter').textContent = '0 belge okundu';
+  document.getElementById('serial-counter').textContent = '0';
+  document.getElementById('serial-total-shots').textContent = '0';
+  document.getElementById('serial-timer').textContent = '00:00';
+  document.getElementById('serial-avg').textContent = '0.0s';
   document.getElementById('serial-list').innerHTML = '';
   document.getElementById('cam-cancel-btn').style.display = 'none';
+  document.getElementById('tab-bulk').style.display = '';
+  if (serialTimerInterval) clearInterval(serialTimerInterval);
+  serialTimerInterval = setInterval(updateSerialStats, 1000);
   goScreen('s-scan');
   setTimeout(() => startCamera(), 100);
 }
@@ -656,11 +737,16 @@ function addSerialResult(mrzResult) {
   const parsed = parseResult(mrzResult);
   const docId = (parsed.passNo || '').replace(/</g,'').trim();
 
+  // Her okumada toplam çekim artır
+  serialTotalShots++;
+  document.getElementById('serial-total-shots').textContent = serialTotalShots;
+  bounceStat('serial-total-shots');
+
   // Duplicate kontrolü — sayacı artır
   if (serialScannedIds.includes(docId)) {
     const dupName = (parsed.surname || '') + (parsed.given ? ' ' + parsed.given : '');
     showCamToast('⚠️ Bu belge zaten eklendi: ' + dupName, 3000);
-    // Sayacı artır
+    flashScan('dup');
     const countEl = document.getElementById('sr-count-' + docId);
     if (countEl) {
       let c = parseInt(countEl.textContent) || 1;
@@ -669,6 +755,8 @@ function addSerialResult(mrzResult) {
     lastFrameHash = 0; lastL2 = null; l2Count = 0; checksumPassed = false;
     return;
   }
+
+  flashScan('new');
 
   // localStorage'a kaydet
   const photo = captureDocPhoto();
@@ -692,7 +780,8 @@ function addSerialResult(mrzResult) {
   serialCount++;
 
   // UI güncelle
-  document.getElementById('serial-counter').textContent = serialCount + ' belge okundu';
+  document.getElementById('serial-counter').textContent = serialCount;
+  bounceStat('serial-counter');
 
   const displayName = (parsed.surname || '') + (parsed.given ? ' ' + parsed.given : '');
   const row = document.createElement('div');
@@ -720,9 +809,11 @@ function addSerialResult(mrzResult) {
 function finishSerialScan() {
   serialMode = false;
   stopCamera();
+  if (serialTimerInterval) { clearInterval(serialTimerInterval); serialTimerInterval = null; }
   document.getElementById('serial-panel').style.display = 'none';
   document.getElementById('serial-finish-btn').style.display = 'none';
   document.getElementById('cam-cancel-btn').style.display = '';
+  document.getElementById('tab-bulk').style.display = 'none';
   renderList();
   goScreen('s-home');
 }
@@ -784,9 +875,11 @@ function deleteCurrent() {
 
 // ── TABS ────────────────────────────────────────────────────────────────
 function setTab(t) {
-  ['cam','img'].forEach(x => {
-    document.getElementById('tab-'+x).classList.toggle('active', x===t);
-    document.getElementById('tab-'+x+'-content').style.display = x===t ? 'flex' : 'none';
+  ['cam','img','bulk'].forEach(x => {
+    const tab = document.getElementById('tab-'+x);
+    const content = document.getElementById('tab-'+x+'-content');
+    if (tab) tab.classList.toggle('active', x===t);
+    if (content) content.style.display = x===t ? 'flex' : 'none';
   });
   if (t === 'cam') startCamera();
   else stopCamera();
@@ -940,9 +1033,11 @@ function stopCamera() {
 function stopScan() {
   serialMode = false;
   stopCamera();
+  if (serialTimerInterval) { clearInterval(serialTimerInterval); serialTimerInterval = null; }
   document.getElementById('serial-panel').style.display = 'none';
   document.getElementById('serial-finish-btn').style.display = 'none';
   document.getElementById('cam-cancel-btn').style.display = '';
+  document.getElementById('tab-bulk').style.display = 'none';
   renderList();
   goScreen('s-home');
 }
@@ -999,11 +1094,12 @@ function upscaleCanvas(srcCanvas, factor) {
 }
 
 // ── OVERLAY ─────────────────────────────────────────────────────────────
-function drawCorners(x, y, w, h, color, size) {
+function drawCorners(x, y, w, h, color, size, lineW) {
+  lineW = lineW || 3;
   [[x,y,1,1],[x+w,y,-1,1],[x,y+h,1,-1],[x+w,y+h,-1,-1]].forEach(([cx,cy,ox,oy]) => {
     camCtx.beginPath();
     camCtx.strokeStyle = color;
-    camCtx.lineWidth = 3;
+    camCtx.lineWidth = lineW;
     camCtx.moveTo(cx+ox*size, cy);
     camCtx.lineTo(cx, cy);
     camCtx.lineTo(cx, cy+oy*size);
@@ -1063,8 +1159,17 @@ function drawOverlayState(state) {
   camCtx.lineWidth = 2;
   camCtx.strokeRect(dx, bandY, ddw, bandH);
 
-  // Köşe işaretleri
-  drawCorners(dx, dy, ddw, ddh, color, 20);
+  // Köşe işaretleri — accepted durumda kalın
+  const cornerW = state === 'accepted' ? 5 : 3;
+  const cornerSize = state === 'accepted' ? 26 : 20;
+  drawCorners(dx, dy, ddw, ddh, color, cornerSize, cornerW);
+
+  // Accepted pulse — ikinci dış çerçeve
+  if (state === 'accepted') {
+    camCtx.strokeStyle = color + '55';
+    camCtx.lineWidth = 1.5;
+    camCtx.strokeRect(dx - 4, dy - 4, ddw + 8, ddh + 8);
+  }
 
   // ── "MRZ ALANI" etiketi — bandın üst kenarında ──
   const labelFontSize = Math.max(9, Math.round(ddw * 0.028));
@@ -1607,6 +1712,54 @@ function exportLog() {
   a.href = URL.createObjectURL(new Blob([data], {type:'application/json'}));
   a.download = `mrz-log-${new Date().toISOString().slice(0,16).replace(/[T:]/g,'-')}.json`;
   a.click();
+}
+
+// ── BULK SERIAL SCAN ───────────────────────────────────────────────────
+async function startBulkSerialScan(files) {
+  if (!files || !files.length || !workerReady) return;
+  if (!serialMode) startSerialScan();
+  await new Promise(r => setTimeout(r, 200));
+  stopCamera();
+  setTab('bulk');
+
+  const prog = document.getElementById('bulk-prog');
+  const status = document.getElementById('bulk-status');
+  document.getElementById('bulk-progress').style.display = 'block';
+
+  for (let i = 0; i < files.length; i++) {
+    prog.style.width = ((i / files.length) * 100) + '%';
+    status.textContent = (i+1) + '/' + files.length + ': ' + files[i].name;
+
+    const img = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = ev => { const im = new Image(); im.onload = () => resolve(im); im.onerror = reject; im.src = ev.target.result; };
+      reader.onerror = reject;
+      reader.readAsDataURL(files[i]);
+    }).catch(() => null);
+    if (!img) continue;
+
+    let found = null;
+    for (const deg of [0, 90, 270]) {
+      const full = makeCanvas(img, deg);
+      const band = cropBottom(full, 0.40);
+      const enhanced = preprocessForOCR(band);
+      try { const { data:{text} } = await worker.recognize(enhanced); const r = extractMRZ(clean(text)); if (r && validateMRZ(r).valid) { found = r; break; } } catch(e){}
+      try { const { data:{text} } = await worker.recognize(band); const r = extractMRZ(clean(text)); if (r && validateMRZ(r).valid) { found = r; break; } } catch(e){}
+      const fullEnh = preprocessForOCR(full);
+      try { const { data:{text} } = await worker.recognize(fullEnh); const r = extractMRZ(clean(text)); if (r && validateMRZ(r).valid) { found = r; break; } } catch(e){}
+      try { const { data:{text} } = await worker.recognize(full); const r = extractMRZ(clean(text)); if (r && validateMRZ(r).valid) { found = r; break; } } catch(e){}
+    }
+
+    if (found) {
+      addSerialResult(found);
+    }
+    // UI donmasın
+    await new Promise(r => setTimeout(r, 500));
+  }
+
+  prog.style.width = '100%';
+  status.textContent = '✅ ' + files.length + ' fotoğraf işlendi';
+  document.getElementById('bulk-file-in').value = '';
 }
 
 // ── BATCH TEST ─────────────────────────────────────────────────────────
