@@ -1,0 +1,1305 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>MRZ Okuyucu</title>
+<style>
+:root{
+  --bg:#0a0a0f;--card:#13131a;--border:#2a2a3a;
+  --blue:#3b82f6;--green:#10b981;--red:#ef4444;--warn:#f59e0b;
+  --text:#f1f5f9;--muted:#64748b;--r:16px;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{min-height:100vh;background:var(--bg);color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}
+
+/* ── screens ── */
+.screen{display:none;flex-direction:column;min-height:100vh;
+  padding:28px 18px;align-items:center;justify-content:center;gap:16px;}
+.screen.active{display:flex;}
+
+/* ── typography ── */
+.title{font-size:1.3rem;font-weight:700;text-align:center;}
+.sub{color:var(--muted);font-size:0.87rem;text-align:center;line-height:1.6;}
+
+/* ── buttons ── */
+.btn{width:100%;max-width:460px;padding:15px;border-radius:14px;border:none;
+  font-size:0.95rem;font-weight:600;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:9px;transition:opacity .15s;}
+.btn:active{opacity:.75;}
+.blue{background:var(--blue);color:#fff;}
+.green{background:var(--green);color:#fff;}
+.ghost{background:transparent;color:var(--muted);border:1px solid var(--border);}
+.red-ghost{background:transparent;color:var(--red);border:1px solid var(--red);}
+
+/* ── cards ── */
+.card{width:100%;max-width:460px;background:var(--card);
+  border:1px solid var(--border);border-radius:var(--r);padding:18px;}
+
+/* ── result rows ── */
+.row{display:flex;justify-content:space-between;align-items:center;
+  padding:11px 0;border-bottom:1px solid var(--border);}
+.row:last-child{border-bottom:none;}
+.rl{color:var(--muted);font-size:0.76rem;text-transform:uppercase;
+  letter-spacing:.4px;flex-shrink:0;margin-right:8px;}
+.rv{font-size:0.93rem;font-weight:600;text-align:right;}
+.ok  {color:var(--green);font-size:.82rem;margin-left:4px;}
+.fail{color:var(--red);  font-size:.82rem;margin-left:4px;}
+
+/* ── banners ── */
+.banner{width:100%;max-width:460px;border-radius:12px;padding:14px 16px;
+  font-size:0.9rem;font-weight:500;display:flex;align-items:flex-start;gap:10px;}
+.b-ok  {background:rgba(16,185,129,.1);color:#10b981;border:1px solid rgba(16,185,129,.2);}
+.b-warn{background:rgba(245,158,11,.1);color:#f59e0b;border:1px solid rgba(245,158,11,.2);}
+.b-err {background:rgba(239,68,68,.1); color:#ef4444; border:1px solid rgba(239,68,68,.2);}
+.b-info{background:rgba(59,130,246,.1);color:#93c5fd; border:1px solid rgba(59,130,246,.2);}
+
+/* ── upload zone ── */
+.upload-zone{width:100%;max-width:460px;border:2px dashed var(--border);
+  border-radius:var(--r);padding:36px 18px;text-align:center;
+  cursor:pointer;transition:all .2s;}
+.upload-zone:hover,.upload-zone.drag{border-color:var(--blue);background:rgba(59,130,246,.05);}
+
+/* ── progress ── */
+.prog-wrap{width:100%;max-width:460px;background:var(--border);border-radius:99px;height:5px;}
+.prog{height:100%;background:var(--blue);border-radius:99px;transition:width .4s ease;}
+.spinner{width:46px;height:46px;border:3px solid var(--border);
+  border-top-color:var(--blue);border-radius:50%;animation:spin .8s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
+
+/* ── video ── */
+#video-wrap{position:relative;width:100%;max-width:460px;
+  border-radius:14px;overflow:hidden;background:#000;display:block;}
+video{width:100%;height:auto;display:block;}
+#cam-overlay{position:absolute;top:0;left:0;width:100%;height:100%;
+  pointer-events:none;display:block;}
+
+/* ── passport list ── */
+.pp-list{width:100%;max-width:460px;display:flex;flex-direction:column;gap:10px;}
+.pp-card{background:var(--card);border:1px solid var(--border);border-radius:14px;
+  padding:16px 18px;cursor:pointer;transition:all .2s;
+  display:flex;align-items:center;justify-content:space-between;gap:12px;}
+.pp-card:hover{border-color:var(--blue);background:rgba(59,130,246,.05);}
+.pp-name{font-weight:700;font-size:0.95rem;}
+.pp-meta{font-size:0.78rem;color:var(--muted);}
+.empty-state{text-align:center;color:var(--muted);font-size:0.87rem;padding:30px 0;}
+
+/* ── textarea ── */
+textarea{width:100%;max-width:460px;background:var(--card);
+  border:1px solid var(--border);border-radius:12px;padding:14px;
+  color:var(--text);font-family:monospace;font-size:0.83rem;
+  resize:none;letter-spacing:1.5px;outline:none;line-height:1.8;}
+textarea:focus{border-color:var(--blue);}
+textarea::placeholder{color:var(--muted);letter-spacing:0;font-family:inherit;font-size:0.78rem;}
+.char-row{width:100%;max-width:460px;display:flex;justify-content:space-between;margin-top:-10px;}
+.cnt{font-size:.74rem;color:var(--muted);}
+.cnt.full{color:var(--green);}
+
+/* ── raw MRZ ── */
+.mrz-raw{width:100%;max-width:460px;background:#0d1117;
+  border:1px solid var(--border);border-radius:10px;padding:14px;
+  font-family:monospace;font-size:0.72rem;color:#58a6ff;letter-spacing:1px;line-height:2;}
+
+/* ── tabs ── */
+.tabs{display:flex;width:100%;max-width:460px;background:var(--card);
+  border:1px solid var(--border);border-radius:12px;padding:4px;gap:4px;}
+.tab{flex:1;padding:10px;border-radius:9px;border:none;background:transparent;
+  color:var(--muted);font-size:0.83rem;font-weight:600;cursor:pointer;transition:all .2s;}
+.tab.active{background:var(--blue);color:#fff;}
+
+/* ── cam hint ── */
+.cam-hint{
+  color:var(--muted);font-size:0.85rem;margin-top:-4px;
+  text-align:center;min-height:1.4em;transition:all .3s;
+  font-weight:500;
+}
+.cam-hint.hint-warn { color:#f59e0b; font-size:0.95rem; }
+.cam-hint.hint-ok   { color:#10b981; font-size:0.95rem; }
+
+/* ── cache status pill ── */
+#cache-pill{position:fixed;top:12px;right:12px;padding:5px 12px;
+  border-radius:99px;font-size:0.72rem;font-weight:600;
+  background:var(--card);border:1px solid var(--border);color:var(--muted);
+  display:flex;align-items:center;gap:5px;z-index:999;transition:all .4s;}
+#cache-pill.online{border-color:var(--green);color:var(--green);}
+#cache-pill.offline{border-color:var(--warn);color:var(--warn);}
+#cache-pill.ready{border-color:var(--green);color:var(--green);}
+.pill-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0;}
+
+/* ── btn-sm ── */
+.btn-sm{width:auto;padding:10px 18px;font-size:0.84rem;border-radius:10px;}
+
+/* ── Debug Log Panel ── */
+#log-toggle {
+  position:fixed; bottom:16px; right:16px; z-index:999;
+  background:rgba(15,15,25,.95); border:1px solid var(--border);
+  color:var(--muted); font-size:0.75rem; padding:7px 14px;
+  border-radius:99px; cursor:pointer; backdrop-filter:blur(8px);
+  display:flex; align-items:center; gap:6px; transition:all .2s;
+  box-shadow:0 2px 12px rgba(0,0,0,.5);
+}
+#log-toggle:hover { border-color:var(--blue); color:var(--text); }
+#log-toggle .badge {
+  background:var(--blue); color:#fff; border-radius:99px;
+  padding:1px 7px; font-size:0.68rem; font-weight:700; min-width:20px; text-align:center;
+}
+#log-panel {
+  position:fixed; z-index:998;
+  background:rgba(8,8,18,.97); border:1px solid rgba(255,255,255,.1);
+  display:none; flex-direction:column;
+  box-shadow:0 16px 64px rgba(0,0,0,.8);
+  bottom:60px; right:12px; left:12px;
+  max-width:600px; margin:0 auto;
+  height:62vh; border-radius:18px;
+  overflow:hidden;
+}
+#log-panel.open { display:flex; }
+#log-panel.fullscreen {
+  top:0 !important; left:0 !important; right:0 !important; bottom:0 !important;
+  max-width:100% !important; width:100% !important; height:100% !important;
+  border-radius:0 !important; margin:0 !important;
+}
+#log-header {
+  display:flex; justify-content:space-between; align-items:center;
+  padding:12px 16px; border-bottom:1px solid rgba(255,255,255,.08);
+  font-size:0.82rem; font-weight:600; color:var(--text);
+  flex-shrink:0; gap:8px; background:rgba(255,255,255,.03);
+}
+.log-hdr-left  { display:flex; align-items:center; gap:10px; flex:1; min-width:0; }
+.log-hdr-right { display:flex; align-items:center; gap:5px; flex-shrink:0; }
+.log-btn {
+  background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.1);
+  color:var(--muted); cursor:pointer; font-size:0.72rem;
+  padding:4px 10px; border-radius:7px; transition:.15s; white-space:nowrap;
+}
+.log-btn:hover { border-color:var(--blue); color:var(--text); background:rgba(59,130,246,.1); }
+.log-btn.red:hover { border-color:var(--red); color:var(--red); background:rgba(239,68,68,.1); }
+#log-entries {
+  overflow-y:auto; overflow-x:hidden; flex:1; padding:4px 0;
+  font-family:'SF Mono',ui-monospace,monospace; font-size:0.70rem; line-height:1.65;
+  overscroll-behavior:contain;
+}
+#log-entries::-webkit-scrollbar { width:4px; }
+#log-entries::-webkit-scrollbar-thumb { background:rgba(255,255,255,.15); border-radius:2px; }
+.log-row {
+  display:flex; align-items:flex-start; gap:0;
+  padding:6px 0; border-bottom:1px solid rgba(255,255,255,.04);
+  cursor:pointer; transition:background .12s;
+}
+.log-row:hover { background:rgba(255,255,255,.03); }
+.log-row:last-child { border-bottom:none; }
+.log-col-time {
+  flex:0 0 52px; min-width:52px; max-width:52px;
+  padding:2px 0 0 14px;
+  color:#374151; font-size:0.62rem; white-space:nowrap; overflow:hidden;
+}
+.log-col-icon {
+  flex:0 0 22px; min-width:22px; max-width:22px;
+  padding-top:1px; font-size:0.78rem; text-align:center;
+}
+.log-col-body {
+  flex:1 1 0; min-width:0; padding-right:14px; overflow:hidden;
+}
+.log-main {
+  font-weight:600; font-size:0.72rem;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  max-width:100%;
+}
+.log-detail {
+  color:#4a6080; font-size:0.64rem;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  margin-top:1px; max-width:100%;
+}
+.log-ok   { color:#10b981; }
+.log-warn { color:#f59e0b; }
+.log-err  { color:#ef4444; }
+.log-skip { color:#374151; }
+.log-cs   { display:flex; gap:6px; margin-top:4px; flex-wrap:wrap; }
+.cs-badge {
+  display:inline-block; padding:1px 6px; border-radius:4px;
+  font-size:0.61rem; font-weight:700; white-space:nowrap;
+}
+.cs-ok-badge   { background:rgba(16,185,129,.18); color:#10b981; }
+.cs-fail-badge { background:rgba(239,68,68,.18);  color:#ef4444; }
+.log-thumb-img {
+  display:block; max-width:160px; width:100%;
+  border-radius:5px; border:1px solid rgba(255,255,255,.1);
+  margin-top:6px; cursor:pointer; opacity:.9;
+  transition:opacity .15s;
+}
+.log-thumb-img:hover { opacity:1; }
+@keyframes flash-green { 0%{background:rgba(16,185,129,.18);} 100%{background:transparent;} }
+.log-row.copied { animation:flash-green .35s ease; }
+</style>
+</head>
+<body>
+
+<!-- cache status pill -->
+<div id="cache-pill"><div class="pill-dot"></div><span id="pill-txt">Yükleniyor…</span></div>
+
+<!-- S0: İLK YÜKLEME -->
+<div class="screen active" id="s-loading">
+  <div class="spinner"></div>
+  <div class="title" style="font-size:1.1rem">İlk Kurulum</div>
+  <div class="sub" id="load-msg">OCR motoru indiriliyor…<br>Bu işlem bir kere yapılır</div>
+  <div class="prog-wrap"><div class="prog" id="load-prog" style="width:5%"></div></div>
+  <div class="sub" style="font-size:.78rem">Sonraki açılışlarda internet gerekmez</div>
+</div>
+
+<!-- S1: ANA EKRAN -->
+<div class="screen" id="s-home">
+  <div style="font-size:2.6rem">🛂</div>
+  <div>
+    <div class="title">MRZ Okuyucu</div>
+    <div class="sub" style="margin-top:4px">Kayıtlı pasaportunuzu seçin<br>veya yenisini tarayın</div>
+  </div>
+  <button class="btn green" onclick="goScreen('s-scan')">📷 Yeni Pasaport Tara</button>
+  <button class="btn blue" onclick="startSerialScan()" id="serial-btn" style="display:none">
+    🚀 Seri Tarama Başlat
+  </button>
+  <button class="btn ghost" onclick="goScreen('s-add')">⌨️ Elle Gir</button>
+  <div style="width:100%;max-width:460px;margin-top:8px;">
+    <button onclick="toggleList()" id="list-toggle-btn"
+      style="width:100%;background:var(--card);border:1px solid var(--border);
+             border-radius:12px;padding:12px 16px;cursor:pointer;
+             display:flex;justify-content:space-between;align-items:center;
+             color:var(--text);font-size:0.9rem;font-weight:500;">
+      <span>📋 Kayıtlı Belgeler</span>
+      <span id="list-toggle-icon" style="color:var(--muted);font-size:0.8rem;transition:transform .2s">▼</span>
+    </button>
+    <div id="pp-list-wrap" style="display:none;margin-top:6px;">
+      <div class="pp-list" id="pp-list"></div>
+    </div>
+  </div>
+</div>
+
+<!-- S2: TARA -->
+<div class="screen" id="s-scan">
+  <div class="title">Pasaport Tara</div>
+  <div class="tabs">
+    <button class="tab active" id="tab-cam" onclick="setTab('cam')">📷 Kamera</button>
+    <button class="tab" id="tab-img" onclick="setTab('img')">🖼️ Fotoğraf</button>
+  </div>
+
+  <!-- Camera tab -->
+  <div id="tab-cam-content">
+    <div id="video-wrap">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="cam-overlay"></canvas>
+    </div>
+    <div style="width:100%;max-width:460px;margin-top:6px;display:flex;flex-direction:column;gap:8px;">
+      <div id="cam-hint" style="font-size:0.83rem;color:var(--muted);text-align:center">
+        MRZ'yi kutuya hizalayın
+      </div>
+    </div>
+    <button class="btn red-ghost" style="max-width:460px;margin-top:4px" onclick="stopScan()">✕ İptal</button>
+  </div>
+
+  <!-- Photo tab -->
+  <div id="tab-img-content" style="display:none;width:100%;max-width:460px;flex-direction:column;gap:12px;">
+    <div id="upload-zone-wrap">
+      <div class="upload-zone" id="drop-zone" onclick="document.getElementById('file-in').click()">
+        <div style="font-size:2.4rem;margin-bottom:10px">🖼️</div>
+        <h3 style="font-size:1rem;margin-bottom:5px">Pasaport / Kimlik Fotoğrafı Seç</h3>
+        <p style="color:var(--muted);font-size:0.82rem">MRZ satırlarının olduğu arka yüzü seçin</p>
+      </div>
+    </div>
+    <div id="img-preview-wrap" style="display:none;flex-direction:column;gap:10px;">
+      <div style="position:relative;border-radius:12px;overflow:hidden;background:#000;">
+        <img id="img-preview" style="width:100%;display:block;max-height:300px;object-fit:contain;">
+        <div id="img-preview-info" style="position:absolute;bottom:0;left:0;right:0;
+          background:rgba(0,0,0,.6);color:#fff;font-size:0.72rem;padding:6px 10px;"></div>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn green" style="flex:2" onclick="startImageScan()">🔍 Taramayı Başlat</button>
+        <button class="btn ghost" style="flex:1" onclick="resetImageUpload()">↩ Değiştir</button>
+      </div>
+    </div>
+    <input type="file" id="file-in" accept="image/*" style="display:none" onchange="onFile(event)">
+    <button class="btn ghost" onclick="stopScan()">✕ İptal</button>
+  </div>
+</div>
+
+<!-- S3: İŞLENİYOR -->
+<div class="screen" id="s-processing">
+  <div class="spinner"></div>
+  <div class="title" style="font-size:1.1rem">Analiz Ediliyor…</div>
+  <div class="sub" id="proc-msg">OCR çalışıyor</div>
+  <div class="prog-wrap"><div class="prog" id="proc-prog" style="width:0%"></div></div>
+  <button class="btn red-ghost" id="proc-cancel-btn" style="max-width:300px;margin-top:16px;display:none" onclick="cancelProcessing()">✕ İptal</button>
+</div>
+
+<!-- S4: SONUÇ -->
+<div class="screen" id="s-result">
+  <div class="banner" id="res-banner"><span id="res-icon">✅</span><span id="res-txt"></span></div>
+  <div class="card" style="max-width:460px">
+    <div style="font-size:0.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:10px">
+      ✏️ İsim alanları — gerekirse düzeltin
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      <div>
+        <div style="font-size:0.72rem;color:var(--muted);margin-bottom:4px">SOYAD</div>
+        <input type="text" id="edit-surname" style="width:100%;background:#0d1117;border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-size:0.9rem;font-weight:600;outline:none;"
+          oninput="updateSavedName()">
+      </div>
+      <div>
+        <div style="font-size:0.72rem;color:var(--muted);margin-bottom:4px">AD</div>
+        <input type="text" id="edit-given" style="width:100%;background:#0d1117;border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-size:0.9rem;font-weight:600;outline:none;"
+          oninput="updateSavedName()">
+      </div>
+    </div>
+  </div>
+  <div class="card"><div id="res-fields"></div></div>
+  <div class="mrz-raw" id="mrz-raw"></div>
+  <button class="btn green" id="next-scan-btn" onclick="nextScan()" style="display:none">
+    📷 Sonraki Pasaport →
+  </button>
+  <div style="display:flex;gap:10px;width:100%;max-width:460px;">
+    <button class="btn ghost btn-sm" style="flex:1" onclick="goHome()">← Liste</button>
+    <button class="btn red-ghost btn-sm" style="flex:1" id="del-btn" onclick="deleteCurrent()">🗑 Sil</button>
+  </div>
+</div>
+
+<!-- S5: ELLE GİR -->
+<div class="screen" id="s-add">
+  <div class="title">Elle Gir</div>
+  <div class="sub">Her satır tam 44 karakter</div>
+  <textarea id="l1" rows="2" maxlength="44"
+    placeholder="Satır 1 — P ile başlar"
+    oninput="onTA(this,'c1')"></textarea>
+  <div class="char-row">
+    <span style="font-size:.74rem;color:var(--muted)">A-Z · 0-9 · &lt;</span>
+    <span class="cnt" id="c1">0 / 44</span>
+  </div>
+  <textarea id="l2" rows="2" maxlength="44"
+    placeholder="Satır 2 — pasaport no ile başlar"
+    oninput="onTA(this,'c2')"></textarea>
+  <div class="char-row">
+    <span style="font-size:.74rem;color:var(--muted)">A-Z · 0-9 · &lt;</span>
+    <span class="cnt" id="c2">0 / 44</span>
+  </div>
+  <button class="btn green" onclick="addManual()">💾 Kaydet</button>
+  <button class="btn ghost" onclick="goHome()">← Geri</button>
+</div>
+
+<!-- S6: HATA -->
+<div class="screen" id="s-error">
+  <div style="font-size:2.8rem">⚠️</div>
+  <div class="title">Hata</div>
+  <div class="banner b-err" style="max-width:460px">
+    <span style="flex-shrink:0">❌</span><span id="err-msg"></span>
+  </div>
+  <button class="btn blue" onclick="goHome()">← Ana Ekran</button>
+</div>
+
+<canvas id="main-canvas" style="display:none"></canvas>
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="mrz-core.js"></script>
+<script>
+// ── MRZ CORE IMPORT ─────────────────────────────────────────────────────
+const {
+  chk, clean, cleanLine, fixLine, applyDigitFixes,
+  isL1_TD1, isL2_TD1, isL3_TD1, isL1_TD3, isL2_TD3,
+  extractMRZ, getChecksums_TD3, parseResult
+} = window.MRZCore;
+
+// ── GLOBALS ─────────────────────────────────────────────────────────────
+let worker       = null;
+let workerReady  = false;
+let stream       = null;
+let scanning     = false;
+let loopId       = null;
+let currentIdx   = -1;
+let loadedImg    = null;
+let processingCancelled = false;
+
+// Kamera scan state — sadece 4 değişken
+let lastFrameHash = 0;
+let lastL2        = null;
+let l2Count       = 0;
+let checksumPassed = false;
+
+const video    = document.getElementById('video');
+const mainC    = document.getElementById('main-canvas');
+const mainCtx  = mainC.getContext('2d', {willReadFrequently: true});
+const camOvl   = document.getElementById('cam-overlay');
+const camCtx   = camOvl.getContext('2d');
+
+// ── SCREEN NAV ──────────────────────────────────────────────────────────
+function goScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  window.scrollTo(0, 0);
+  if (id === 's-scan') setTimeout(() => startCamera(), 100);
+  else stopCamera();
+}
+function goHome() {
+  stopScan();
+  renderList();
+  goScreen('s-home');
+}
+
+// ── STORAGE ─────────────────────────────────────────────────────────────
+const DEMO = [{
+  id:'demo_mia',
+  line1:'P<ESPGUCEL<MAZLIYAH<<MIA<<<<<<<<<<<<<<<<<<',
+  line2:'XDE4677822ESP1507218F2801223<<<<<<<<<<<<<<6',
+  name:'Gucel Mazliyah, Mia', nation:'ESP'
+}];
+function loadPassports() {
+  try { return JSON.parse(localStorage.getItem('mrz_pp') || '[]'); } catch { return []; }
+}
+function savePassports(list) { localStorage.setItem('mrz_pp', JSON.stringify(list)); }
+function getAllPassports() {
+  const saved = loadPassports();
+  const ids   = saved.map(p => p.id);
+  return [...DEMO.filter(d => !ids.includes(d.id)), ...saved];
+}
+
+// ── PASSPORT LIST ───────────────────────────────────────────────────────
+const FLAGS = {ESP:'🇪🇸',TUR:'🇹🇷',USA:'🇺🇸',GBR:'🇬🇧',DEU:'🇩🇪',FRA:'🇫🇷',ITA:'🇮🇹',NLD:'🇳🇱',RUS:'🇷🇺',CHN:'🇨🇳',JPN:'🇯🇵',IND:'🇮🇳',BRA:'🇧🇷',CAN:'🇨🇦',AUS:'🇦🇺',SAU:'🇸🇦',ARE:'🇦🇪'};
+function flag(c) { return FLAGS[c] || '🌍'; }
+
+function toggleList() {
+  const wrap = document.getElementById('pp-list-wrap');
+  const icon = document.getElementById('list-toggle-icon');
+  const open = wrap.style.display === 'none';
+  wrap.style.display = open ? 'block' : 'none';
+  icon.textContent = open ? '▲' : '▼';
+}
+
+// ── SERİ TARAMA MODU ────────────────────────────────────────────────────
+let serialMode = false;
+let serialCount = 0;
+
+function startSerialScan() {
+  serialMode = true;
+  serialCount = 0;
+  goScreen('s-scan');
+  setTimeout(() => startCamera(), 100);
+}
+
+function nextScan() {
+  goScreen('s-scan');
+  setTimeout(() => startCamera(), 100);
+}
+
+function renderList() {
+  const list = getAllPassports();
+  const el   = document.getElementById('pp-list');
+  const hasSaved = loadPassports().length > 0;
+  const sb = document.getElementById('serial-btn');
+  if (sb) sb.style.display = hasSaved ? 'flex' : 'none';
+  if (!list.length) {
+    el.innerHTML = `<div class="empty-state">Henüz kayıtlı pasaport yok.</div>`;
+    return;
+  }
+  el.innerHTML = list.map((p, i) => `
+    <div class="pp-card" onclick="viewPassport(${i})">
+      <span style="font-size:1.6rem;flex-shrink:0">${flag(p.nation)}</span>
+      <div style="flex:1">
+        <div class="pp-name">${p.name}</div>
+        <div class="pp-meta">${p.nation} · ${p.line2.substring(0,9).replace(/</g,'')}</div>
+      </div>
+      <span style="color:var(--muted);font-size:1.1rem">›</span>
+    </div>`).join('');
+}
+
+function viewPassport(idx) {
+  currentIdx = idx;
+  const p = getAllPassports()[idx];
+  if (!p) return;
+  const type = p.type || 'TD3';
+  const lines = type === 'TD1'
+    ? [p.line1, p.line2, p.line3 || '']
+    : [p.line1, p.line2];
+  showParsed(parseResult({type, lines}), {...p, type, lines}, false);
+}
+
+function deleteCurrent() {
+  const p = getAllPassports()[currentIdx];
+  if (!p || p.id.startsWith('demo_')) { alert('Demo kayıtlar silinemez.'); return; }
+  if (!confirm(`"${p.name}" silinsin mi?`)) return;
+  savePassports(loadPassports().filter(x => x.id !== p.id));
+  goHome();
+}
+
+// ── TABS ────────────────────────────────────────────────────────────────
+function setTab(t) {
+  ['cam','img'].forEach(x => {
+    document.getElementById('tab-'+x).classList.toggle('active', x===t);
+    document.getElementById('tab-'+x+'-content').style.display = x===t ? 'flex' : 'none';
+  });
+  if (t === 'cam') startCamera();
+  else stopCamera();
+}
+
+// ── INIT / WORKER ───────────────────────────────────────────────────────
+async function init() {
+  updatePill('loading');
+  document.getElementById('load-prog').style.width = '10%';
+  document.getElementById('load-msg').textContent  = 'OCR motoru yükleniyor…';
+
+  try {
+    const origWarn = console.warn;
+    console.warn = (...args) => {
+      const msg = args[0]?.toString() || '';
+      if (msg.includes('Image too small') || msg.includes('Line cannot be recognized')) return;
+      origWarn.apply(console, args);
+    };
+
+    const logger = m => {
+      if (m.status === 'loading tesseract core')       setLoadProg(20, 'Tesseract yükleniyor…');
+      if (m.status === 'initializing tesseract')       setLoadProg(40, 'Motor başlatılıyor…');
+      if (m.status === 'loading language traineddata') {
+        const p = Math.round((m.progress||0)*100);
+        setLoadProg(50 + Math.round((m.progress||0)*40), `Dil modeli indiriliyor %${p}…`);
+      }
+      if (m.status === 'initializing api')             setLoadProg(92, 'Hazırlanıyor…');
+    };
+
+    setLoadProg(40, 'OCR motoru başlatılıyor…');
+    const localBase = window.location.origin + window.location.pathname.replace(/[^/]+$/, '');
+    let mrzLoaded = false;
+
+    for (const fname of ['mrz.traineddata', 'mrz.traineddata.gz']) {
+      try {
+        setLoadProg(43, `MRZ modeli kontrol: ${fname}…`);
+        const r = await fetch(localBase + fname);
+        if (!r.ok) continue;
+
+        setLoadProg(55, 'MRZ modeli yükleniyor…');
+        worker = await Tesseract.createWorker('mrz', 1, {
+          workerPath:  'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js',
+          corePath:    'https://cdn.jsdelivr.net/npm/tesseract.js-core@5/tesseract-core-simd-lstm.wasm.js',
+          langPath:    localBase,
+          logger,
+        });
+        mrzLoaded = true;
+        setLoadProg(85, 'MRZ modeli hazır ✓');
+        break;
+      } catch(e) {
+        if (worker) { try { await worker.terminate(); } catch(_){} worker = null; }
+      }
+    }
+
+    if (!mrzLoaded) {
+      setLoadProg(48, 'Standart model yükleniyor (eng)…');
+      worker = await Tesseract.createWorker('eng', 1, { logger });
+    }
+
+    await worker.setParameters({
+      tessedit_char_whitelist:    'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<',
+      tessedit_pageseg_mode:      '6',
+      preserve_interword_spaces:  '0',
+      tessedit_do_invert:         '0',
+      textord_min_linesize:       '2.5',
+    });
+    workerReady = true;
+    const modelName = mrzLoaded ? 'mrz.traineddata ✓' : 'eng (düşük doğruluk)';
+    setLoadProg(100, `Hazır! — ${modelName}`);
+    updatePill('ready');
+    addLog('skip', '🚀 Sistem hazır', [
+      `OCR Modeli: ${modelName}`,
+      mrzLoaded ? 'MRZ modeli yüklendi' : '⚠ mrz.traineddata bulunamadı',
+    ]);
+    await new Promise(r => setTimeout(r, 400));
+    renderList();
+    goScreen('s-home');
+  } catch(e) {
+    setLoadProg(100, '');
+    document.getElementById('load-msg').textContent = 'Hata: ' + e.message;
+  }
+}
+
+function setLoadProg(p, msg) {
+  document.getElementById('load-prog').style.width = p + '%';
+  if (msg) document.getElementById('load-msg').textContent = msg;
+}
+
+function updatePill(state) {
+  const pill = document.getElementById('cache-pill');
+  const txt  = document.getElementById('pill-txt');
+  if (state === 'loading') { pill.className = 'id'; txt.textContent = 'Yükleniyor'; }
+  if (state === 'ready')   { pill.className = 'ready'; txt.textContent = 'Hazır ✓'; }
+  if (state === 'offline') { pill.className = 'offline'; txt.textContent = 'Çevrimdışı'; }
+}
+
+// ── CAMERA ──────────────────────────────────────────────────────────────
+async function startCamera() {
+  if (stream) return;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: {ideal:'environment'},
+        width:  {min:320, ideal:1280},
+        height: {min:240, ideal:720}
+      }
+    });
+    video.srcObject = stream;
+    await new Promise(r => video.onloadedmetadata = r);
+    video.play();
+    await new Promise(r => {
+      const check = () => {
+        if (video.readyState >= 2 && video.videoWidth >= 100 && video.videoHeight >= 100) r();
+        else { video.addEventListener('canplay', r, {once:true}); setTimeout(r, 3000); }
+      };
+      check();
+    });
+    await new Promise(r => setTimeout(r, 300));
+    scanning = true;
+    lastFrameHash = 0;
+    lastL2 = null;
+    l2Count = 0;
+    checksumPassed = false;
+    setHint('MRZ satırlarını kutuya hizalayın');
+    drawOverlayState('searching');
+    loopId = setTimeout(() => scanLoop(), 800);
+  } catch(e) {
+    showError('Kamera hatası: ' + e.message);
+  }
+}
+
+function stopCamera() {
+  scanning = false;
+  if (loopId) { clearTimeout(loopId); loopId = null; }
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+}
+
+function stopScan() {
+  stopCamera();
+  goScreen('s-home');
+}
+
+// ── SCAN ZONE ───────────────────────────────────────────────────────────
+function getScanZone(vw, vh) {
+  const h = Math.round(vh * 0.55), w = Math.round(vw * 0.99);
+  return { x: Math.round((vw-w)/2), y: vh-h-Math.round(vh*0.03), w, h };
+}
+
+// ── SCAN HELPERS ────────────────────────────────────────────────────────
+function getFrameHash(z) {
+  const sw = 48, sh = 24;
+  const tmp = document.createElement('canvas');
+  tmp.width = sw; tmp.height = sh;
+  const tctx = tmp.getContext('2d', { willReadFrequently: true });
+  tctx.drawImage(video, z.x, z.y, z.w, z.h, 0, 0, sw, sh);
+  const data = tctx.getImageData(0, 0, sw, sh).data;
+  let hash = 0;
+  for (let i = 0; i < data.length; i += 16)
+    hash = ((hash << 5) - hash + data[i]) | 0;
+  return hash;
+}
+
+function isSharpEnough(canvas) {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const { width, height } = canvas;
+  const img  = ctx.getImageData(0, 0, width, height).data;
+  const gray = new Float32Array(width * height);
+  for (let i = 0; i < width * height; i++) {
+    gray[i] = 0.299 * img[i*4] + 0.587 * img[i*4+1] + 0.114 * img[i*4+2];
+  }
+  let sum = 0, sumSq = 0, count = 0;
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const i   = y * width + x;
+      const lap = gray[i - width] + gray[i - 1]
+                - 4 * gray[i]
+                + gray[i + 1] + gray[i + width];
+      sum   += lap;
+      sumSq += lap * lap;
+      count++;
+    }
+  }
+  const mean     = sum / count;
+  const variance = sumSq / count - mean * mean;
+  return variance > 100;
+}
+
+function upscaleCanvas(srcCanvas, factor) {
+  const out = document.createElement('canvas');
+  out.width  = srcCanvas.width  * factor;
+  out.height = srcCanvas.height * factor;
+  const ctx  = out.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(srcCanvas, 0, 0, out.width, out.height);
+  return out;
+}
+
+// ── OVERLAY ─────────────────────────────────────────────────────────────
+function drawCorners(x, y, w, h, color, size) {
+  [[x,y,1,1],[x+w,y,-1,1],[x,y+h,1,-1],[x+w,y+h,-1,-1]].forEach(([cx,cy,ox,oy]) => {
+    camCtx.beginPath();
+    camCtx.strokeStyle = color;
+    camCtx.lineWidth = 3;
+    camCtx.moveTo(cx+ox*size, cy);
+    camCtx.lineTo(cx, cy);
+    camCtx.lineTo(cx, cy+oy*size);
+    camCtx.stroke();
+  });
+}
+
+function drawOverlayState(state) {
+  const colors = {
+    searching:  '#3b82f6',
+    found:      '#f59e0b',
+    confirming: '#f59e0b',
+    accepted:   '#10b981',
+  };
+  const hints = {
+    searching:  'MRZ satırlarını kutuya hizalayın',
+    found:      'Sabit tutun…',
+    confirming: 'Doğrulanıyor…',
+    accepted:   '✓ Okundu',
+  };
+
+  // Sync overlay canvas size
+  const dw = video.offsetWidth, dh = video.offsetHeight;
+  if (!dw || !dh) return;
+  if (camOvl.width !== dw || camOvl.height !== dh) {
+    camOvl.width = dw; camOvl.height = dh;
+  }
+
+  const vw = camOvl.width, vh = camOvl.height;
+  camCtx.clearRect(0, 0, vw, vh);
+
+  camCtx.fillStyle = 'rgba(0,0,0,0.45)';
+  camCtx.fillRect(0, 0, vw, vh);
+
+  const z  = getScanZone(video.videoWidth, video.videoHeight);
+  const sx = vw / video.videoWidth;
+  const sy = vh / video.videoHeight;
+  const dx = z.x*sx, dy = z.y*sy, ddw = z.w*sx, ddh = z.h*sy;
+
+  camCtx.clearRect(dx, dy, ddw, ddh);
+
+  // MRZ band — alt %40
+  const bandH = ddh * 0.40;
+  const bandY = dy + ddh - bandH;
+  const color = colors[state];
+
+  camCtx.fillStyle   = color + '22';
+  camCtx.fillRect(dx, bandY, ddw, bandH);
+  camCtx.strokeStyle = color;
+  camCtx.lineWidth   = 2;
+  camCtx.strokeRect(dx, bandY, ddw, bandH);
+
+  drawCorners(dx, dy, ddw, ddh, color, 18);
+
+  const hintType = state === 'accepted' ? 'ok' : state === 'searching' ? '' : 'warn';
+  setHint(hints[state], hintType);
+}
+
+// ── SCAN LOOP ───────────────────────────────────────────────────────────
+const SCAN_INTERVAL = 250;
+
+async function scanLoop() {
+  if (!scanning || !workerReady) return;
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh) { setTimeout(scanLoop, 500); return; }
+  const z = getScanZone(vw, vh);
+
+  // Hareket tespiti
+  const hash = getFrameHash(z);
+  if (Math.abs(hash - lastFrameHash) < 5000 && !checksumPassed) {
+    setTimeout(scanLoop, SCAN_INTERVAL); return;
+  }
+  lastFrameHash = hash;
+
+  // MRZ band crop — alt %40
+  const cropH = Math.round(z.h * 0.40);
+  const cropY = z.y + z.h - cropH;
+  const scale = z.w < 600 ? 2 : 1;
+  mainC.width  = z.w * scale;
+  mainC.height = cropH * scale;
+  mainCtx.filter = 'grayscale(1) contrast(1.4)';
+  mainCtx.drawImage(video, z.x, cropY, z.w, cropH, 0, 0, mainC.width, mainC.height);
+  mainCtx.filter = 'none';
+
+  // Kalite kapısı
+  if (!isSharpEnough(mainC)) {
+    setHint('Belgeyi sabit ve net tutun', 'warn');
+    setTimeout(scanLoop, SCAN_INTERVAL); return;
+  }
+
+  // OCR
+  let text;
+  try { text = (await worker.recognize(mainC)).data.text; }
+  catch(e) { setTimeout(scanLoop, SCAN_INTERVAL); return; }
+
+  const result = extractMRZ(clean(text));
+  if (!result) {
+    drawOverlayState('searching');
+    setTimeout(scanLoop, SCAN_INTERVAL); return;
+  }
+
+  // 2-pass doğrulama — aynı canvas'ı upscale et
+  const confirmCanvas = upscaleCanvas(mainC, 2);
+  let confirmText;
+  try { confirmText = (await worker.recognize(confirmCanvas)).data.text; }
+  catch(e) { confirmText = ''; }
+  const confirmed = extractMRZ(clean(confirmText));
+  const l2Match = confirmed && confirmed.lines[1] === result.lines[1];
+  if (l2Match) { lastL2 = result.lines[1]; l2Count = 2; }
+
+  // Checksum
+  const l2 = result.lines[1];
+  const cs = result.type === 'TD1'
+    ? { passOk: chk(result.lines[0].substring(5,14)) === +result.lines[0][14],
+        dobOk:  chk(l2.substring(0,6)) === +l2[6],
+        expOk:  chk(l2.substring(8,14)) === +l2[14] }
+    : getChecksums_TD3(l2);
+  if (cs.passOk || (cs.dobOk && cs.expOk)) checksumPassed = true;
+
+  // L2 tekrar sayacı
+  if (!l2Match) {
+    if (l2 === lastL2) l2Count++; else { lastL2 = l2; l2Count = 1; }
+  }
+
+  // Kabul: checksum + L2 en az 2 kez tutarlı
+  if (checksumPassed && l2Count >= 2) {
+    drawOverlayState('accepted');
+    addLog('ok', `${result.type} → KABUL`, [`L2: ${l2}`], null, cs);
+    setTimeout(() => { stopCamera(); saveAndShow(result); }, 250);
+    return;
+  }
+
+  drawOverlayState(checksumPassed ? 'confirming' : 'found');
+  setTimeout(scanLoop, SCAN_INTERVAL);
+}
+
+// ── HINT ────────────────────────────────────────────────────────────────
+function setHint(msg, type='') {
+  const el = document.getElementById('cam-hint');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'cam-hint' + (type ? ' hint-' + type : '');
+}
+
+// ── FILE UPLOAD ─────────────────────────────────────────────────────────
+function cancelProcessing() {
+  processingCancelled = true;
+  addLog('skip', 'İşlem iptal edildi', ['Kullanıcı tarafından durduruldu']);
+  goHome();
+}
+
+function resetImageUpload() {
+  document.getElementById('img-preview-wrap').style.display = 'none';
+  document.getElementById('upload-zone-wrap').style.display = 'block';
+  document.getElementById('file-in').value = '';
+  loadedImg = null;
+}
+
+function onFile(e) {
+  const file = e.target.files[0]; if (!file) return;
+  stopCamera();
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const img = new Image();
+    img.onload = () => {
+      loadedImg = img;
+      const preview = document.getElementById('img-preview');
+      const info    = document.getElementById('img-preview-info');
+      const wrap    = document.getElementById('img-preview-wrap');
+      const zone    = document.getElementById('upload-zone-wrap');
+      preview.src   = ev.target.result;
+      info.textContent = `${img.naturalWidth}×${img.naturalHeight}px · ${(file.size/1024).toFixed(0)} KB · ${file.name}`;
+      zone.style.display  = 'none';
+      wrap.style.display  = 'flex';
+      addLog('skip', '📁 Resim yüklendi', [`${img.naturalWidth}×${img.naturalHeight}px`, file.name]);
+    };
+    img.onerror = () => addLog('err', 'Resim yüklenemedi', [file.name]);
+    img.src = ev.target.result;
+  };
+  reader.onerror = () => addLog('err', 'Dosya okunamadı', [file.name]);
+  reader.readAsDataURL(file);
+}
+
+async function startImageScan() {
+  if (!loadedImg) return;
+  if (!workerReady) {
+    goScreen('s-processing');
+    document.getElementById('proc-msg').textContent = 'OCR motoru bekleniyor…';
+    while (!workerReady) await new Promise(r => setTimeout(r, 200));
+  }
+  addLog('skip', '🔍 Tarama başlatıldı', [`${loadedImg.naturalWidth}×${loadedImg.naturalHeight}px`]);
+  processImage(loadedImg);
+}
+
+// Drag & drop
+const dz = document.getElementById('drop-zone');
+dz.addEventListener('dragover',  e => { e.preventDefault(); dz.classList.add('drag'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('drag'));
+dz.addEventListener('drop',      e => {
+  e.preventDefault(); dz.classList.remove('drag');
+  const f = e.dataTransfer.files[0];
+  if (f) onFile({ target: { files: [f] } });
+});
+
+// ── PROCESS IMAGE (resim yükleme) ──────────────────────────────────────
+async function processImage(img) {
+  if (!workerReady) return;
+  processingCancelled = false;
+  goScreen('s-processing');
+  document.getElementById('proc-cancel-btn').style.display = 'flex';
+  const procProg = document.getElementById('proc-prog');
+  const procMsg  = document.getElementById('proc-msg');
+
+  function makeCanvas(deg) {
+    const swap = deg === 90 || deg === 270;
+    const sw = swap ? img.naturalHeight : img.naturalWidth;
+    const sh = swap ? img.naturalWidth  : img.naturalHeight;
+    const MAX = 1600, scale = sw > MAX ? MAX / sw : 1;
+    const rw = Math.round(sw * scale), rh = Math.round(sh * scale);
+    const c = document.createElement('canvas');
+    c.width = rw; c.height = rh;
+    const ctx = c.getContext('2d');
+    ctx.save(); ctx.translate(rw/2, rh/2);
+    ctx.rotate(deg * Math.PI / 180); ctx.scale(scale, scale);
+    ctx.drawImage(img, -img.naturalWidth/2, -img.naturalHeight/2);
+    ctx.restore(); return c;
+  }
+
+  procProg.style.width = '10%';
+  for (const deg of [0, 90, 270]) {
+    if (processingCancelled) return;
+    procProg.style.width = Math.min(30 + deg, 92) + '%';
+    procMsg.textContent = `Tesseract ${deg}° taranıyor…`;
+    const full = makeCanvas(deg);
+    const bandH = Math.round(full.height * 0.45);
+    const band = document.createElement('canvas');
+    band.width = full.width; band.height = bandH;
+    band.getContext('2d').drawImage(full, 0, full.height - bandH, full.width, bandH, 0, 0, full.width, bandH);
+    try {
+      const { data: { text } } = await worker.recognize(band);
+      const result = extractMRZ(clean(text));
+      if (result) {
+        const l2 = result.lines[1];
+        const cs = result.type === 'TD1'
+          ? { passOk: chk(result.lines[0].substring(5,14)) === +result.lines[0][14],
+              dobOk: chk(l2.substring(0,6)) === +l2[6], expOk: chk(l2.substring(8,14)) === +l2[14] }
+          : getChecksums_TD3(l2);
+        if (cs.passOk || (cs.dobOk && cs.expOk)) {
+          procProg.style.width = '100%';
+          document.getElementById('proc-cancel-btn').style.display = 'none';
+          saveAndShow(result); return;
+        }
+      }
+    } catch(e) { /* devam */ }
+  }
+  document.getElementById('proc-cancel-btn').style.display = 'none';
+  showError('MRZ tespit edilemedi. Kimliğin arka yüzünü yükleyin.');
+}
+
+// ── SAVE & SHOW ─────────────────────────────────────────────────────────
+function saveAndShow(mrzResult) {
+  const parsed = parseResult(mrzResult);
+  const entry = {
+    id: 'pp_' + Date.now(),
+    line1: mrzResult.lines[0],
+    line2: mrzResult.lines[1],
+    line3: mrzResult.lines[2] || '',
+    type:  mrzResult.type,
+    name:  parsed.surname + (parsed.given ? ', ' + parsed.given : ''),
+    nation: parsed.nation,
+    addedAt: Date.now()
+  };
+  const saved = loadPassports();
+  saved.push(entry);
+  savePassports(saved);
+  const all = getAllPassports();
+  currentIdx = all.findIndex(p => p.id === entry.id);
+  showParsed(parsed, entry, true);
+}
+
+function showParsed(p, entry, isNew) {
+  const cs = p.cs || {};
+  function ck(v) {
+    if (v===null||v===undefined) return '';
+    return `<span class="${v?'ok':'fail'}" style="font-size:.8rem;margin-left:4px">${v?'✓':'✗'}</span>`;
+  }
+
+  document.getElementById('edit-surname').value = p.surname || '';
+  document.getElementById('edit-given').value   = p.given   || '';
+
+  document.getElementById('res-fields').innerHTML = [
+    ['Belge Tipi',     p.docType  || '—',                                  ''],
+    ['Pasaport/Doc No',p.passNo   || '—',                                  ck(cs.passOk)],
+    ['Uyruk',          p.nation   || '—',                                  ''],
+    ['Veren Ülke',     p.issuer   || '—',                                  ''],
+    ['Doğum Tarihi',   fmtDate(p.dob),                                     ck(cs.dobOk)],
+    ['Cinsiyet',       p.sex==='M'?'Erkek':p.sex==='F'?'Kadın':(p.sex||'—'), ''],
+    ['Son Geçerlilik', fmtDate(p.expiry),                                  ck(cs.expOk)],
+    ...(cs.compOk!==null ? [['Kompozit', '', ck(cs.compOk)]] : []),
+  ].map(([l,v,b]) => `
+    <div class="row">
+      <div class="rl">${l}</div>
+      <div class="rv">${v}${b}</div>
+    </div>`).join('');
+
+  const allOk = cs.passOk && cs.dobOk && cs.expOk;
+  const banner = document.getElementById('res-banner');
+  banner.className = 'banner ' + (allOk ? 'b-ok' : 'b-warn');
+  document.getElementById('res-icon').textContent = allOk ? '✅' : '⚠️';
+  document.getElementById('res-txt').textContent  = allOk
+    ? `${p.docType} — Tüm checksum'lar geçerli ✓`
+    : `${p.docType} — MRZ okundu`;
+
+  const rawLines = [entry.line1, entry.line2, entry.line3].filter(Boolean).join('\n');
+  document.getElementById('del-btn').style.display = 'flex';
+
+  if (serialMode) {
+    serialCount++;
+    document.getElementById('next-scan-btn').style.display = 'flex';
+    document.getElementById('next-scan-btn').textContent =
+      `📷 Sonraki Pasaport → (${serialCount} tarandı)`;
+  } else {
+    document.getElementById('next-scan-btn').style.display = 'none';
+  }
+
+  document.getElementById('mrz-raw').textContent = rawLines;
+  goScreen('s-result');
+}
+
+function updateSavedName() {
+  const surname = document.getElementById('edit-surname').value.trim();
+  const given   = document.getElementById('edit-given').value.trim();
+  const name    = surname + (given ? ', ' + given : '');
+  const all = getAllPassports();
+  const p   = all[currentIdx];
+  if (!p || p.id.startsWith('demo_')) return;
+  const saved = loadPassports();
+  const idx   = saved.findIndex(x => x.id === p.id);
+  if (idx >= 0) { saved[idx].name = name; savePassports(saved); }
+}
+
+// ── DATE ────────────────────────────────────────────────────────────────
+function fmtDate(d) {
+  if (!d || d.length < 6) return d || '—';
+  const yy=+d.substring(0,2), mm=d.substring(2,4), dd=d.substring(4,6);
+  const currentYY = new Date().getFullYear() % 100;
+  const year = yy <= (currentYY + 10) ? 2000+yy : 1900+yy;
+  return `${dd}/${mm}/${year}`;
+}
+
+// ── MANUAL ENTRY ────────────────────────────────────────────────────────
+function addManual() {
+  const l1 = document.getElementById('l1').value.trim();
+  const l2 = document.getElementById('l2').value.trim();
+  const isTD3 = l1.length === 44 && l2.length === 44;
+  const isTD1 = l1.length === 30 && l2.length === 30;
+  if (!isTD3 && !isTD1) {
+    showError(`TD3 (pasaport): 2×44 karakter\nTD1 (kimlik): 2×30 karakter\nSatır 1: ${l1.length}, Satır 2: ${l2.length}`);
+    return;
+  }
+  document.getElementById('l1').value = '';
+  document.getElementById('l2').value = '';
+  if (isTD3) saveAndShow({ type:'TD3', lines:[l1, l2] });
+  else        saveAndShow({ type:'TD1', lines:[l1, l2, ''] });
+}
+
+function onTA(el, cId) {
+  el.value = el.value.toUpperCase().replace(/[^A-Z0-9<]/g,'');
+  const n  = el.value.length;
+  const c  = document.getElementById(cId);
+  c.textContent = n + ' / 44';
+  c.classList.toggle('full', n===44);
+  el.style.borderColor = n===44 ? 'var(--green)' : n>0 ? 'var(--blue)' : 'var(--border)';
+}
+
+function showError(msg) {
+  document.getElementById('err-msg').textContent = msg;
+  goScreen('s-error');
+}
+
+// ── NETWORK STATUS ──────────────────────────────────────────────────────
+function checkNetwork() {
+  if (!navigator.onLine) updatePill('offline');
+}
+window.addEventListener('offline', () => updatePill('offline'));
+window.addEventListener('online',  () => workerReady && updatePill('ready'));
+
+// ── LOG SİSTEMİ ────────────────────────────────────────────────────────
+const MAX_LOGS = 20;
+let logEntries  = [];
+let scanCounter = 0;
+let logOpen     = false;
+
+function toggleLog() {
+  logOpen = !logOpen;
+  const panel = document.getElementById('log-panel');
+  panel.classList.toggle('open', logOpen);
+  if (logOpen) setTimeout(() => document.getElementById('log-entries').scrollTop = 0, 50);
+}
+
+function toggleFullscreen() {
+  const panel = document.getElementById('log-panel');
+  const btn   = document.getElementById('fs-btn');
+  const isFull = panel.classList.toggle('fullscreen');
+  btn.textContent = isFull ? '⊡' : '⛶';
+  btn.title = isFull ? 'Küçült' : 'Tam Ekran';
+}
+
+function clearLog() {
+  logEntries = [];
+  scanCounter = 0;
+  renderLog();
+}
+
+function addLog(type, main, details = [], mrz = null, cs = null, thumbDataURL = null) {
+  scanCounter++;
+  const now  = new Date();
+  const time = now.toTimeString().slice(0,8);
+  logEntries.unshift({ type, time, scan: scanCounter, main, details, mrz, cs, thumb: thumbDataURL });
+  if (logEntries.length > MAX_LOGS) logEntries.pop();
+  renderLog();
+}
+
+function captureThumb() {
+  try {
+    if (!mainC || mainC.width < 10 || mainC.height < 10) return null;
+    const t = document.createElement('canvas');
+    const maxW = 240, maxH = 120;
+    const ratio = Math.min(maxW / mainC.width, maxH / mainC.height);
+    t.width  = Math.round(mainC.width  * ratio);
+    t.height = Math.round(mainC.height * ratio);
+    t.getContext('2d').drawImage(mainC, 0, 0, t.width, t.height);
+    return t.toDataURL('image/jpeg', 0.6);
+  } catch(e) { return null; }
+}
+
+function renderLog() {
+  const el    = document.getElementById('log-entries');
+  const badge = document.getElementById('log-badge');
+  const count = document.getElementById('log-scan-count');
+  if (!el) return;
+  badge.textContent = logEntries.length;
+  if (count) count.textContent = `(${scanCounter} tarama)`;
+
+  const icons = {ok:'✅', warn:'⚡', err:'❌', skip:'⏭'};
+  const clr   = {ok:'log-ok', warn:'log-warn', err:'log-err', skip:'log-skip'};
+  const bgs   = {ok:'rgba(16,185,129,.04)', warn:'rgba(245,158,11,.03)', err:'rgba(239,68,68,.04)', skip:''};
+
+  el.innerHTML = logEntries.map((e, idx) => {
+    const icon = icons[e.type] || '•';
+    const cc   = clr[e.type]   || 'log-skip';
+    const bg   = bgs[e.type]   || '';
+
+    const csBadges = e.cs ? `<div class="log-cs">
+      ${['passOk','dobOk','expOk'].map(k => {
+        const ok  = e.cs[k];
+        const lbl = {passOk:'Pass',dobOk:'DOB',expOk:'EXP'}[k];
+        return `<span class="cs-badge ${ok?'cs-ok-badge':'cs-fail-badge'}">${lbl}${ok?'✓':'✗'}</span>`;
+      }).join('')}
+    </div>` : '';
+
+    const details = e.details.map(d =>
+      `<div class="log-detail" title="${d.replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,"'")}">${
+        d.replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      }</div>`
+    ).join('');
+
+    const thumb = e.thumb
+      ? `<img class="log-thumb-img" src="${e.thumb}"
+           onclick="event.stopPropagation();showThumb(${idx})"
+           title="Büyütmek için tıkla">`
+      : '';
+
+    return `<div class="log-row${bg?' log-row-'+e.type:''}" id="log-entry-${idx}"
+               onclick="copyEntry(${idx})" style="${bg?'background:'+bg:''}" >
+      <div class="log-col-time">${e.time}</div>
+      <div class="log-col-icon">${icon}</div>
+      <div class="log-col-body">
+        <div class="log-main ${cc}" title="[#${e.scan}] ${e.main}">[#${e.scan}] ${e.main}</div>
+        ${details}
+        ${csBadges}
+        ${thumb}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function copyEntry(idx) {
+  const e = logEntries[idx];
+  if (!e) return;
+  const lines = [
+    `[${e.time}] [#${e.scan}] ${e.main}`,
+    ...e.details,
+    e.cs ? `PassNo:${e.cs.passOk?'✓':'✗'} DOB:${e.cs.dobOk?'✓':'✗'} EXP:${e.cs.expOk?'✓':'✗'}` : '',
+  ].filter(Boolean).join('\n');
+  navigator.clipboard.writeText(lines).then(() => {
+    const el = document.getElementById(`log-entry-${idx}`);
+    if (el) { el.classList.add('copied'); setTimeout(() => el.classList.remove('copied'), 400); }
+  });
+}
+
+function copyLog() {
+  const text = logEntries.map(e => [
+    `[${e.time}] [#${e.scan}] ${e.main}`,
+    ...e.details,
+    e.cs ? `  PassNo:${e.cs.passOk?'✓':'✗'} DOB:${e.cs.dobOk?'✓':'✗'} EXP:${e.cs.expOk?'✓':'✗'}` : '',
+  ].filter(Boolean).join('\n')).join('\n─────\n');
+
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('log-copy');
+    if (btn) { btn.textContent = '✓'; setTimeout(() => btn.textContent = '📋', 1200); }
+  });
+}
+
+function exportLog() {
+  const data = JSON.stringify(logEntries.map(e => ({
+    time: e.time, scan: e.scan, type: e.type,
+    main: e.main, details: e.details, cs: e.cs,
+    hasThumb: !!e.thumb
+  })), null, 2);
+  const blob = new Blob([data], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `mrz-log-${new Date().toISOString().slice(0,16).replace(/[T:]/g,'-')}.json`;
+  a.click();
+}
+
+function showThumb(idx) {
+  const e = logEntries[+idx];
+  if (!e || !e.thumb) return;
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;display:flex;align-items:center;justify-content:center;cursor:zoom-out;';
+  const img = document.createElement('img');
+  img.src = e.thumb;
+  img.style.cssText = 'max-width:90vw;max-height:80vh;border-radius:10px;border:2px solid #fff;';
+  overlay.appendChild(img);
+  overlay.onclick = () => document.body.removeChild(overlay);
+  document.body.appendChild(overlay);
+}
+
+// ── START ───────────────────────────────────────────────────────────────
+init();
+</script>
+
+<!-- ── DEBUG LOG PANEL ── -->
+<button id="log-toggle" onclick="toggleLog()">
+  <span>📋 Log</span>
+  <span class="badge" id="log-badge">0</span>
+</button>
+
+<div id="log-panel">
+  <div id="log-header">
+    <div class="log-hdr-left">
+      <span>📋 Tarama Logu</span>
+      <span id="log-scan-count" style="color:#4a5568;font-weight:400;font-size:0.72rem;"></span>
+    </div>
+    <div class="log-hdr-right">
+      <button class="log-btn" onclick="copyLog()" title="Kopyala">📋</button>
+      <button class="log-btn" onclick="exportLog()" title="İndir">💾</button>
+      <button class="log-btn" onclick="toggleFullscreen()" id="fs-btn" title="Tam Ekran">⛶</button>
+      <button class="log-btn red" onclick="clearLog()">Temizle</button>
+      <button class="log-btn" onclick="toggleLog()" title="Kapat" style="font-size:1rem;padding:2px 8px;">✕</button>
+    </div>
+  </div>
+  <div id="log-entries"></div>
+</div>
+
+</body>
+</html>
