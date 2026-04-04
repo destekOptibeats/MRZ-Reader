@@ -1841,7 +1841,9 @@ function batchPreprocess(srcCanvas) {
 }
 
 // Fast batch OCR: crop 32% → fallback 45%, max 2 OCR attempts total
-async function fastBatchOCR(resized, timings) {
+// ocrWorker param: allows passing a dedicated batch worker or the global worker
+async function fastBatchOCR(resized, timings, ocrWorker) {
+  const w = ocrWorker || worker;
   // Attempt 1: crop bottom 32% + preprocess
   let t = performance.now();
   const band1 = cropBottom(resized, 0.32);
@@ -1850,7 +1852,7 @@ async function fastBatchOCR(resized, timings) {
 
   t = performance.now();
   try {
-    const { data: { text } } = await worker.recognize(enhanced1);
+    const { data: { text } } = await w.recognize(enhanced1);
     timings.ocr1 = Math.round(performance.now() - t);
     const result = extractMRZ(clean(text));
     if (result && validateMRZ(result).valid) {
@@ -1864,18 +1866,54 @@ async function fastBatchOCR(resized, timings) {
 
   t = performance.now();
   try {
-    const { data: { text } } = await worker.recognize(enhanced2);
+    const { data: { text } } = await w.recognize(enhanced2);
     timings.ocr2 = Math.round(performance.now() - t);
     const result = extractMRZ(clean(text));
     if (result && validateMRZ(result).valid) {
       return { extracted: result, diag: diagnoseMRZ(text), attempts: 2 };
     }
-    // Failed but have diag
     return { extracted: null, diag: diagnoseMRZ(text), attempts: 2 };
   } catch(e) {
     timings.ocr2 = Math.round(performance.now() - t);
     return { extracted: null, diag: null, attempts: 2 };
   }
+}
+
+// Create a dedicated batch Tesseract worker (isolated from global worker)
+async function createBatchWorker() {
+  const localBase = window.location.origin + window.location.pathname.replace(/[^/]+$/, '');
+  let bw = null;
+  let mrzLoaded = false;
+
+  for (const fname of ['mrz.traineddata', 'mrz.traineddata.gz']) {
+    try {
+      const r = await fetch(localBase + fname);
+      if (!r.ok) continue;
+      bw = await Tesseract.createWorker('mrz', 1, {
+        workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js',
+        corePath:   'https://cdn.jsdelivr.net/npm/tesseract.js-core@5/tesseract-core-simd-lstm.wasm.js',
+        langPath:   localBase,
+      });
+      mrzLoaded = true;
+      break;
+    } catch(e) {
+      if (bw) { try { await bw.terminate(); } catch(_){} bw = null; }
+    }
+  }
+
+  if (!mrzLoaded) {
+    bw = await Tesseract.createWorker('eng', 1, {});
+  }
+
+  await bw.setParameters({
+    tessedit_char_whitelist:   'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<',
+    tessedit_pageseg_mode:     '6',
+    preserve_interword_spaces: '0',
+    tessedit_do_invert:        '0',
+    textord_min_linesize:      '2.5',
+  });
+
+  return bw;
 }
 
 // ── BATCH TEST ─────────────────────────────────────────────────────────
@@ -1892,59 +1930,84 @@ async function startBatchTest(files) {
   document.getElementById('batch-progress').style.display = 'block';
   results.innerHTML = '';
 
+  // Create dedicated batch worker (isolated from global worker)
+  let batchWorker = null;
+  const batchT0 = performance.now();
+  let workerInitTime = 0;
+
+  try {
+    status.textContent = 'Batch OCR worker başlatılıyor…';
+    const wiT = performance.now();
+    batchWorker = await createBatchWorker();
+    workerInitTime = Math.round(performance.now() - wiT);
+  } catch(e) {
+    results.innerHTML = '<div class="batch-reason">Batch worker oluşturulamadı: ' + e.message + '</div>';
+    document.getElementById('batch-file-in').value = '';
+    return;
+  }
+
   const rows = [];
   let successCount = 0;
   let totalTime = 0;
 
-  for (let i = 0; i < files.length; i++) {
-    const file = files[i];
-    prog.style.width = ((i / files.length) * 100) + '%';
-    status.textContent = (i+1) + '/' + files.length + ' işleniyor: ' + file.name;
+  try {
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      prog.style.width = ((i / files.length) * 100) + '%';
+      status.textContent = (i+1) + '/' + files.length + ' işleniyor: ' + file.name;
 
-    const timings = { decode: 0, resize: 0, crop: 0, ocr1: 0, ocr2: 0, total: 0 };
-    const t0 = performance.now();
+      const timings = { decode: 0, resize: 0, crop: 0, ocr1: 0, ocr2: 0, total: 0 };
+      const t0 = performance.now();
 
-    // Fast image loading
-    let imgData = null;
-    let t = performance.now();
-    try {
-      imgData = await loadImageFast(file);
-      timings.decode = Math.round(performance.now() - t);
-    } catch(e) {
-      rows.push({ name: file.name, ok: false, type: '—', cs: '—', time: 0, timing: '', reason: (isHEIC(file) ? 'HEIC: ' : '') + e.message });
-      continue;
+      // Fast image loading
+      let imgData = null;
+      let t = performance.now();
+      try {
+        imgData = await loadImageFast(file);
+        timings.decode = Math.round(performance.now() - t);
+      } catch(e) {
+        rows.push({ name: file.name, ok: false, type: '—', cs: '—', time: 0, timing: '', reason: (isHEIC(file) ? 'HEIC: ' : '') + e.message });
+        continue;
+      }
+
+      // Resize to max 1400px long side
+      t = performance.now();
+      const resized = resizeForOCR(imgData.img, 1400);
+      timings.resize = Math.round(performance.now() - t);
+
+      // Cleanup objectURL
+      imgData.cleanup();
+
+      // Fast OCR with dedicated batch worker (max 2 attempts)
+      const ocrResult = await fastBatchOCR(resized, timings, batchWorker);
+
+      timings.total = Math.round(performance.now() - t0);
+      totalTime += timings.total;
+      const timingStr = 'D:' + timings.decode + ' R:' + timings.resize + ' C:' + timings.crop +
+        ' O1:' + timings.ocr1 + (timings.ocr2 ? ' O2:' + timings.ocr2 : '') + ' T:' + timings.total + 'ms';
+
+      if (ocrResult.extracted) {
+        successCount++;
+        const v = validateMRZ(ocrResult.extracted);
+        const csStr = ['Pass','DOB','EXP'].map((k, idx) => {
+          const key = ['passOk','dobOk','expOk'][idx];
+          return k + (v.checksums[key] ? '✓' : '✗');
+        }).join(' ');
+        rows.push({ name: file.name, ok: true, type: ocrResult.extracted.type, cs: csStr, time: timings.total, timing: timingStr, reason: '' });
+      } else {
+        const reasons = ocrResult.diag ? ocrResult.diag.failureReasons.join('; ') : 'OCR çıktısı alınamadı';
+        rows.push({ name: file.name, ok: false, type: '—', cs: '—', time: timings.total, timing: timingStr, reason: reasons });
+      }
     }
-
-    // Resize to max 1400px long side
-    t = performance.now();
-    const resized = resizeForOCR(imgData.img, 1400);
-    timings.resize = Math.round(performance.now() - t);
-
-    // Cleanup objectURL
-    imgData.cleanup();
-
-    // Fast OCR (max 2 attempts)
-    const ocrResult = await fastBatchOCR(resized, timings);
-
-    timings.total = Math.round(performance.now() - t0);
-    totalTime += timings.total;
-    const timingStr = 'D:' + timings.decode + ' R:' + timings.resize + ' C:' + timings.crop +
-      ' O1:' + timings.ocr1 + (timings.ocr2 ? ' O2:' + timings.ocr2 : '') + ' T:' + timings.total + 'ms';
-
-    if (ocrResult.extracted) {
-      successCount++;
-      const v = validateMRZ(ocrResult.extracted);
-      const csStr = ['Pass','DOB','EXP'].map((k, idx) => {
-        const key = ['passOk','dobOk','expOk'][idx];
-        return k + (v.checksums[key] ? '✓' : '✗');
-      }).join(' ');
-      rows.push({ name: file.name, ok: true, type: ocrResult.extracted.type, cs: csStr, time: timings.total, timing: timingStr, reason: '' });
-    } else {
-      const reasons = ocrResult.diag ? ocrResult.diag.failureReasons.join('; ') : 'OCR çıktısı alınamadı';
-      rows.push({ name: file.name, ok: false, type: '—', cs: '—', time: timings.total, timing: timingStr, reason: reasons });
+  } finally {
+    // Always terminate and clear the dedicated batch worker
+    if (batchWorker) {
+      try { await batchWorker.terminate(); } catch(_) {}
+      batchWorker = null;
     }
   }
 
+  const batchTotal = Math.round(performance.now() - batchT0);
   prog.style.width = '100%';
   status.textContent = 'Tamamlandı';
   const avg = files.length > 0 ? Math.round(totalTime / files.length) : 0;
@@ -1962,7 +2025,8 @@ async function startBatchTest(files) {
       '</tr>' + (r.reason ? '<tr><td colspan="6"><div class="batch-reason">' + r.reason + '</div></td></tr>' : '')
     ).join('') +
     '</tbody></table>' +
-    '<div class="batch-summary">' + successCount + '/' + files.length + ' başarılı, ortalama ' + avg + 'ms</div>';
+    '<div class="batch-summary">' + successCount + '/' + files.length + ' başarılı, ort ' + avg + 'ms/dosya' +
+    ' · Worker init: ' + workerInitTime + 'ms · Toplam: ' + batchTotal + 'ms</div>';
 
   document.getElementById('batch-file-in').value = '';
 }
