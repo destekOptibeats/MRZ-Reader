@@ -238,10 +238,78 @@
     };
   }
 
+  // ── VALIDATE MRZ ──────────────────────────────────────────────────────
+  function validateMRZ(result) {
+    if (!result || !result.lines || !result.lines[1]) {
+      return { valid: false, errors: ['MRZ satırları bulunamadı'], checksums: {} };
+    }
+    const errors = [];
+    let cs;
+    if (result.type === 'TD1') {
+      const l1 = result.lines[0], l2 = result.lines[1];
+      cs = {
+        passOk: chk(l1.substring(5,14)) === +l1[14],
+        dobOk:  chk(l2.substring(0,6))  === +l2[6],
+        expOk:  chk(l2.substring(8,14)) === +l2[14],
+        passExpected: chk(l1.substring(5,14)), passFound: +l1[14],
+        dobExpected:  chk(l2.substring(0,6)),  dobFound:  +l2[6],
+        expExpected:  chk(l2.substring(8,14)), expFound:  +l2[14],
+      };
+    } else {
+      const l2 = result.lines[1];
+      const raw = getChecksums_TD3(l2);
+      cs = {
+        ...raw,
+        passExpected: chk(l2.substring(0,9)),   passFound: +l2[9],
+        dobExpected:  chk(l2.substring(13,19)), dobFound:  +l2[19],
+        expExpected:  chk(l2.substring(21,27)), expFound:  +l2[27],
+      };
+    }
+    if (!cs.passOk) errors.push('Pasaport/Belge No checksum hatası (beklenen: ' + cs.passExpected + ', bulunan: ' + cs.passFound + ')');
+    if (!cs.dobOk)  errors.push('Doğum tarihi checksum hatası (beklenen: ' + cs.dobExpected + ', bulunan: ' + cs.dobFound + ')');
+    if (!cs.expOk)  errors.push('Geçerlilik tarihi checksum hatası (beklenen: ' + cs.expExpected + ', bulunan: ' + cs.expFound + ')');
+    const valid = cs.passOk || (cs.dobOk && cs.expOk);
+    return { valid, errors, checksums: cs };
+  }
+
+  // ── DIAGNOSE MRZ ─────────────────────────────────────────────────────
+  function diagnoseMRZ(rawText) {
+    const failureReasons = [];
+    if (!rawText || rawText.trim().length < 20) {
+      failureReasons.push('OCR çıktısı çok kısa veya boş');
+      return { rawText: rawText || '', cleaned: '', extracted: null, checksums: {}, parseResult: null, failureReasons };
+    }
+    const cleaned = clean(rawText);
+    const extracted = extractMRZ(cleaned);
+    if (!extracted) {
+      failureReasons.push('MRZ pattern bulunamadı');
+      const lines = cleaned.split(/\n+/).filter(l => l.length > 10);
+      if (lines.length < 2) failureReasons.push('Yeterli uzunlukta satır yok (en az 2 satır gerekli)');
+      lines.forEach((l, i) => {
+        if (l.length < 28) failureReasons.push('Satır ' + (i+1) + ': çok kısa (' + l.length + ' karakter)');
+      });
+      return { rawText, cleaned, extracted: null, checksums: {}, parseResult: null, failureReasons };
+    }
+    const validation = validateMRZ(extracted);
+    const parsed = parseResult(extracted);
+    if (!validation.valid) {
+      failureReasons.push(...validation.errors);
+    }
+    return {
+      rawText,
+      cleaned,
+      extracted,
+      checksums: validation.checksums,
+      parseResult: parsed,
+      failureReasons
+    };
+  }
+
   // ── EXPORT ────────────────────────────────────────────────────────────
   window.MRZCore = {
     chk, clean, cleanLine, fixLine, applyDigitFixes,
     isL1_TD1, isL2_TD1, isL3_TD1, isL1_TD3, isL2_TD3,
-    extractMRZ, getChecksums_TD3, parseResult
+    extractMRZ, getChecksums_TD3, parseResult,
+    validateMRZ, diagnoseMRZ
   };
 })();

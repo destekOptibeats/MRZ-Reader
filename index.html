@@ -177,6 +177,17 @@ textarea::placeholder{color:var(--muted);letter-spacing:0;font-family:inherit;fo
 .cam-hint.hint-warn { color:#f59e0b; font-size:0.95rem; }
 .cam-hint.hint-ok   { color:#10b981; font-size:0.95rem; }
 
+/* ── batch test ── */
+#batch-btn{display:none;}
+@media(min-width:768px){#batch-btn{display:flex;}}
+.batch-table{width:100%;max-width:600px;border-collapse:collapse;font-size:.78rem;}
+.batch-table th{text-align:left;padding:8px 6px;border-bottom:2px solid var(--border);color:var(--muted);font-size:.7rem;text-transform:uppercase;}
+.batch-table td{padding:7px 6px;border-bottom:1px solid var(--border);vertical-align:top;}
+.batch-table .bt-ok{color:var(--green);}
+.batch-table .bt-fail{color:var(--red);}
+.batch-summary{margin-top:12px;font-size:.85rem;color:var(--muted);text-align:center;}
+.batch-reason{font-size:.7rem;color:var(--red);margin-top:2px;}
+
 /* ── cam toast ── */
 #cam-toast{
   position:absolute;top:12px;left:50%;transform:translateX(-50%);
@@ -349,7 +360,7 @@ input[type="text"] {
 </style>
 </head>
 <body>
-<div class="version-tag">v1.4.1</div>
+<div class="version-tag">v2.0.0</div>
 
 <!-- cache status pill -->
 <div id="cache-pill"><div class="pill-dot"></div><span id="pill-txt">Yükleniyor…</span></div>
@@ -375,6 +386,8 @@ input[type="text"] {
     🚀 Seri Tarama Başlat
   </button>
   <button class="btn ghost" onclick="goScreen('s-add')">⌨️ Elle Gir</button>
+  <button class="btn ghost" id="batch-btn" onclick="goScreen('s-batch')">🧪 Batch Test</button>
+  <input type="file" id="batch-file-in" accept="image/*" multiple style="display:none" onchange="startBatchTest(this.files)">
   <div style="width:100%;max-width:460px;margin-top:8px;">
     <button onclick="toggleList()" id="list-toggle-btn"
       style="width:100%;background:var(--card);border:1px solid var(--border);
@@ -523,6 +536,19 @@ input[type="text"] {
   <button class="btn blue" onclick="goHome()">← Ana Ekran</button>
 </div>
 
+<!-- S-BATCH: BATCH TEST -->
+<div class="screen" id="s-batch">
+  <div class="title">🧪 Batch Test</div>
+  <div class="sub">Birden fazla belge fotoğrafı seçin, toplu OCR testi yapın</div>
+  <button class="btn blue" onclick="document.getElementById('batch-file-in').click()">📁 Resimleri Seç</button>
+  <div id="batch-progress" style="display:none;width:100%;max-width:600px;">
+    <div class="prog-wrap"><div class="prog" id="batch-prog" style="width:0%"></div></div>
+    <div class="sub" id="batch-status" style="margin-top:6px;"></div>
+  </div>
+  <div id="batch-results" style="width:100%;max-width:600px;overflow-x:auto;"></div>
+  <button class="btn ghost" onclick="goHome()" style="margin-top:10px">← Ana Ekran</button>
+</div>
+
 <canvas id="main-canvas" style="display:none"></canvas>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
@@ -531,7 +557,8 @@ input[type="text"] {
 const {
   chk, clean, cleanLine, fixLine, applyDigitFixes,
   isL1_TD1, isL2_TD1, isL3_TD1, isL1_TD3, isL2_TD3,
-  extractMRZ, getChecksums_TD3, parseResult
+  extractMRZ, getChecksums_TD3, parseResult,
+  validateMRZ, diagnoseMRZ
 } = window.MRZCore;
 
 let worker       = null;
@@ -1118,12 +1145,9 @@ async function scanLoop() {
   if (l2Match) { lastL2 = result.lines[1]; l2Count = 2; }
 
   const l2 = result.lines[1];
-  const cs = result.type === 'TD1'
-    ? { passOk: chk(result.lines[0].substring(5,14)) === +result.lines[0][14],
-        dobOk:  chk(l2.substring(0,6)) === +l2[6],
-        expOk:  chk(l2.substring(8,14)) === +l2[14] }
-    : getChecksums_TD3(l2);
-  if (cs.passOk || (cs.dobOk && cs.expOk)) checksumPassed = true;
+  const validation = validateMRZ(result);
+  const cs = validation.checksums;
+  if (validation.valid) checksumPassed = true;
 
   if (!l2Match) {
     if (l2 === lastL2) l2Count++; else { lastL2 = l2; l2Count = 1; }
@@ -1131,7 +1155,8 @@ async function scanLoop() {
 
   if (checksumPassed && l2Count >= 2) {
     drawOverlayState('accepted');
-    addLog('ok', `${result.type} → KABUL`, [`L2: ${l2}`], null, cs);
+    const diag = diagnoseMRZ(text);
+    addLog('ok', `${result.type} → KABUL`, [`L2: ${l2}`], null, cs, diag);
     if (serialMode) {
       addSerialResult(result);
       setTimeout(scanLoop, 500);
@@ -1277,14 +1302,7 @@ async function tryRecognize(canvas) {
   try {
     const { data: { text } } = await worker.recognize(canvas);
     const result = extractMRZ(clean(text));
-    if (result) {
-      const l2 = result.lines[1];
-      const cs = result.type === 'TD1'
-        ? { passOk: chk(result.lines[0].substring(5,14)) === +result.lines[0][14],
-            dobOk: chk(l2.substring(0,6)) === +l2[6], expOk: chk(l2.substring(8,14)) === +l2[14] }
-        : getChecksums_TD3(l2);
-      if (cs.passOk || (cs.dobOk && cs.expOk)) return result;
-    }
+    if (result && validateMRZ(result).valid) return result;
   } catch(e) { /* devam */ }
   return null;
 }
@@ -1514,10 +1532,10 @@ function toggleFullscreen() {
 
 function clearLog() { logEntries = []; scanCounter = 0; renderLog(); }
 
-function addLog(type, main, details = [], mrz = null, cs = null) {
+function addLog(type, main, details = [], mrz = null, cs = null, diag = null) {
   scanCounter++;
   const time = new Date().toTimeString().slice(0,8);
-  logEntries.unshift({ type, time, scan: scanCounter, main, details, cs });
+  logEntries.unshift({ type, time, scan: scanCounter, main, details, cs, diag });
   if (logEntries.length > MAX_LOGS) logEntries.pop();
   renderLog();
 }
@@ -1536,16 +1554,35 @@ function renderLog() {
     const csBadges = e.cs ? `<div class="log-cs">
       ${['passOk','dobOk','expOk'].map(k => {
         const lbl = {passOk:'Pass',dobOk:'DOB',expOk:'EXP'}[k];
-        return `<span class="cs-badge ${e.cs[k]?'cs-ok-badge':'cs-fail-badge'}">${lbl}${e.cs[k]?'✓':'✗'}</span>`;
+        const exp = e.cs[k.replace('Ok','Expected')];
+        const fnd = e.cs[k.replace('Ok','Found')];
+        const detail = (exp !== undefined && fnd !== undefined) ? ` (${exp}/${fnd})` : '';
+        return `<span class="cs-badge ${e.cs[k]?'cs-ok-badge':'cs-fail-badge'}">${lbl}${e.cs[k]?'✓':'✗'}${detail}</span>`;
       }).join('')}</div>` : '';
     const details = e.details.map(d =>
       `<div class="log-detail">${d.replace(/</g,'&lt;')}</div>`).join('');
+    // Diagnosis details
+    let diagHtml = '';
+    if (e.diag) {
+      const d = e.diag;
+      const parts = [];
+      if (d.rawText) parts.push('<div class="log-detail" style="color:var(--muted)">RAW: ' + d.rawText.substring(0,120).replace(/</g,'&lt;').replace(/\n/g,' ↵ ') + '</div>');
+      if (d.extracted) parts.push('<div class="log-detail">Lines: ' + d.extracted.lines.map(l => l.replace(/</g,'&lt;')).join(' | ') + '</div>');
+      if (d.parseResult) {
+        const pr = d.parseResult;
+        parts.push('<div class="log-detail" style="color:var(--green)">→ ' + (pr.surname||'') + ' ' + (pr.given||'') + ' | ' + (pr.passNo||'') + ' | ' + (pr.nation||'') + '</div>');
+      }
+      if (d.failureReasons && d.failureReasons.length) {
+        parts.push('<div class="log-detail" style="color:var(--red)">⚠ ' + d.failureReasons.join('; ') + '</div>');
+      }
+      diagHtml = parts.join('');
+    }
     return `<div class="log-row" onclick="copyEntry(${idx})">
       <div class="log-col-time">${e.time}</div>
       <div class="log-col-icon">${icons[e.type]||'•'}</div>
       <div class="log-col-body">
         <div class="log-main ${cc}">[#${e.scan}] ${e.main}</div>
-        ${details}${csBadges}
+        ${details}${csBadges}${diagHtml}
       </div>
     </div>`;
   }).join('');
@@ -1570,6 +1607,123 @@ function exportLog() {
   a.href = URL.createObjectURL(new Blob([data], {type:'application/json'}));
   a.download = `mrz-log-${new Date().toISOString().slice(0,16).replace(/[T:]/g,'-')}.json`;
   a.click();
+}
+
+// ── BATCH TEST ─────────────────────────────────────────────────────────
+async function startBatchTest(files) {
+  if (!files || !files.length) return;
+  if (!workerReady) {
+    alert('OCR motoru henüz hazır değil, lütfen bekleyin.');
+    return;
+  }
+  goScreen('s-batch');
+  const prog = document.getElementById('batch-prog');
+  const status = document.getElementById('batch-status');
+  const results = document.getElementById('batch-results');
+  document.getElementById('batch-progress').style.display = 'block';
+  results.innerHTML = '';
+
+  const rows = [];
+  let successCount = 0;
+  let totalTime = 0;
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    prog.style.width = ((i / files.length) * 100) + '%';
+    status.textContent = (i+1) + '/' + files.length + ' işleniyor: ' + file.name;
+
+    const img = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = ev => {
+        const im = new Image();
+        im.onload = () => resolve(im);
+        im.onerror = reject;
+        im.src = ev.target.result;
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    }).catch(() => null);
+
+    if (!img) {
+      rows.push({ name: file.name, ok: false, type: '—', cs: '—', time: 0, reason: 'Resim yüklenemedi' });
+      continue;
+    }
+
+    const t0 = performance.now();
+    let found = null;
+    let diag = null;
+
+    for (const deg of [0, 90, 270]) {
+      const full = makeCanvas(img, deg);
+      const band = cropBottom(full, 0.40);
+      const enhanced = preprocessForOCR(band);
+
+      // Enhanced crop
+      try {
+        const { data: { text } } = await worker.recognize(enhanced);
+        diag = diagnoseMRZ(text);
+        if (diag.extracted && validateMRZ(diag.extracted).valid) { found = diag; break; }
+      } catch(e) {}
+
+      // Raw crop
+      try {
+        const { data: { text } } = await worker.recognize(band);
+        diag = diagnoseMRZ(text);
+        if (diag.extracted && validateMRZ(diag.extracted).valid) { found = diag; break; }
+      } catch(e) {}
+
+      // Full enhanced
+      try {
+        const fullEnh = preprocessForOCR(full);
+        const { data: { text } } = await worker.recognize(fullEnh);
+        diag = diagnoseMRZ(text);
+        if (diag.extracted && validateMRZ(diag.extracted).valid) { found = diag; break; }
+      } catch(e) {}
+
+      // Full raw
+      try {
+        const { data: { text } } = await worker.recognize(full);
+        diag = diagnoseMRZ(text);
+        if (diag.extracted && validateMRZ(diag.extracted).valid) { found = diag; break; }
+      } catch(e) {}
+    }
+
+    const elapsed = Math.round(performance.now() - t0);
+    totalTime += elapsed;
+
+    if (found && found.extracted) {
+      successCount++;
+      const v = validateMRZ(found.extracted);
+      const csStr = ['Pass','DOB','EXP'].map((k,idx) => {
+        const key = ['passOk','dobOk','expOk'][idx];
+        return k + (v.checksums[key] ? '✓' : '✗');
+      }).join(' ');
+      rows.push({ name: file.name, ok: true, type: found.extracted.type, cs: csStr, time: elapsed, reason: '' });
+    } else {
+      const reasons = diag ? diag.failureReasons.join('; ') : 'OCR çıktısı alınamadı';
+      rows.push({ name: file.name, ok: false, type: '—', cs: '—', time: elapsed, reason: reasons });
+    }
+  }
+
+  prog.style.width = '100%';
+  status.textContent = 'Tamamlandı';
+  const avg = files.length > 0 ? Math.round(totalTime / files.length) : 0;
+
+  results.innerHTML = '<table class="batch-table"><thead><tr>' +
+    '<th>Dosya</th><th>Sonuç</th><th>Tip</th><th>Checksum</th><th>Süre</th>' +
+    '</tr></thead><tbody>' +
+    rows.map(r => '<tr>' +
+      '<td>' + r.name + '</td>' +
+      '<td class="' + (r.ok ? 'bt-ok' : 'bt-fail') + '">' + (r.ok ? '✅' : '❌') + '</td>' +
+      '<td>' + r.type + '</td>' +
+      '<td>' + r.cs + '</td>' +
+      '<td>' + r.time + 'ms</td>' +
+      '</tr>' + (r.reason ? '<tr><td colspan="5"><div class="batch-reason">' + r.reason + '</div></td></tr>' : '')
+    ).join('') +
+    '</tbody></table>' +
+    '<div class="batch-summary">' + successCount + '/' + files.length + ' başarılı, ortalama ' + avg + 'ms</div>';
+
+  document.getElementById('batch-file-in').value = '';
 }
 
 init();
