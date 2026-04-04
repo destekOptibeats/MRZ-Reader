@@ -1141,7 +1141,21 @@ function stopScan() {
   goScreen('s-home');
 }
 
-// ── SCAN ZONE ───────────────────────────────────────────────────────────
+// ── MRZ BAND — single source of truth for overlay + OCR crop ───────────
+function getMRZBand(vw, vh) {
+  const w = Math.round(vw * 0.90);
+  const h = Math.round(vh * 0.18);
+  let x = Math.round((vw - w) / 2);
+  let y = Math.round(vh * 0.65 - h / 2); // centered around bottom 35%
+  // Clamp within video bounds
+  if (x < 0) x = 0;
+  if (y < 0) y = 0;
+  if (x + w > vw) x = vw - w;
+  if (y + h > vh) y = vh - h;
+  return { x, y, w, h };
+}
+
+// Legacy — kept for getFrameHash compatibility (uses wider zone for motion detect)
 function getScanZone(vw, vh) {
   const h = Math.round(vh * 0.55), w = Math.round(vw * 0.99);
   return { x: Math.round((vw-w)/2), y: vh-h-Math.round(vh*0.03), w, h };
@@ -1214,8 +1228,6 @@ function drawOverlayState(state) {
     accepted:   '#10b981',
     blurry:     '#ef4444',
   };
-
-  // Dinamik yönlendirme mesajları
   const hints = {
     searching:  '📏 MRZ satırlarını çerçeveye hizalayın',
     found:      '✋ Sabit tutun…',
@@ -1224,96 +1236,65 @@ function drawOverlayState(state) {
     blurry:     '✋ Sabit tutun',
   };
 
-  // Canvas boyutunu video-wrap ile senkronize et
   resizeOverlay();
-
   const vw = camOvl.width, vh = camOvl.height;
-  if (!vw || !vh) return;
+  if (!vw || !vh || !video.videoWidth || !video.videoHeight) return;
 
+  // Dark overlay
   camCtx.clearRect(0, 0, vw, vh);
-  camCtx.fillStyle = 'rgba(0,0,0,0.45)';
+  camCtx.fillStyle = 'rgba(0,0,0,0.50)';
   camCtx.fillRect(0, 0, vw, vh);
 
-  // object-fit:fill — video tam container'ı kaplar, birebir oran
+  // MRZ band — single source of truth
+  const band = getMRZBand(video.videoWidth, video.videoHeight);
   const sx = vw / video.videoWidth;
   const sy = vh / video.videoHeight;
-  const z = getScanZone(video.videoWidth, video.videoHeight);
-  const dx  = z.x * sx;
-  const dy  = z.y * sy;
-  const ddw = z.w * sx;
-  const ddh = z.h * sy;
+  const bx = band.x * sx;
+  const by = band.y * sy;
+  const bw = band.w * sx;
+  const bh = band.h * sy;
 
-  // Belge çerçevesi temizle
-  camCtx.clearRect(dx, dy, ddw, ddh);
-
-  // MRZ bandı — alt %40
-  const bandH = ddh * 0.40;
-  const bandY = dy + ddh - bandH;
   const color = colors[state] || colors.searching;
 
-  // MRZ bandı arka plan + kenarlık
-  camCtx.fillStyle = color + '18';
-  camCtx.fillRect(dx, bandY, ddw, bandH);
+  // Clear MRZ region (transparent window)
+  camCtx.clearRect(bx, by, bw, bh);
+
+  // Frame border
+  const lineW = state === 'accepted' ? 3 : 2;
   camCtx.strokeStyle = color;
-  camCtx.lineWidth = 2;
-  camCtx.strokeRect(dx, bandY, ddw, bandH);
+  camCtx.lineWidth = lineW;
+  camCtx.strokeRect(bx, by, bw, bh);
 
-  // Köşe işaretleri — accepted durumda kalın
+  // Corner marks
   const cornerW = state === 'accepted' ? 5 : 3;
-  const cornerSize = state === 'accepted' ? 26 : 20;
-  drawCorners(dx, dy, ddw, ddh, color, cornerSize, cornerW);
+  const cornerSize = state === 'accepted' ? 22 : 16;
+  drawCorners(bx, by, bw, bh, color, cornerSize, cornerW);
 
-  // Accepted pulse — ikinci dış çerçeve
+  // Accepted pulse
   if (state === 'accepted') {
     camCtx.strokeStyle = color + '55';
     camCtx.lineWidth = 1.5;
-    camCtx.strokeRect(dx - 4, dy - 4, ddw + 8, ddh + 8);
+    camCtx.strokeRect(bx - 3, by - 3, bw + 6, bh + 6);
   }
 
-  // ── "MRZ ALANI" etiketi — bandın üst kenarında ──
-  const labelFontSize = Math.max(9, Math.round(ddw * 0.028));
+  // "MRZ ALANI" label — ABOVE the frame, not inside
+  const labelFontSize = Math.max(9, Math.round(bw * 0.032));
   camCtx.font = '600 ' + labelFontSize + 'px -apple-system, sans-serif';
   camCtx.textAlign = 'center';
   camCtx.textBaseline = 'bottom';
-  // Arka plan pill
   const labelText = 'MRZ ALANI';
-  const labelW = camCtx.measureText(labelText).width + 14;
-  const labelH = labelFontSize + 8;
-  const labelX = dx + ddw / 2 - labelW / 2;
-  const labelY = bandY - 6;
+  const lw = camCtx.measureText(labelText).width + 14;
+  const lh = labelFontSize + 8;
+  const lx = bx + bw / 2 - lw / 2;
+  const ly = by - 6;
   camCtx.fillStyle = 'rgba(0,0,0,0.65)';
   camCtx.beginPath();
-  camCtx.roundRect(labelX, labelY - labelH, labelW, labelH, 4);
+  camCtx.roundRect(lx, ly - lh, lw, lh, 4);
   camCtx.fill();
   camCtx.fillStyle = color;
-  camCtx.fillText(labelText, dx + ddw / 2, labelY - 4);
+  camCtx.fillText(labelText, bx + bw / 2, ly - 3);
 
-  // ── Belge tipi ipuçları — çerçevenin üstünde ──
-  const tipFontSize = Math.max(8, Math.round(ddw * 0.024));
-  camCtx.font = tipFontSize + 'px -apple-system, sans-serif';
-  camCtx.textAlign = 'center';
-  camCtx.textBaseline = 'top';
-  camCtx.fillStyle = 'rgba(255,255,255,0.45)';
-  camCtx.fillText('📘 Pasaport  ·  💳 Kimlik  ·  📗 Ehliyet', dx + ddw / 2, dy + 8);
-
-  // ── OCR INPUT debug border — exact crop region used for OCR ──
-  // OCR crops bottom 40% of scanZone in video pixel space
-  const ocrCropH = ddh * 0.40;
-  const ocrCropY = dy + ddh - ocrCropH;
-  camCtx.strokeStyle = '#ff0000';
-  camCtx.lineWidth = 1.5;
-  camCtx.setLineDash([4, 3]);
-  camCtx.strokeRect(dx + 1, ocrCropY, ddw - 2, ocrCropH);
-  camCtx.setLineDash([]);
-  // Label
-  const ocrLabelSize = Math.max(8, Math.round(ddw * 0.022));
-  camCtx.font = '600 ' + ocrLabelSize + 'px monospace';
-  camCtx.textAlign = 'right';
-  camCtx.textBaseline = 'top';
-  camCtx.fillStyle = '#ff0000';
-  camCtx.fillText('OCR INPUT', dx + ddw - 4, ocrCropY + 2);
-
-  // Hint mesajı güncelle
+  // Hint
   const hintType = state === 'accepted' ? 'ok' : state === 'searching' ? '' : 'warn';
   setHint(hints[state] || hints.searching, hintType);
 }
@@ -1326,22 +1307,28 @@ async function scanLoop() {
   // Serial cooldown — skip OCR but keep camera running
   if (serialCooldown) { setTimeout(scanLoop, 300); return; }
   const vw = video.videoWidth, vh = video.videoHeight;
-  if (!vw || !vh) { setTimeout(scanLoop, 500); return; }
-  const z = getScanZone(vw, vh);
+  if (!vw || !vh) {
+    setHint('Kamera hazırlanıyor...', 'warn');
+    setTimeout(scanLoop, 500); return;
+  }
 
+  // MRZ band = single source of truth (same as overlay)
+  const band = getMRZBand(vw, vh);
+
+  // Frame hash uses wider zone for motion detection
+  const z = getScanZone(vw, vh);
   const hash = getFrameHash(z);
   if (Math.abs(hash - lastFrameHash) < 5000 && !checksumPassed) {
     setTimeout(scanLoop, SCAN_INTERVAL); return;
   }
   lastFrameHash = hash;
 
-  const cropH = Math.round(z.h * 0.40);
-  const cropY = z.y + z.h - cropH;
-  const scale = z.w < 600 ? 2 : 1;
-  mainC.width  = z.w * scale;
-  mainC.height = cropH * scale;
+  // OCR crop = exact MRZ band from getMRZBand
+  const scale = band.w < 600 ? 2 : 1;
+  mainC.width  = band.w * scale;
+  mainC.height = band.h * scale;
   mainCtx.filter = 'grayscale(1) contrast(1.4)';
-  mainCtx.drawImage(video, z.x, cropY, z.w, cropH, 0, 0, mainC.width, mainC.height);
+  mainCtx.drawImage(video, band.x, band.y, band.w, band.h, 0, 0, mainC.width, mainC.height);
   mainCtx.filter = 'none';
 
   // Debug first 3 frames
@@ -1351,8 +1338,7 @@ async function scanLoop() {
     console.log('[ScanDebug] frame', scanDebugCount, '{',
       'videoNatural:', vw + 'x' + vh,
       'videoDOM:', Math.round(videoRect.width) + 'x' + Math.round(videoRect.height),
-      'scanZone: {x:' + z.x + ' y:' + z.y + ' w:' + z.w + ' h:' + z.h + '}',
-      'ocrCrop: {x:' + z.x + ' y:' + cropY + ' w:' + z.w + ' h:' + cropH + '}',
+      'mrzBand: {x:' + band.x + ' y:' + band.y + ' w:' + band.w + ' h:' + band.h + '}',
       'ocrCanvas:', mainC.width + 'x' + mainC.height,
     '}');
   }
