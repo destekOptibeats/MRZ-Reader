@@ -1730,36 +1730,152 @@ async function startBulkSerialScan(files) {
     prog.style.width = ((i / files.length) * 100) + '%';
     status.textContent = (i+1) + '/' + files.length + ': ' + files[i].name;
 
-    const img = await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = ev => { const im = new Image(); im.onload = () => resolve(im); im.onerror = reject; im.src = ev.target.result; };
-      reader.onerror = reject;
-      reader.readAsDataURL(files[i]);
-    }).catch(() => null);
-    if (!img) continue;
+    let imgData = null;
+    try { imgData = await loadImageFast(files[i]); }
+    catch(e) { continue; }
 
-    let found = null;
-    for (const deg of [0, 90, 270]) {
-      const full = makeCanvas(img, deg);
-      const band = cropBottom(full, 0.40);
-      const enhanced = preprocessForOCR(band);
-      try { const { data:{text} } = await worker.recognize(enhanced); const r = extractMRZ(clean(text)); if (r && validateMRZ(r).valid) { found = r; break; } } catch(e){}
-      try { const { data:{text} } = await worker.recognize(band); const r = extractMRZ(clean(text)); if (r && validateMRZ(r).valid) { found = r; break; } } catch(e){}
-      const fullEnh = preprocessForOCR(full);
-      try { const { data:{text} } = await worker.recognize(fullEnh); const r = extractMRZ(clean(text)); if (r && validateMRZ(r).valid) { found = r; break; } } catch(e){}
-      try { const { data:{text} } = await worker.recognize(full); const r = extractMRZ(clean(text)); if (r && validateMRZ(r).valid) { found = r; break; } } catch(e){}
-    }
+    const resized = resizeForOCR(imgData.img, 1400);
+    imgData.cleanup();
 
-    if (found) {
-      addSerialResult(found);
+    const timings = {};
+    const ocrResult = await fastBatchOCR(resized, timings);
+    if (ocrResult.extracted) {
+      addSerialResult(ocrResult.extracted);
     }
-    // UI donmasın
-    await new Promise(r => setTimeout(r, 500));
+    await new Promise(r => setTimeout(r, 300));
   }
 
   prog.style.width = '100%';
   status.textContent = '✅ ' + files.length + ' fotoğraf işlendi';
   document.getElementById('bulk-file-in').value = '';
+}
+
+// ── BATCH HELPERS ──────────────────────────────────────────────────────
+
+// HEIC detection
+function isHEIC(file) {
+  const name = (file.name || '').toLowerCase();
+  const type = (file.type || '').toLowerCase();
+  return name.endsWith('.heic') || name.endsWith('.heif') || type.includes('heic') || type.includes('heif');
+}
+
+// Lazy-load heic2any — returns promise, caches result
+let _heic2anyPromise = null;
+function ensureHeic2any() {
+  if (window.heic2any) return Promise.resolve(true);
+  if (_heic2anyPromise) return _heic2anyPromise;
+  _heic2anyPromise = new Promise((resolve) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js';
+    s.onload = () => resolve(!!window.heic2any);
+    s.onerror = () => resolve(false);
+    document.head.appendChild(s);
+  });
+  return _heic2anyPromise;
+}
+
+// Convert HEIC file to JPEG blob
+async function convertHEIC(file) {
+  const loaded = await ensureHeic2any();
+  if (!loaded) throw new Error('heic2any yüklenemedi');
+  const blob = await window.heic2any({ blob: file, toType: 'image/jpeg', quality: 0.8 });
+  return Array.isArray(blob) ? blob[0] : blob;
+}
+
+// Fast image loading: createImageBitmap > Image+objectURL > FileReader fallback
+async function loadImageFast(file) {
+  let blob = file;
+  let objectURL = null;
+
+  // HEIC conversion
+  if (isHEIC(file)) {
+    try { blob = await convertHEIC(file); }
+    catch(e) { throw new Error('HEIC dönüştürülemedi: ' + e.message); }
+  }
+
+  // Try createImageBitmap first (fastest, no DOM)
+  if (typeof createImageBitmap === 'function') {
+    try { return { img: await createImageBitmap(blob), cleanup: () => {} }; }
+    catch(e) { /* fallback */ }
+  }
+
+  // Fallback: objectURL + Image element
+  objectURL = URL.createObjectURL(blob);
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const im = new Image();
+      im.onload = () => resolve(im);
+      im.onerror = () => reject(new Error('Image decode failed'));
+      im.src = objectURL;
+    });
+    return { img, cleanup: () => URL.revokeObjectURL(objectURL) };
+  } catch(e) {
+    URL.revokeObjectURL(objectURL);
+    throw e;
+  }
+}
+
+// Resize so long side = maxSide, preserve aspect ratio
+function resizeForOCR(img, maxSide) {
+  maxSide = maxSide || 1400;
+  const w = img.naturalWidth || img.width;
+  const h = img.naturalHeight || img.height;
+  const longSide = Math.max(w, h);
+  const scale = longSide > maxSide ? maxSide / longSide : 1;
+  const rw = Math.round(w * scale), rh = Math.round(h * scale);
+  const c = document.createElement('canvas');
+  c.width = rw; c.height = rh;
+  c.getContext('2d').drawImage(img, 0, 0, rw, rh);
+  return c;
+}
+
+// Lightweight preprocessing for batch (grayscale + contrast, no sharpen)
+function batchPreprocess(srcCanvas) {
+  const c = document.createElement('canvas');
+  c.width = srcCanvas.width; c.height = srcCanvas.height;
+  const ctx = c.getContext('2d');
+  ctx.filter = 'grayscale(1) contrast(1.6)';
+  ctx.drawImage(srcCanvas, 0, 0);
+  ctx.filter = 'none';
+  return c;
+}
+
+// Fast batch OCR: crop 32% → fallback 45%, max 2 OCR attempts total
+async function fastBatchOCR(resized, timings) {
+  // Attempt 1: crop bottom 32% + preprocess
+  let t = performance.now();
+  const band1 = cropBottom(resized, 0.32);
+  const enhanced1 = batchPreprocess(band1);
+  timings.crop = Math.round(performance.now() - t);
+
+  t = performance.now();
+  try {
+    const { data: { text } } = await worker.recognize(enhanced1);
+    timings.ocr1 = Math.round(performance.now() - t);
+    const result = extractMRZ(clean(text));
+    if (result && validateMRZ(result).valid) {
+      return { extracted: result, diag: diagnoseMRZ(text), attempts: 1 };
+    }
+  } catch(e) { timings.ocr1 = Math.round(performance.now() - t); }
+
+  // Attempt 2 (fallback): crop bottom 45% + preprocess
+  const band2 = cropBottom(resized, 0.45);
+  const enhanced2 = batchPreprocess(band2);
+
+  t = performance.now();
+  try {
+    const { data: { text } } = await worker.recognize(enhanced2);
+    timings.ocr2 = Math.round(performance.now() - t);
+    const result = extractMRZ(clean(text));
+    if (result && validateMRZ(result).valid) {
+      return { extracted: result, diag: diagnoseMRZ(text), attempts: 2 };
+    }
+    // Failed but have diag
+    return { extracted: null, diag: diagnoseMRZ(text), attempts: 2 };
+  } catch(e) {
+    timings.ocr2 = Math.round(performance.now() - t);
+    return { extracted: null, diag: null, attempts: 2 };
+  }
 }
 
 // ── BATCH TEST ─────────────────────────────────────────────────────────
@@ -1785,76 +1901,47 @@ async function startBatchTest(files) {
     prog.style.width = ((i / files.length) * 100) + '%';
     status.textContent = (i+1) + '/' + files.length + ' işleniyor: ' + file.name;
 
-    const img = await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = ev => {
-        const im = new Image();
-        im.onload = () => resolve(im);
-        im.onerror = reject;
-        im.src = ev.target.result;
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    }).catch(() => null);
+    const timings = { decode: 0, resize: 0, crop: 0, ocr1: 0, ocr2: 0, total: 0 };
+    const t0 = performance.now();
 
-    if (!img) {
-      rows.push({ name: file.name, ok: false, type: '—', cs: '—', time: 0, reason: 'Resim yüklenemedi' });
+    // Fast image loading
+    let imgData = null;
+    let t = performance.now();
+    try {
+      imgData = await loadImageFast(file);
+      timings.decode = Math.round(performance.now() - t);
+    } catch(e) {
+      rows.push({ name: file.name, ok: false, type: '—', cs: '—', time: 0, timing: '', reason: (isHEIC(file) ? 'HEIC: ' : '') + e.message });
       continue;
     }
 
-    const t0 = performance.now();
-    let found = null;
-    let diag = null;
+    // Resize to max 1400px long side
+    t = performance.now();
+    const resized = resizeForOCR(imgData.img, 1400);
+    timings.resize = Math.round(performance.now() - t);
 
-    for (const deg of [0, 90, 270]) {
-      const full = makeCanvas(img, deg);
-      const band = cropBottom(full, 0.40);
-      const enhanced = preprocessForOCR(band);
+    // Cleanup objectURL
+    imgData.cleanup();
 
-      // Enhanced crop
-      try {
-        const { data: { text } } = await worker.recognize(enhanced);
-        diag = diagnoseMRZ(text);
-        if (diag.extracted && validateMRZ(diag.extracted).valid) { found = diag; break; }
-      } catch(e) {}
+    // Fast OCR (max 2 attempts)
+    const ocrResult = await fastBatchOCR(resized, timings);
 
-      // Raw crop
-      try {
-        const { data: { text } } = await worker.recognize(band);
-        diag = diagnoseMRZ(text);
-        if (diag.extracted && validateMRZ(diag.extracted).valid) { found = diag; break; }
-      } catch(e) {}
+    timings.total = Math.round(performance.now() - t0);
+    totalTime += timings.total;
+    const timingStr = 'D:' + timings.decode + ' R:' + timings.resize + ' C:' + timings.crop +
+      ' O1:' + timings.ocr1 + (timings.ocr2 ? ' O2:' + timings.ocr2 : '') + ' T:' + timings.total + 'ms';
 
-      // Full enhanced
-      try {
-        const fullEnh = preprocessForOCR(full);
-        const { data: { text } } = await worker.recognize(fullEnh);
-        diag = diagnoseMRZ(text);
-        if (diag.extracted && validateMRZ(diag.extracted).valid) { found = diag; break; }
-      } catch(e) {}
-
-      // Full raw
-      try {
-        const { data: { text } } = await worker.recognize(full);
-        diag = diagnoseMRZ(text);
-        if (diag.extracted && validateMRZ(diag.extracted).valid) { found = diag; break; }
-      } catch(e) {}
-    }
-
-    const elapsed = Math.round(performance.now() - t0);
-    totalTime += elapsed;
-
-    if (found && found.extracted) {
+    if (ocrResult.extracted) {
       successCount++;
-      const v = validateMRZ(found.extracted);
-      const csStr = ['Pass','DOB','EXP'].map((k,idx) => {
+      const v = validateMRZ(ocrResult.extracted);
+      const csStr = ['Pass','DOB','EXP'].map((k, idx) => {
         const key = ['passOk','dobOk','expOk'][idx];
         return k + (v.checksums[key] ? '✓' : '✗');
       }).join(' ');
-      rows.push({ name: file.name, ok: true, type: found.extracted.type, cs: csStr, time: elapsed, reason: '' });
+      rows.push({ name: file.name, ok: true, type: ocrResult.extracted.type, cs: csStr, time: timings.total, timing: timingStr, reason: '' });
     } else {
-      const reasons = diag ? diag.failureReasons.join('; ') : 'OCR çıktısı alınamadı';
-      rows.push({ name: file.name, ok: false, type: '—', cs: '—', time: elapsed, reason: reasons });
+      const reasons = ocrResult.diag ? ocrResult.diag.failureReasons.join('; ') : 'OCR çıktısı alınamadı';
+      rows.push({ name: file.name, ok: false, type: '—', cs: '—', time: timings.total, timing: timingStr, reason: reasons });
     }
   }
 
@@ -1863,7 +1950,7 @@ async function startBatchTest(files) {
   const avg = files.length > 0 ? Math.round(totalTime / files.length) : 0;
 
   results.innerHTML = '<table class="batch-table"><thead><tr>' +
-    '<th>Dosya</th><th>Sonuç</th><th>Tip</th><th>Checksum</th><th>Süre</th>' +
+    '<th>Dosya</th><th>Sonuç</th><th>Tip</th><th>Checksum</th><th>Süre</th><th>Detay</th>' +
     '</tr></thead><tbody>' +
     rows.map(r => '<tr>' +
       '<td>' + r.name + '</td>' +
@@ -1871,7 +1958,8 @@ async function startBatchTest(files) {
       '<td>' + r.type + '</td>' +
       '<td>' + r.cs + '</td>' +
       '<td>' + r.time + 'ms</td>' +
-      '</tr>' + (r.reason ? '<tr><td colspan="5"><div class="batch-reason">' + r.reason + '</div></td></tr>' : '')
+      '<td style="font-size:.68rem;color:var(--muted)">' + (r.timing || '') + '</td>' +
+      '</tr>' + (r.reason ? '<tr><td colspan="6"><div class="batch-reason">' + r.reason + '</div></td></tr>' : '')
     ).join('') +
     '</tbody></table>' +
     '<div class="batch-summary">' + successCount + '/' + files.length + ' başarılı, ortalama ' + avg + 'ms</div>';
