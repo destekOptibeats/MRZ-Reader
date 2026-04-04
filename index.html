@@ -592,6 +592,13 @@ input[type="text"] {
   <button class="btn ghost" onclick="goHome()" style="margin-top:10px">← Ana Ekran</button>
 </div>
 
+<!-- S-SERIAL-REPORT: SERİ TARAMA RAPORU -->
+<div class="screen" id="s-serial-report">
+  <div class="title">📊 Seri Tarama Raporu</div>
+  <div id="serial-report-body" style="width:100%;max-width:600px;overflow-x:auto;"></div>
+  <button class="btn blue" onclick="leaveSerialReport()">← Ana Ekrana Dön</button>
+</div>
+
 <canvas id="main-canvas" style="display:none"></canvas>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
@@ -674,6 +681,9 @@ let toastTimer = null;
 let serialTotalShots = 0;
 let serialStartTime = 0;
 let serialTimerInterval = null;
+let serialEntries = [];       // {docId, name, type, readCount, firstReadTime}
+let serialCooldown = false;
+let serialCooldownTimer = null;
 
 function showCamToast(msg, duration) {
   duration = duration || 2500;
@@ -716,8 +726,11 @@ function startSerialScan() {
   serialMode = true;
   serialCount = 0;
   serialScannedIds = [];
+  serialEntries = [];
   serialTotalShots = 0;
   serialStartTime = Date.now();
+  serialCooldown = false;
+  if (serialCooldownTimer) { clearTimeout(serialCooldownTimer); serialCooldownTimer = null; }
   document.getElementById('serial-panel').style.display = 'flex';
   document.getElementById('serial-finish-btn').style.display = 'flex';
   document.getElementById('serial-counter').textContent = '0';
@@ -752,7 +765,11 @@ function addSerialResult(mrzResult) {
       let c = parseInt(countEl.textContent) || 1;
       countEl.textContent = (c + 1) + 'x';
     }
+    // Track readCount on existing entry
+    const existing = serialEntries.find(e => e.docId === docId);
+    if (existing) existing.readCount++;
     lastFrameHash = 0; lastL2 = null; l2Count = 0; checksumPassed = false;
+    startSerialCooldown();
     return;
   }
 
@@ -775,9 +792,16 @@ function addSerialResult(mrzResult) {
   saved.push(entry);
   savePassports(saved);
 
-  // Duplicate listesine ekle
+  // Duplicate listesine ekle + session entry
   serialScannedIds.push(docId);
   serialCount++;
+  serialEntries.push({
+    docId,
+    name: parsed.surname + (parsed.given ? ' ' + parsed.given : ''),
+    type: mrzResult.type === 'TD1' ? 'TC Kimlik' : 'Pasaport',
+    readCount: 1,
+    firstReadTime: Date.now()
+  });
 
   // UI güncelle
   document.getElementById('serial-counter').textContent = serialCount;
@@ -804,16 +828,89 @@ function addSerialResult(mrzResult) {
   setHint('✓ ' + displayName + ' okundu', 'ok');
   drawOverlayState('accepted');
   setTimeout(() => { if (scanning) drawOverlayState('searching'); }, 800);
+
+  // Cooldown başlat
+  startSerialCooldown();
+}
+
+function startSerialCooldown() {
+  if (!serialMode) return;
+  serialCooldown = true;
+  if (serialCooldownTimer) clearTimeout(serialCooldownTimer);
+  let remaining = 3;
+  function tick() {
+    remaining--;
+    if (remaining > 0) {
+      setHint('Sonraki belge için hazır: ' + remaining + 's...', 'warn');
+      serialCooldownTimer = setTimeout(tick, 1000);
+    } else {
+      serialCooldown = false;
+      serialCooldownTimer = null;
+      if (scanning) {
+        setHint('📏 MRZ satırlarını çerçeveye hizalayın', '');
+        drawOverlayState('searching');
+      }
+    }
+  }
+  setHint('Sonraki belge için hazır: 2s...', 'warn');
+  serialCooldownTimer = setTimeout(tick, 1000);
 }
 
 function finishSerialScan() {
   serialMode = false;
   stopCamera();
+  serialCooldown = false;
+  if (serialCooldownTimer) { clearTimeout(serialCooldownTimer); serialCooldownTimer = null; }
   if (serialTimerInterval) { clearInterval(serialTimerInterval); serialTimerInterval = null; }
   document.getElementById('serial-panel').style.display = 'none';
   document.getElementById('serial-finish-btn').style.display = 'none';
   document.getElementById('cam-cancel-btn').style.display = '';
   document.getElementById('tab-bulk').style.display = 'none';
+
+  // Show report (don't go home yet — session data preserved)
+  showSerialReport();
+}
+
+function showSerialReport() {
+  const totalSec = Math.round((Date.now() - serialStartTime) / 1000);
+  const mm = String(Math.floor(totalSec / 60)).padStart(2, '0');
+  const ss = String(totalSec % 60).padStart(2, '0');
+  const avgSec = serialEntries.length > 0 ? (totalSec / serialEntries.length).toFixed(1) : '0.0';
+  const totalReads = serialEntries.reduce((s, e) => s + e.readCount, 0);
+
+  let html = '<table class="batch-table"><thead><tr>' +
+    '<th>Sıra</th><th>Ad Soyad</th><th>Belge No</th><th>Tip</th><th>Okuma</th><th>Süre</th>' +
+    '</tr></thead><tbody>';
+
+  serialEntries.forEach((e, i) => {
+    const elapsed = Math.round((e.firstReadTime - serialStartTime) / 1000);
+    html += '<tr>' +
+      '<td>' + (i+1) + '</td>' +
+      '<td>' + e.name + '</td>' +
+      '<td>' + e.docId + '</td>' +
+      '<td>' + e.type + '</td>' +
+      '<td><span style="background:#f59e0b;color:#000;padding:1px 6px;border-radius:5px;font-weight:700;font-size:.75rem">' + e.readCount + 'x</span></td>' +
+      '<td>' + elapsed + 's</td>' +
+      '</tr>';
+  });
+
+  html += '</tbody></table>';
+  html += '<div class="batch-summary">' +
+    '📄 ' + serialEntries.length + ' belge · ' +
+    '📷 ' + totalReads + ' toplam okuma · ' +
+    '⏱ ' + mm + ':' + ss + ' · ' +
+    '📊 Ort: ' + avgSec + 's/belge</div>';
+
+  document.getElementById('serial-report-body').innerHTML = html;
+  goScreen('s-serial-report');
+}
+
+function leaveSerialReport() {
+  // Reset session data only when leaving report
+  serialEntries = [];
+  serialScannedIds = [];
+  serialCount = 0;
+  serialTotalShots = 0;
   renderList();
   goScreen('s-home');
 }
@@ -1033,6 +1130,8 @@ function stopCamera() {
 function stopScan() {
   serialMode = false;
   stopCamera();
+  serialCooldown = false;
+  if (serialCooldownTimer) { clearTimeout(serialCooldownTimer); serialCooldownTimer = null; }
   if (serialTimerInterval) { clearInterval(serialTimerInterval); serialTimerInterval = null; }
   document.getElementById('serial-panel').style.display = 'none';
   document.getElementById('serial-finish-btn').style.display = 'none';
@@ -1207,6 +1306,8 @@ const SCAN_INTERVAL = 250;
 
 async function scanLoop() {
   if (!scanning || !workerReady) return;
+  // Serial cooldown — skip OCR but keep camera running
+  if (serialCooldown) { setTimeout(scanLoop, 300); return; }
   const vw = video.videoWidth, vh = video.videoHeight;
   if (!vw || !vh) { setTimeout(scanLoop, 500); return; }
   const z = getScanZone(vw, vh);
