@@ -2014,24 +2014,54 @@ function batchUpscaleIfNeeded(canvas) {
   return c;
 }
 
-// Fast batch OCR: crop 32% → fallback 45%, max 2 OCR attempts total
-// ocrWorker param: allows passing a dedicated batch worker or the global worker
-// Check longest line in OCR output — if < 30 chars, crop is insufficient
 function longestOCRLine(text) {
   if (!text) return 0;
   return text.split('\n').reduce((max, l) => Math.max(max, l.replace(/[^A-Z0-9<]/gi, '').length), 0);
 }
 
-// fileIndex=0 enables debug preview for first file only
+function countChevrons(text) {
+  return (text.match(/</g) || []).length;
+}
+
+// Rotate a canvas by degrees (0, 90, 180, 270). For 90/270, width/height swap.
+function rotateCanvas(srcCanvas, deg) {
+  if (deg === 0) return srcCanvas;
+  const sw = srcCanvas.width, sh = srcCanvas.height;
+  const swap = (deg === 90 || deg === 270);
+  const dw = swap ? sh : sw;
+  const dh = swap ? sw : sh;
+  const c = document.createElement('canvas');
+  c.width = dw; c.height = dh;
+  const ctx = c.getContext('2d');
+  ctx.translate(dw / 2, dh / 2);
+  ctx.rotate(deg * Math.PI / 180);
+  ctx.drawImage(srcCanvas, -sw / 2, -sh / 2, sw, sh);
+  return c;
+}
+
+// Score OCR text for MRZ likelihood (higher = better)
+function scoreMRZText(text) {
+  const longest = longestOCRLine(text);
+  const chevrons = countChevrons(text);
+  // Bonus for MRZ-length lines (30 for TD1, 44 for TD3)
+  let lineBonus = 0;
+  const lines = text.split('\n').map(l => l.replace(/[^A-Z0-9<]/gi, ''));
+  for (const l of lines) {
+    if (l.length >= 42 && l.length <= 46) lineBonus += 20;
+    else if (l.length >= 28 && l.length <= 32) lineBonus += 15;
+  }
+  return longest * 2 + chevrons + lineBonus;
+}
+
 async function fastBatchOCR(resized, timings, ocrWorker, fileName, fileIndex) {
   const wr = ocrWorker || worker;
   const isFirstFile = (fileIndex === 0);
+  const rotations = [0, 90, 180, 270];
 
   timings.resizedSize = resized.width + 'x' + resized.height;
   console.log('[BatchOCR]', fileName || '', 'resized:', resized.width, 'x', resized.height);
 
   const isLandscape = resized.width > resized.height;
-
   const crops = [
     isLandscape ? 0.50 : 0.45,
     isLandscape ? 0.65 : 0.60,
@@ -2047,52 +2077,76 @@ async function fastBatchOCR(resized, timings, ocrWorker, fileName, fileIndex) {
 
     t = performance.now();
     const cropped = ratio >= 1.0 ? resized : cropBottom(resized, ratio);
-    const preprocessed = batchPreprocessMRZ(cropped);
-    const ocrInput = batchUpscaleIfNeeded(preprocessed);
     if (i === 0) timings.crop = Math.round(performance.now() - t);
 
-    timings['sz' + (i+1)] = ocrInput.width + 'x' + ocrInput.height;
-    console.log('[BatchOCR] attempt', i+1,
-      'crop:', cropped.width + 'x' + cropped.height,
-      '→ preprocess:', preprocessed.width + 'x' + preprocessed.height,
-      '→ OCR input:', ocrInput.width + 'x' + ocrInput.height);
+    console.log('[BatchOCR] crop attempt', i+1, 'size:', cropped.width + 'x' + cropped.height);
 
-    // Visual crop debug — first file only
-    if (isFirstFile) {
-      try {
-        console.log('[BatchOCR] Crop attempt', i+1, 'preview (raw):', cropped.toDataURL('image/jpeg', 0.5));
-        console.log('[BatchOCR] Crop attempt', i+1, 'preview (processed):', ocrInput.toDataURL('image/jpeg', 0.5));
-      } catch(e) {}
-    }
-
-    if (ocrInput.width <= 100 || ocrInput.height <= 100) {
-      console.warn('[BatchOCR] attempt', i+1, 'SKIPPED: too small');
+    if (cropped.width <= 100 || cropped.height <= 100) {
+      console.warn('[BatchOCR] crop attempt', i+1, 'SKIPPED: too small');
       continue;
     }
 
+    // Try all rotations, collect scores
+    let bestScore = -1, bestText = '', bestDeg = 0;
+
     t = performance.now();
-    try {
-      const { data: { text } } = await wr.recognize(ocrInput);
-      timings[attemptKey] = Math.round(performance.now() - t);
-      const longest = longestOCRLine(text);
-      console.log('[BatchOCR] attempt', i+1, 'longest line:', longest, 'chars');
-      if (isFirstFile) console.log('[BatchOCR] OCR raw text:', text.substring(0, 200));
+    for (const deg of rotations) {
+      const rotated = rotateCanvas(cropped, deg);
+      const preprocessed = batchPreprocessMRZ(rotated);
+      const ocrInput = batchUpscaleIfNeeded(preprocessed);
 
-      if (longest < 30 && ratio < 1.0) {
-        lastDiag = diagnoseMRZ(text);
-        continue;
-      }
+      if (ocrInput.width <= 100 || ocrInput.height <= 100) continue;
 
-      const result = extractMRZ(clean(text));
-      if (result && validateMRZ(result).valid) {
-        console.log('[BatchOCR] SUCCESS at attempt', i+1);
-        return { extracted: result, diag: diagnoseMRZ(text), attempts: i + 1 };
+      try {
+        const { data: { text } } = await wr.recognize(ocrInput);
+        const score = scoreMRZText(text);
+        const longest = longestOCRLine(text);
+        const chevrons = countChevrons(text);
+
+        if (isFirstFile) {
+          console.log('[BatchOCR] crop', i+1, 'rot', deg + '°',
+            '→ longest:', longest, '<count:', chevrons, 'score:', score);
+        }
+
+        // Immediate success: try parse+checksum on promising results
+        if (longest >= 28) {
+          const result = extractMRZ(clean(text));
+          if (result && validateMRZ(result).valid) {
+            timings[attemptKey] = Math.round(performance.now() - t);
+            timings['sz' + (i+1)] = ocrInput.width + 'x' + ocrInput.height;
+            console.log('[BatchOCR] SUCCESS at crop', i+1, 'rot', deg + '°');
+            return { extracted: result, diag: diagnoseMRZ(text), attempts: i + 1 };
+          }
+        }
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestText = text;
+          bestDeg = deg;
+        }
+      } catch(e) {
+        if (isFirstFile) console.error('[BatchOCR] rot', deg + '° error:', e.message);
       }
-      lastDiag = diagnoseMRZ(text);
-    } catch(e) {
-      timings[attemptKey] = Math.round(performance.now() - t);
-      console.error('[BatchOCR] attempt', i+1, 'error:', e.message);
     }
+    timings[attemptKey] = Math.round(performance.now() - t);
+
+    if (isFirstFile) {
+      console.log('[BatchOCR] crop', i+1, 'best rotation:', bestDeg + '°', 'score:', bestScore);
+    }
+
+    // Try parse on best rotation result
+    if (bestText && longestOCRLine(bestText) >= 28) {
+      const result = extractMRZ(clean(bestText));
+      if (result && validateMRZ(result).valid) {
+        console.log('[BatchOCR] SUCCESS (best rot) at crop', i+1, 'rot', bestDeg + '°');
+        return { extracted: result, diag: diagnoseMRZ(bestText), attempts: i + 1 };
+      }
+    }
+
+    if (bestText) lastDiag = diagnoseMRZ(bestText);
+
+    // If best longest line < 30 and not full image, try wider crop
+    if (longestOCRLine(bestText) < 30 && ratio < 1.0) continue;
   }
 
   return { extracted: null, diag: lastDiag, attempts: crops.length };
