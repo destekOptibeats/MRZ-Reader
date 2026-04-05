@@ -1183,6 +1183,22 @@ function getMRZBand(vw, vh) {
   return { x, y, w, h };
 }
 
+// 3 candidate bands at different vertical positions for adaptive detection
+function getMRZBandCandidates(vw, vh) {
+  const w = Math.round(vw * 0.90);
+  const h = Math.round(vh * 0.18);
+  const positions = [0.60, 0.70, 0.80]; // center Y ratios
+  return positions.map(p => {
+    let x = Math.round((vw - w) / 2);
+    let y = Math.round(vh * p - h / 2);
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    if (x + w > vw) x = vw - w;
+    if (y + h > vh) y = vh - h;
+    return { x, y, w, h };
+  });
+}
+
 // Legacy — kept for getFrameHash compatibility (uses wider zone for motion detect)
 function getScanZone(vw, vh) {
   const h = Math.round(vh * 0.55), w = Math.round(vw * 0.99);
@@ -1341,9 +1357,6 @@ async function scanLoop() {
     setTimeout(scanLoop, 500); return;
   }
 
-  // MRZ band = single source of truth (same as overlay)
-  const band = getMRZBand(vw, vh);
-
   // Frame hash uses wider zone for motion detection
   const z = getScanZone(vw, vh);
   const hash = getFrameHash(z);
@@ -1352,86 +1365,98 @@ async function scanLoop() {
   }
   lastFrameHash = hash;
 
-  // OCR crop = exact MRZ band from getMRZBand (video pixel space)
-  let ocrW = band.w, ocrH = band.h;
+  // Adaptive multi-band: try 3 vertical positions, stop early on strong result
+  const candidates = getMRZBandCandidates(vw, vh);
+  const isDebug = scanDebugCount < 3;
+  if (isDebug) scanDebugCount++;
 
-  // Upscale small bands for better OCR
-  if (ocrW < 600) { ocrW *= 2; ocrH *= 2; }
+  let bestText = '', bestResult = null, bestScore = -1, bestBandIdx = -1;
 
-  // Limit OCR input: max 1200px width
-  if (ocrW > 1200) {
-    const ds = 1200 / ocrW;
-    ocrH = Math.round(ocrH * ds);
-    ocrW = 1200;
-  }
+  for (let bi = 0; bi < candidates.length; bi++) {
+    const band = candidates[bi];
 
-  mainC.width  = ocrW;
-  mainC.height = ocrH;
-  mainCtx.filter = 'grayscale(1) contrast(1.4)';
-  mainCtx.drawImage(video, band.x, band.y, band.w, band.h, 0, 0, ocrW, ocrH);
-  mainCtx.filter = 'none';
+    // Scale OCR input
+    let ocrW = band.w, ocrH = band.h;
+    if (ocrW < 600) { ocrW *= 2; ocrH *= 2; }
+    if (ocrW > 1200) { const ds = 1200 / ocrW; ocrH = Math.round(ocrH * ds); ocrW = 1200; }
 
-  // Debug first 3 frames
-  if (scanDebugCount < 3) {
-    scanDebugCount++;
-    const videoRect = video.getBoundingClientRect();
-    const vdr = getVideoDisplayRect();
-    console.log('[ScanDebug] frame', scanDebugCount, '{',
-      'videoNatural:', vw + 'x' + vh,
-      'videoDOM:', Math.round(videoRect.width) + 'x' + Math.round(videoRect.height),
-      'displayRect:', vdr ? Math.round(vdr.dx)+','+Math.round(vdr.dy)+' '+Math.round(vdr.dw)+'x'+Math.round(vdr.dh) : 'null',
-      'mrzBand: {x:' + band.x + ' y:' + band.y + ' w:' + band.w + ' h:' + band.h + '}',
-      'ocrRaw:', band.w + 'x' + band.h,
-      'ocrScaled:', ocrW + 'x' + ocrH,
-    '}');
-  }
+    mainC.width = ocrW;
+    mainC.height = ocrH;
+    mainCtx.filter = 'grayscale(1) contrast(1.4)';
+    mainCtx.drawImage(video, band.x, band.y, band.w, band.h, 0, 0, ocrW, ocrH);
+    mainCtx.filter = 'none';
 
-  if (!isSharpEnough(mainC)) {
-    drawOverlayState('blurry');
-    setTimeout(scanLoop, SCAN_INTERVAL); return;
-  }
-
-  let text;
-  try { text = (await worker.recognize(mainC)).data.text; }
-  catch(e) { setTimeout(scanLoop, SCAN_INTERVAL); return; }
-
-  const result = extractMRZ(clean(text));
-  if (!result) {
-    drawOverlayState('searching');
-    setTimeout(scanLoop, SCAN_INTERVAL); return;
-  }
-
-  const confirmCanvas = upscaleCanvas(mainC, 2);
-  let confirmText;
-  try { confirmText = (await worker.recognize(confirmCanvas)).data.text; }
-  catch(e) { confirmText = ''; }
-  const confirmed = extractMRZ(clean(confirmText));
-  const l2Match = confirmed && confirmed.lines[1] === result.lines[1];
-  if (l2Match) { lastL2 = result.lines[1]; l2Count = 2; }
-
-  const l2 = result.lines[1];
-  const validation = validateMRZ(result);
-  const cs = validation.checksums;
-  if (validation.valid) checksumPassed = true;
-
-  if (!l2Match) {
-    if (l2 === lastL2) l2Count++; else { lastL2 = l2; l2Count = 1; }
-  }
-
-  if (checksumPassed && l2Count >= 2) {
-    drawOverlayState('accepted');
-    const diag = diagnoseMRZ(text);
-    addLog('ok', `${result.type} → KABUL`, [`L2: ${l2}`], null, cs, diag);
-    if (serialMode) {
-      addSerialResult(result);
-      setTimeout(scanLoop, 500);
-      return;
+    // Sharpness check on first band only
+    if (bi === 0 && !isSharpEnough(mainC)) {
+      if (isDebug) console.log('[ScanDebug] frame', scanDebugCount, 'blurry — skipping all bands');
+      drawOverlayState('blurry');
+      setTimeout(scanLoop, SCAN_INTERVAL); return;
     }
-    setTimeout(() => { stopCamera(); saveAndShow(result); }, 250);
-    return;
+
+    let text;
+    try { text = (await worker.recognize(mainC)).data.text; }
+    catch(e) { continue; }
+
+    const longest = longestOCRLine(text);
+    const score = scoreMRZText(text);
+
+    if (isDebug) {
+      console.log('[ScanDebug] frame', scanDebugCount,
+        'band' + (bi+1), '{y:' + band.y + ' h:' + band.h + '}',
+        'longest:', longest, 'score:', score);
+    }
+
+    // Priority 1: parse + checksum success → immediate accept
+    const result = extractMRZ(clean(text));
+    if (result) {
+      const validation = validateMRZ(result);
+      if (validation.valid) {
+        if (isDebug) console.log('[ScanDebug] frame', scanDebugCount, 'selected: band' + (bi+1), '(parse+checksum success)');
+
+        checksumPassed = true;
+        const l2 = result.lines[1];
+        if (l2 === lastL2) l2Count++; else { lastL2 = l2; l2Count = 1; }
+
+        if (l2Count >= 2) {
+          drawOverlayState('accepted');
+          const diag = diagnoseMRZ(text);
+          addLog('ok', `${result.type} → KABUL`, [`L2: ${l2}`], null, validation.checksums, diag);
+          if (serialMode) { addSerialResult(result); setTimeout(scanLoop, 500); return; }
+          setTimeout(() => { stopCamera(); saveAndShow(result); }, 250);
+          return;
+        }
+
+        drawOverlayState('confirming');
+        setTimeout(scanLoop, SCAN_INTERVAL);
+        return;
+      }
+    }
+
+    // Track best
+    if (score > bestScore) { bestScore = score; bestText = text; bestResult = result; bestBandIdx = bi; }
+
+    // Early exit: longest > 35 → no need to try more bands
+    if (longest > 35) {
+      if (isDebug) console.log('[ScanDebug] frame', scanDebugCount, 'early exit at band' + (bi+1), '(longest > 35)');
+      break;
+    }
   }
 
-  drawOverlayState(checksumPassed ? 'confirming' : 'found');
+  if (isDebug) {
+    console.log('[ScanDebug] frame', scanDebugCount,
+      'selected: band' + (bestBandIdx+1), 'score:', bestScore,
+      'longest:', longestOCRLine(bestText));
+  }
+
+  // Process best result
+  if (bestResult) {
+    const l2 = bestResult.lines[1];
+    if (l2 === lastL2) l2Count++; else { lastL2 = l2; l2Count = 1; }
+    drawOverlayState('found');
+  } else {
+    drawOverlayState('searching');
+  }
+
   setTimeout(scanLoop, SCAN_INTERVAL);
 }
 
