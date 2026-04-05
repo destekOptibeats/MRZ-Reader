@@ -400,7 +400,7 @@ input[type="text"] {
 </style>
 </head>
 <body>
-<div class="version-tag">v2.1.28</div>
+<div class="version-tag">v2.2.0</div>
 
 <!-- cache status pill -->
 <div id="cache-pill"><div class="pill-dot"></div><span id="pill-txt">Yükleniyor…</span></div>
@@ -1329,7 +1329,12 @@ function stopScan() {
   goScreen('s-home');
 }
 
-// ── MRZ BAND — single source of truth for overlay + OCR crop ───────────
+// ═══════════════════════════════════════════════════════════════════════
+// CAMERA PATH — Guided Capture
+// Crop geometry derives from screen-based getMRZBand / getMRZBandCandidates.
+// User aligns document to on-screen frame.
+// These functions must NOT be used by image upload or batch paths.
+// ═══════════════════════════════════════════════════════════════════════
 function getMRZBandSize(vh) {
   const isDesktop = window.innerWidth >= 768;
   const hRatio = isDesktop ? 0.22 : 0.24;
@@ -1806,10 +1811,15 @@ dz.addEventListener('drop',      e => {
   if (f) onFile({ target: { files: [f] } });
 });
 
-// ── PROCESS IMAGE ──────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════
+// IMAGE UPLOAD PATH — Unguided Capture
+// No screen geometry. Uses rotation + vertical band search.
+// No assumption about document alignment.
+// These functions must NOT be used by camera path.
+// ═══════════════════════════════════════════════════════════════════════
 
-// Resmi max genişliğe ölçekle + döndür
-function makeCanvas(img, deg) {
+// Resmi max genişliğe ölçekle + döndür (upload-only)
+function uploadMakeCanvas(img, deg) {
   const swap = deg === 90 || deg === 270;
   const sw = swap ? img.naturalHeight : img.naturalWidth;
   const sh = swap ? img.naturalWidth  : img.naturalHeight;
@@ -1824,30 +1834,26 @@ function makeCanvas(img, deg) {
   ctx.restore(); return c;
 }
 
-// Alt bölgeyi crop et — explicit dimensions, clamped to source bounds
-function cropBottom(srcCanvas, ratio) {
+// Upload-only: crop a vertical band by center position and height ratio
+function uploadCropBand(srcCanvas, centerY, heightRatio) {
   const sw = srcCanvas.width, sh = srcCanvas.height;
-  if (!sw || !sh) return srcCanvas; // safety
-  const cropH = Math.min(Math.round(sh * ratio), sh);
-  const sy = Math.max(sh - cropH, 0);
-  const cropW = sw;
+  if (!sw || !sh) return srcCanvas;
+  const cropH = Math.min(Math.round(sh * heightRatio), sh);
+  let sy = Math.round(sh * centerY - cropH / 2);
+  sy = Math.max(0, Math.min(sy, sh - cropH));
   const c = document.createElement('canvas');
-  c.width = cropW;
-  c.height = cropH;
-  c.getContext('2d').drawImage(srcCanvas,
-    0, sy, cropW, cropH,
-    0, 0, cropW, cropH);
+  c.width = sw; c.height = cropH;
+  c.getContext('2d').drawImage(srcCanvas, 0, sy, sw, cropH, 0, 0, sw, cropH);
   return c;
 }
 
-// Grayscale + contrast + sharpen ön işleme
-function preprocessForOCR(srcCanvas) {
+// Upload-only: grayscale + contrast + unsharp mask
+function uploadPreprocess(srcCanvas) {
   const w = srcCanvas.width, h = srcCanvas.height;
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
   const ctx = c.getContext('2d');
 
-  // contrast(1.6) + grayscale(1) CSS filtresi
   ctx.filter = 'grayscale(1) contrast(1.6)';
   ctx.drawImage(srcCanvas, 0, 0);
   ctx.filter = 'none';
@@ -1877,8 +1883,8 @@ function preprocessForOCR(srcCanvas) {
   return c;
 }
 
-// OCR ile MRZ tanıma denemesi — başarılıysa result döner, değilse null
-async function tryRecognize(canvas) {
+// Upload-only: OCR → parse → checksum denemesi
+async function uploadTryRecognize(canvas) {
   try {
     const { data: { text } } = await worker.recognize(canvas);
     const result = extractMRZ(clean(text));
@@ -1887,6 +1893,7 @@ async function tryRecognize(canvas) {
   return null;
 }
 
+// Upload main: rotation × vertical band search (unguided)
 async function processImage(img) {
   if (!workerReady) return;
   processingCancelled = false;
@@ -1897,36 +1904,37 @@ async function processImage(img) {
 
   procProg.style.width = '10%';
 
+  // Vertical band search positions: center Y ratio, height ratio, label
+  const bandConfigs = [
+    { cy: 0.80, hr: 0.40, label: 'alt %40' },
+    { cy: 0.65, hr: 0.50, label: 'orta-alt %50' },
+    { cy: 0.50, hr: 1.00, label: 'tam resim' },
+  ];
+
   for (const deg of [0, 90, 270]) {
     if (processingCancelled) return;
     const pct = deg === 0 ? 15 : deg === 90 ? 40 : 65;
     procProg.style.width = pct + '%';
 
-    const full = makeCanvas(img, deg);
+    const full = uploadMakeCanvas(img, deg);
 
-    // Adım 1: Alt %40 crop + preprocessing ile dene
-    procMsg.textContent = `${deg}° alt bölge taranıyor…`;
-    const band = cropBottom(full, 0.40);
-    const enhanced = preprocessForOCR(band);
-    let result = await tryRecognize(enhanced);
-    if (result) { procProg.style.width='100%'; document.getElementById('proc-cancel-btn').style.display='none'; saveAndShow(result); return; }
+    for (let bi = 0; bi < bandConfigs.length; bi++) {
+      if (processingCancelled) return;
+      const bc = bandConfigs[bi];
+      procMsg.textContent = `${deg}° ${bc.label} taranıyor…`;
 
-    // Adım 2: Alt %40 crop ham (preprocessing'siz) dene
-    if (processingCancelled) return;
-    result = await tryRecognize(band);
-    if (result) { procProg.style.width='100%'; document.getElementById('proc-cancel-btn').style.display='none'; saveAndShow(result); return; }
+      const cropped = bc.hr >= 1.0 ? full : uploadCropBand(full, bc.cy, bc.hr);
 
-    // Adım 3: Tam resim + preprocessing ile fallback
-    if (processingCancelled) return;
-    procMsg.textContent = `${deg}° tam resim taranıyor…`;
-    const fullEnhanced = preprocessForOCR(full);
-    result = await tryRecognize(fullEnhanced);
-    if (result) { procProg.style.width='100%'; document.getElementById('proc-cancel-btn').style.display='none'; saveAndShow(result); return; }
+      // Preprocessed attempt
+      const enhanced = uploadPreprocess(cropped);
+      let result = await uploadTryRecognize(enhanced);
+      if (result) { procProg.style.width='100%'; document.getElementById('proc-cancel-btn').style.display='none'; saveAndShow(result); return; }
 
-    // Adım 4: Tam resim ham fallback
-    if (processingCancelled) return;
-    result = await tryRecognize(full);
-    if (result) { procProg.style.width='100%'; document.getElementById('proc-cancel-btn').style.display='none'; saveAndShow(result); return; }
+      // Raw attempt (no preprocessing)
+      if (processingCancelled) return;
+      result = await uploadTryRecognize(cropped);
+      if (result) { procProg.style.width='100%'; document.getElementById('proc-cancel-btn').style.display='none'; saveAndShow(result); return; }
+    }
   }
 
   document.getElementById('proc-cancel-btn').style.display = 'none';
@@ -2296,8 +2304,12 @@ async function loadImageFast(file) {
   return loadImageElement(blob);
 }
 
-// Resize so long side = maxSide, preserve aspect ratio
-// Dimension order: img.width/height first (works for ImageBitmap), then naturalWidth/Height (HTMLImageElement)
+// ═══════════════════════════════════════════════════════════════════════
+// BATCH PATH — Unguided Capture (file-based)
+// No screen geometry. Uses dynamic crop ratios + all rotations.
+// These functions must NOT be used by camera path.
+// ═══════════════════════════════════════════════════════════════════════
+
 function resizeForOCR(img, maxSide) {
   maxSide = maxSide || 1400;
   // ImageBitmap has .width/.height; HTMLImageElement has .naturalWidth/.naturalHeight
@@ -2362,6 +2374,18 @@ function batchPreprocessMRZ(srcCanvas) {
   return c;
 }
 
+// Batch-only: crop bottom N% of image (no screen geometry)
+function batchCropBottom(srcCanvas, ratio) {
+  const sw = srcCanvas.width, sh = srcCanvas.height;
+  if (!sw || !sh) return srcCanvas;
+  const cropH = Math.min(Math.round(sh * ratio), sh);
+  const sy = Math.max(sh - cropH, 0);
+  const c = document.createElement('canvas');
+  c.width = sw; c.height = cropH;
+  c.getContext('2d').drawImage(srcCanvas, 0, sy, sw, cropH, 0, 0, sw, cropH);
+  return c;
+}
+
 // Simple upscale for small crop canvases
 function batchUpscaleIfNeeded(canvas) {
   if (canvas.height >= 400) return canvas;
@@ -2375,6 +2399,7 @@ function batchUpscaleIfNeeded(canvas) {
   return c;
 }
 
+// ── SHARED SCORING HELPERS (used by camera + batch) ─────────────────────
 function longestOCRLine(text) {
   if (!text) return 0;
   return text.split('\n').reduce((max, l) => Math.max(max, l.replace(/[^A-Z0-9<]/gi, '').length), 0);
@@ -2437,7 +2462,7 @@ async function fastBatchOCR(resized, timings, ocrWorker, fileName, fileIndex) {
     const attemptKey = 'ocr' + (i + 1);
 
     t = performance.now();
-    const cropped = ratio >= 1.0 ? resized : cropBottom(resized, ratio);
+    const cropped = ratio >= 1.0 ? resized : batchCropBottom(resized, ratio);
     if (i === 0) timings.crop = Math.round(performance.now() - t);
 
     console.log('[BatchOCR] crop attempt', i+1, 'size:', cropped.width + 'x' + cropped.height);
