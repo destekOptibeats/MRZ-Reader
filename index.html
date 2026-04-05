@@ -735,57 +735,59 @@ function makeSerialKey(parsed) {
   ].join('|');
 }
 
-function addSerialResult(mrzResult) {
+// ocrMeta: { ocrText, bandIdx, ocrAttempts } — optional, for analysis
+function addSerialResult(mrzResult, ocrMeta) {
+  ocrMeta = ocrMeta || {};
   const parsed = parseResult(mrzResult);
   const docId = (parsed.passNo || '').replace(/</g,'').trim();
   const compositeKey = makeSerialKey(parsed);
+  const readTime = Date.now();
+
+  // OCR analysis fields — captured at accept time
+  const ocrText = ocrMeta.ocrText || '';
+  const longest = longestOCRLine(ocrText);
+  const chevrons = countChevrons(ocrText);
+  const bandLabel = ocrMeta.bandIdx != null ? 'band' + (ocrMeta.bandIdx + 1) : '—';
+  const attempts = ocrMeta.ocrAttempts || 1;
 
   // Her okumada toplam çekim artır
   serialTotalShots++;
   document.getElementById('serial-total-shots').textContent = serialTotalShots;
   bounceStat('serial-total-shots');
 
-  // Duplicate kontrolü — composite key ile karşılaştır
-  const existingIdx = serialEntries.findIndex(e => e.compositeKey === compositeKey);
-  if (existingIdx >= 0) {
+  // Duplicate: still show toast + flash, but also add as analysis entry
+  const isDuplicate = serialScannedIds.includes(docId);
+  if (isDuplicate) {
     const dupName = (parsed.surname || '') + (parsed.given ? ' ' + parsed.given : '');
-    showCamToast('⚠️ Bu belge zaten eklendi: ' + dupName, 3000);
+    showCamToast('⚠️ Tekrar okundu: ' + dupName, 2000);
     flashScan('dup');
-    const countEl = document.getElementById('sr-count-' + serialEntries[existingIdx].docId);
+    const countEl = document.getElementById('sr-count-' + docId);
     if (countEl) {
       let c = parseInt(countEl.textContent) || 1;
       countEl.textContent = (c + 1) + 'x';
     }
-    serialEntries[existingIdx].readCount++;
-    lastFrameHash = 0; lastL2 = null; l2Count = 0; checksumPassed = false;
-    startSerialCooldown();
-    return;
+  } else {
+    flashScan('new');
+    // Save to localStorage only for first occurrence
+    const photo = captureDocPhoto();
+    const entry = {
+      id: 'pp_' + Date.now(),
+      line1: mrzResult.lines[0],
+      line2: mrzResult.lines[1],
+      line3: mrzResult.lines[2] || '',
+      type:  mrzResult.type,
+      name:  parsed.surname + (parsed.given ? ', ' + parsed.given : ''),
+      nation: parsed.nation,
+      photo: photo || '',
+      addedAt: readTime
+    };
+    const saved = loadPassports();
+    saved.push(entry);
+    savePassports(saved);
+    serialScannedIds.push(docId);
   }
 
-  flashScan('new');
-
-  // Timing: record read time BEFORE cooldown
-  const readTime = Date.now();
-
-  // localStorage'a kaydet
-  const photo = captureDocPhoto();
-  const entry = {
-    id: 'pp_' + Date.now(),
-    line1: mrzResult.lines[0],
-    line2: mrzResult.lines[1],
-    line3: mrzResult.lines[2] || '',
-    type:  mrzResult.type,
-    name:  parsed.surname + (parsed.given ? ', ' + parsed.given : ''),
-    nation: parsed.nation,
-    photo: photo || '',
-    addedAt: readTime
-  };
-  const saved = loadPassports();
-  saved.push(entry);
-  savePassports(saved);
-
-  // Session entry — composite key based
-  serialScannedIds.push(docId);
+  // Always add analysis entry (every scan = separate row in report)
   serialCount++;
   serialEntries.push({
     docId,
@@ -793,7 +795,21 @@ function addSerialResult(mrzResult) {
     name: parsed.surname + (parsed.given ? ' ' + parsed.given : ''),
     type: mrzResult.type === 'TD1' ? 'TC Kimlik' : 'Pasaport',
     readCount: 1,
-    firstReadTime: readTime
+    firstReadTime: readTime,
+    isDuplicate,
+    // OCR analysis fields
+    selectedBand: bandLabel,
+    longestLine: longest,
+    chevronCount: chevrons,
+    ocrAttempts: attempts,
+    rawOcrText: ocrText,
+    // Parsed fields for consistency comparison
+    parsedFields: {
+      documentNumber: docId || null,
+      birthDate: parsed.dob || null,
+      surname: parsed.surname || null,
+      givenNames: parsed.given || null,
+    }
   });
 
   // UI güncelle
@@ -886,27 +902,45 @@ function getResultComment(reason) {
 }
 
 function formatResultForCopy(r) {
-  return [
+  const lines = [
     'Belge: ' + (r.name || '—'),
     'Tip: ' + (r.docType || '—'),
     'Sonuç: ' + (r.finalResult || '—'),
-    'Süre: ' + (r.durationMs != null ? r.durationMs + 'ms' : '—'),
+    'Süre: ' + (r.durationMs != null ? r.durationMs + 'ms' : (r.durationSec != null ? r.durationSec + 's' : '—')),
     'Band: ' + (r.selectedBand || '—'),
+    'OCR Deneme: ' + (r.ocrAttempts || '—'),
     'En Uzun Satır: ' + (r.longestLine || '—'),
+    'Chevron (<): ' + (r.chevronCount != null ? r.chevronCount : '—'),
     'Parse: ' + (r.parseOk ? 'OK' : 'FAIL'),
     'Checksum: ' + (r.checksumOk ? 'OK' : 'FAIL'),
     'Sebep: ' + (r.failReason || '—'),
     'Yorum: ' + (r.comment || '—'),
-  ].join('\n');
+  ];
+  if (r.parsedFields) {
+    const pf = r.parsedFields;
+    lines.push('--- Parsed Fields ---');
+    lines.push('Belge No: ' + (pf.documentNumber || '—'));
+    lines.push('Doğum Tarihi: ' + (pf.birthDate || '—'));
+    lines.push('Soyad: ' + (pf.surname || '—'));
+    lines.push('Ad: ' + (pf.givenNames || '—'));
+  }
+  if (r.rawOcrText) {
+    lines.push('--- Raw OCR ---');
+    lines.push(r.rawOcrText.substring(0, 300));
+  }
+  return lines.join('\n');
 }
 
 function formatAllResultsForCopy(results, summary) {
-  let md = '| # | Belge | Tip | Sonuç | Süre | Band | Uzun Satır | Parse | CS | Yorum |\n';
-  md += '|---|-------|-----|-------|------|------|------------|-------|----|---------|\n';
+  let md = '| # | Belge | Tip | Sonuç | Süre | Band | Deneme | Uzun Satır | <Count | DocNo | DOB | Soyad | Ad | Yorum |\n';
+  md += '|---|-------|-----|-------|------|------|--------|------------|--------|-------|-----|-------|----|---------|\n';
   results.forEach((r, i) => {
+    const pf = r.parsedFields || {};
     md += '| ' + (i+1) + ' | ' + (r.name||'—') + ' | ' + (r.docType||'—') + ' | ' + (r.finalResult||'—') +
-      ' | ' + (r.durationMs != null ? r.durationMs+'ms' : '—') + ' | ' + (r.selectedBand||'—') +
-      ' | ' + (r.longestLine||'—') + ' | ' + (r.parseOk?'OK':'FAIL') + ' | ' + (r.checksumOk?'OK':'FAIL') +
+      ' | ' + (r.durationMs != null ? r.durationMs+'ms' : (r.durationSec != null ? r.durationSec+'s' : '—')) +
+      ' | ' + (r.selectedBand||'—') + ' | ' + (r.ocrAttempts||'—') +
+      ' | ' + (r.longestLine||'—') + ' | ' + (r.chevronCount != null ? r.chevronCount : '—') +
+      ' | ' + (pf.documentNumber||'—') + ' | ' + (pf.birthDate||'—') + ' | ' + (pf.surname||'—') + ' | ' + (pf.givenNames||'—') +
       ' | ' + (r.comment||'—') + ' |\n';
   });
   if (summary) md += '\n' + summary;
@@ -924,42 +958,47 @@ function showSerialReport() {
   const totalSec = Math.round((Date.now() - serialStartTime) / 1000);
   const mm = String(Math.floor(totalSec / 60)).padStart(2, '0');
   const ss = String(totalSec % 60).padStart(2, '0');
+  const uniqueDocs = new Set(serialEntries.map(e => e.docId)).size;
   const avgSec = serialEntries.length > 0 ? (totalSec / serialEntries.length).toFixed(1) : '0.0';
-  const totalReads = serialEntries.reduce((s, e) => s + e.readCount, 0);
-  const summaryText = '📄 ' + serialEntries.length + ' belge · 📷 ' + totalReads + ' okuma · ⏱ ' + mm + ':' + ss + ' · Ort: ' + avgSec + 's/belge';
+  const summaryText = '📷 ' + serialEntries.length + ' tarama · 📄 ' + uniqueDocs + ' benzersiz belge · ⏱ ' + mm + ':' + ss + ' · Ort: ' + avgSec + 's/tarama';
 
-  // Build structured results for copy
-  const structuredResults = serialEntries.map((e, i) => ({
+  // Build structured results — every scan is a separate row
+  const structuredResults = serialEntries.map((e) => ({
     name: e.name,
     docType: e.type,
     finalResult: 'SUCCESS',
-    durationMs: Math.round((e.firstReadTime - serialStartTime) * 1),
     durationSec: Math.round((e.firstReadTime - serialStartTime) / 1000),
-    selectedBand: '—',
-    ocrAttempts: e.readCount,
-    longestLine: '—',
+    selectedBand: e.selectedBand || '—',
+    ocrAttempts: e.ocrAttempts || 1,
+    longestLine: e.longestLine || 0,
+    chevronCount: e.chevronCount != null ? e.chevronCount : 0,
     parseOk: true,
     checksumOk: true,
     failReason: null,
-    comment: getResultComment('SUCCESS'),
+    comment: e.isDuplicate ? 'Tekrar okuma' : getResultComment('SUCCESS'),
     docId: e.docId,
-    readCount: e.readCount,
+    isDuplicate: e.isDuplicate || false,
+    parsedFields: e.parsedFields || null,
+    rawOcrText: e.rawOcrText || '',
   }));
 
   let html = '<table class="batch-table"><thead><tr>' +
-    '<th>#</th><th>Ad Soyad</th><th>Belge No</th><th>Tip</th><th>Durum</th><th>Okuma</th><th>Süre</th><th>Yorum</th><th></th>' +
+    '<th>#</th><th>Ad Soyad</th><th>Belge No</th><th>Band</th><th>Uzun</th><th>&lt;</th><th>DOB</th><th>Süre</th><th>Yorum</th><th></th>' +
     '</tr></thead><tbody>';
 
   structuredResults.forEach((r, i) => {
-    html += '<tr>' +
+    const pf = r.parsedFields || {};
+    const dupStyle = r.isDuplicate ? 'opacity:.6;' : '';
+    html += '<tr style="' + dupStyle + '">' +
       '<td>' + (i+1) + '</td>' +
       '<td>' + r.name + '</td>' +
-      '<td>' + r.docId + '</td>' +
-      '<td>' + r.docType + '</td>' +
-      '<td class="bt-ok">✅</td>' +
-      '<td><span style="background:#f59e0b;color:#000;padding:1px 6px;border-radius:5px;font-weight:700;font-size:.75rem">' + r.readCount + 'x</span></td>' +
+      '<td style="font-family:monospace;font-size:.75rem">' + r.docId + '</td>' +
+      '<td>' + r.selectedBand + '</td>' +
+      '<td>' + r.longestLine + '</td>' +
+      '<td>' + r.chevronCount + '</td>' +
+      '<td style="font-size:.75rem">' + (pf.birthDate || '—') + '</td>' +
       '<td>' + r.durationSec + 's</td>' +
-      '<td style="font-size:.75rem;color:var(--muted)">' + r.comment + '</td>' +
+      '<td style="font-size:.72rem;color:var(--muted)">' + r.comment + '</td>' +
       '<td><button onclick="copyToClipboard(formatResultForCopy(serialReportData[' + i + ']))" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--muted);cursor:pointer;font-size:.7rem">📋</button></td>' +
       '</tr>';
   });
@@ -968,9 +1007,7 @@ function showSerialReport() {
   html += '<div class="batch-summary">' + summaryText + '</div>';
   html += '<div style="text-align:center;margin-top:10px"><button class="btn ghost btn-sm" onclick="copyToClipboard(formatAllResultsForCopy(serialReportData,\'' + summaryText.replace(/'/g,'') + '\'))">📋 Tüm Sonuçları Kopyala</button></div>';
 
-  // Store for copy access
   window.serialReportData = structuredResults;
-
   document.getElementById('serial-report-body').innerHTML = html;
   goScreen('s-serial-report');
 }
@@ -1506,7 +1543,7 @@ async function scanLoop() {
           drawOverlayState('accepted');
           const diag = diagnoseMRZ(text);
           addLog('ok', `${result.type} → KABUL`, [`L2: ${l2}`], null, validation.checksums, diag);
-          if (serialMode) { addSerialResult(result); setTimeout(scanLoop, 500); return; }
+          if (serialMode) { addSerialResult(result, { ocrText: text, bandIdx: bi, ocrAttempts: bi + 1 }); setTimeout(scanLoop, 500); return; }
           setTimeout(() => { stopCamera(); saveAndShow(result); }, 250);
           return;
         }
