@@ -745,6 +745,9 @@ function addSerialResult(mrzResult, ocrMeta) {
   if (serialCount < 5) console.log('[SizeDebug] BEFORE addSerialResult #' + (serialCount+1), _wrap.offsetWidth + 'x' + _wrap.offsetHeight);
 
   const parsed = parseResult(mrzResult);
+  const mrzName = MRZCore.parseMRZName(mrzResult);
+  parsed.surname = mrzName.surname;
+  parsed.given   = mrzName.given;
   const docId = (parsed.passNo || '').replace(/</g,'').trim();
   const compositeKey = makeSerialKey(parsed);
   const readTime = Date.now();
@@ -1193,6 +1196,8 @@ function updatePill(state) {
 
 // ── CAMERA ──────────────────────────────────────────────────────────────
 let scanDebugCount = 0;
+let blurSkipCount = 0;
+let lastBlurLogTime = 0;
 
 async function startCamera() {
   if (stream) return;
@@ -1235,6 +1240,8 @@ async function startCamera() {
 
     scanning = true;
     scanDebugCount = 0;
+    blurSkipCount = 0;
+    lastBlurLogTime = 0;
     lastFrameHash = 0;
     lastL2 = null;
     l2Count = 0;
@@ -1382,7 +1389,7 @@ function isSharpEnough(canvas) {
   }
   const mean = sum / count;
   const variance = sumSq / count - mean * mean;
-  return variance > 100;
+  return variance > 200;
 }
 
 function upscaleCanvas(srcCanvas, factor) {
@@ -1582,7 +1589,13 @@ async function scanLoop() {
 
     // Sharpness check on first band only
     if (bi === 0 && !isSharpEnough(mainC)) {
-      if (isDebug) console.log('[ScanDebug] frame', scanDebugCount, 'blurry — skipping all bands');
+      blurSkipCount++;
+      const now = Date.now();
+      if (now - lastBlurLogTime > 3000) {
+        console.log('[Blur] son 3s: ' + blurSkipCount + ' frame atlandı');
+        lastBlurLogTime = now;
+        blurSkipCount = 0;
+      }
       drawOverlayState('blurry');
       setTimeout(scanLoop, SCAN_INTERVAL); return;
     }
@@ -1919,6 +1932,9 @@ function captureDocPhoto() {
 
 function saveAndShow(mrzResult) {
   const parsed = parseResult(mrzResult);
+  const mrzName = MRZCore.parseMRZName(mrzResult);
+  parsed.surname = mrzName.surname;
+  parsed.given   = mrzName.given;
   const photo = captureDocPhoto();
   const entry = {
     id: 'pp_' + Date.now(),
@@ -2615,6 +2631,9 @@ async function startBatchTest(files) {
         successCount++;
         const v = validateMRZ(ocrResult.extracted);
         const parsed = parseResult(ocrResult.extracted);
+        const batchMrzName = MRZCore.parseMRZName(ocrResult.extracted);
+        parsed.surname = batchMrzName.surname;
+        parsed.given   = batchMrzName.given;
         const csStr = ['Pass','DOB','EXP'].map((k, idx) => {
           const key = ['passOk','dobOk','expOk'][idx];
           return k + (v.checksums[key] ? '✓' : '✗');

@@ -326,11 +326,32 @@
     };
   }
 
+  // ── MRZ NAME PARSE (doğrudan MRZ satırından) ──────────────────────────
+  // TD1: name line = L3 (index 2), TD3: name line = L1 (index 0)
+  // Digit-fix uygulanmaz, '<' ayırıcı/padding olarak işlenir
+  function parseMRZName(result) {
+    if (!result || !result.lines) return { surname: '', given: '' };
+    let nameLine;
+    if (result.type === 'TD1') {
+      nameLine = result.lines[2] || '';
+    } else {
+      // TD3: L1 — ilk 5 karakter tip/ülke, geri kalanı isim
+      nameLine = (result.lines[0] || '').substring(5);
+    }
+    const dblIdx = nameLine.indexOf('<<');
+    const surnameRaw = dblIdx >= 0 ? nameLine.substring(0, dblIdx) : nameLine;
+    const givenRaw   = dblIdx >= 0 ? nameLine.substring(dblIdx + 2) : '';
+    return {
+      surname: surnameRaw.replace(/</g, ' ').trim(),
+      given:   givenRaw.split('<<')[0].replace(/</g, ' ').trim(),
+    };
+  }
+
   // ── EXPORT ────────────────────────────────────────────────────────────
   window.MRZCore = {
     chk, clean, cleanLine, fixLine, applyDigitFixes,
     isL1_TD1, isL2_TD1, isL3_TD1, isL1_TD3, isL2_TD3,
-    extractMRZ, getChecksums_TD3, parseResult,
+    extractMRZ, getChecksums_TD3, parseResult, parseMRZName,
     validateMRZ, diagnoseMRZ, validateNationalId
   };
 })();
