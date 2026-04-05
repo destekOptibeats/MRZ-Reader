@@ -109,21 +109,20 @@ html,body{
 }
 #video-wrap{
   position:relative;
-  width: 100vw !important;
-  max-width: 100vw !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  height: 60vh;
   border-radius: 0;
   overflow: hidden;
   background:#000;
   flex: 0 0 auto;
-  min-height: 200px;
-  aspect-ratio: 4/3;
 }
 video{
   width: 100% !important;
   height: 100% !important;
   position:absolute;
   top:0; left:0;
-  object-fit: contain;
+  object-fit: cover;
   display:block;
   background:#000;
 }
@@ -131,6 +130,7 @@ video{
   #video-wrap {
     max-width: 800px !important;
     width: 100% !important;
+    height: 70vh;
     margin: 0 auto;
     border-radius: 14px;
   }
