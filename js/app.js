@@ -359,15 +359,17 @@ function formatResultForCopy(r) {
 }
 
 function formatAllResultsForCopy(results, summary) {
-  let md = '| # | Belge | Tip | Sonuç | Süre | Band | Deneme | Uzun Satır | <Count | DocNo | DOB | Soyad | Ad | Yorum |\n';
-  md += '|---|-------|-----|-------|------|------|--------|------------|--------|-------|-----|-------|----|---------|\n';
+  let md = '| # | Belge | Tip | Sonuç | Süre | Band | Deneme | Uzun Satır | <Count | DocNo | TC Kimlik No | DOB | Soyad | Ad | Yorum |\n';
+  md += '|---|-------|-----|-------|------|------|--------|------------|--------|-------|--------------|-----|-------|----|---------|\n';
   results.forEach((r, i) => {
     const pf = r.parsedFields || {};
+    const nid = pf.nationalId ? (pf.nationalId + (pf.nationalIdValid ? ' ✓' : ' ⚠')) : '—';
     md += '| ' + (i+1) + ' | ' + (r.name||'—') + ' | ' + (r.docType||'—') + ' | ' + (r.finalResult||'—') +
       ' | ' + (r.durationMs != null ? r.durationMs+'ms' : (r.durationSec != null ? r.durationSec+'s' : '—')) +
       ' | ' + (r.selectedBand||'—') + ' | ' + (r.ocrAttempts||'—') +
       ' | ' + (r.longestLine||'—') + ' | ' + (r.chevronCount != null ? r.chevronCount : '—') +
-      ' | ' + (pf.documentNumber||'—') + ' | ' + (pf.birthDate||'—') + ' | ' + (pf.surname||'—') + ' | ' + (pf.givenNames||'—') +
+      ' | ' + (pf.documentNumber||'—') + ' | ' + nid +
+      ' | ' + (pf.birthDate||'—') + ' | ' + (pf.surname||'—') + ' | ' + (pf.givenNames||'—') +
       ' | ' + (r.comment||'—') + ' |\n';
   });
   if (summary) md += '\n' + summary;
@@ -410,16 +412,18 @@ function showSerialReport() {
   }));
 
   let html = '<table class="batch-table"><thead><tr>' +
-    '<th>#</th><th>Ad Soyad</th><th>Belge No</th><th>Band</th><th>Uzun</th><th>&lt;</th><th>DOB</th><th>Süre</th><th>Yorum</th><th></th>' +
+    '<th>#</th><th>Ad Soyad</th><th>Belge No</th><th>TC Kimlik No</th><th>Band</th><th>Uzun</th><th>&lt;</th><th>DOB</th><th>Süre</th><th>Yorum</th><th></th>' +
     '</tr></thead><tbody>';
 
   structuredResults.forEach((r, i) => {
     const pf = r.parsedFields || {};
     const dupStyle = r.isDuplicate ? 'opacity:.6;' : '';
+    const nid = pf.nationalId ? (pf.nationalId + (pf.nationalIdValid ? ' ✓' : ' ⚠')) : '';
     html += '<tr style="' + dupStyle + '">' +
       '<td>' + (i+1) + '</td>' +
       '<td>' + r.name + '</td>' +
       '<td style="font-family:monospace;font-size:.75rem">' + r.docId + '</td>' +
+      '<td style="font-family:monospace;font-size:.72rem">' + nid + '</td>' +
       '<td>' + r.selectedBand + '</td>' +
       '<td>' + r.longestLine + '</td>' +
       '<td>' + r.chevronCount + '</td>' +

@@ -548,10 +548,11 @@ async function startBatchTest(files) {
   const batchSummaryText = successCount + '/' + files.length + ' başarılı, ort ' + avg + 'ms/dosya · Worker init: ' + workerInitTime + 'ms · Toplam: ' + batchTotal + 'ms';
 
   results.innerHTML = '<table class="batch-table"><thead><tr>' +
-    '<th>Dosya</th><th>Sonuç</th><th>Tip</th><th>CS</th><th>Band</th><th>Uzun</th><th>&lt;</th><th>DocNo</th><th>DOB</th><th>Soyad</th><th>Süre</th><th>Yorum</th><th></th>' +
+    '<th>Dosya</th><th>Sonuç</th><th>Tip</th><th>CS</th><th>Band</th><th>Uzun</th><th>&lt;</th><th>DocNo</th><th>TC Kimlik No</th><th>DOB</th><th>Soyad</th><th>Süre</th><th>Yorum</th><th></th>' +
     '</tr></thead><tbody>' +
     rows.map((r, idx) => {
       const pf = r.parsedFields || {};
+      const nid = pf.nationalId ? (pf.nationalId + (pf.nationalIdValid ? ' ✓' : ' ⚠')) : '';
       return '<tr>' +
       '<td>' + r.name + '</td>' +
       '<td class="' + (r.ok ? 'bt-ok' : 'bt-fail') + '">' + (r.ok ? '✅' : '❌') + '</td>' +
@@ -561,12 +562,13 @@ async function startBatchTest(files) {
       '<td>' + (r.longestLine || 0) + '</td>' +
       '<td>' + (r.chevronCount != null ? r.chevronCount : 0) + '</td>' +
       '<td style="font-family:monospace;font-size:.72rem">' + (pf.documentNumber || '—') + '</td>' +
+      '<td style="font-family:monospace;font-size:.72rem">' + nid + '</td>' +
       '<td style="font-size:.72rem">' + (pf.birthDate || '—') + '</td>' +
       '<td style="font-size:.72rem">' + (pf.surname || '—') + '</td>' +
       '<td>' + (r.durationMs || 0) + 'ms</td>' +
       '<td style="font-size:.72rem;color:var(--muted)">' + (r.comment || '') + '</td>' +
       '<td><button onclick="copyToClipboard(formatResultForCopy(batchReportData[' + idx + ']))" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--muted);cursor:pointer;font-size:.7rem">📋</button></td>' +
-      '</tr>' + (r.timing ? '<tr><td colspan="13" style="font-size:.65rem;color:var(--muted);padding:2px 6px">' + r.timing + '</td></tr>' : '');
+      '</tr>' + (r.timing ? '<tr><td colspan="14" style="font-size:.65rem;color:var(--muted);padding:2px 6px">' + r.timing + '</td></tr>' : '');
     }).join('') +
     '</tbody></table>' +
     '<div class="batch-summary">' + batchSummaryText + '</div>' +
