@@ -211,6 +211,22 @@
     };
   }
 
+  // ── TC KİMLİK NO VALIDATION ────────────────────────────────────────────
+  function validateNationalId(id) {
+    if (!id || id.length !== 11) return false;
+    if (!/^\d{11}$/.test(id)) return false;
+    if (id[0] === '0') return false;
+    const d = id.split('').map(Number);
+    // Rule 1: ((d1+d3+d5+d7+d9)*7 - (d2+d4+d6+d8)) % 10 === d10
+    const r1 = ((d[0]+d[2]+d[4]+d[6]+d[8]) * 7 - (d[1]+d[3]+d[5]+d[7])) % 10;
+    if ((r1 < 0 ? r1 + 10 : r1) !== d[9]) return false;
+    // Rule 2: (d1+d2+...+d10) % 10 === d11
+    let sum = 0;
+    for (let i = 0; i < 10; i++) sum += d[i];
+    if (sum % 10 !== d[10]) return false;
+    return true;
+  }
+
   function parseTD1(lines) {
     const [l1, l2, l3] = lines;
     const namePart = l3 || '';
@@ -219,6 +235,9 @@
     const givenRaw   = dblIdx >= 0 ? namePart.substring(dblIdx+2) : '';
     const dob    = l2.substring(0,6);
     const expiry = l2.substring(8,14);
+    // TC Kimlik No: line1 positions 15-25 (11 chars)
+    const rawNatId = l1.substring(15,26).replace(/</g,'').replace(/\s/g,'').replace(/[^0-9]/g,'');
+    const nationalId = rawNatId.length === 11 ? rawNatId : null;
     return {
       docType: 'TC Kimlik',
       surname: cleanSurname(surnameRaw),
@@ -229,6 +248,8 @@
       dob,
       sex:     l2[7],
       expiry,
+      nationalId,
+      nationalIdValid: nationalId ? validateNationalId(nationalId) : false,
       cs: {
         passOk: chk(l1.substring(5,14)) === +l1[14],
         dobOk:  chk(dob) === +l2[6],
@@ -310,6 +331,6 @@
     chk, clean, cleanLine, fixLine, applyDigitFixes,
     isL1_TD1, isL2_TD1, isL3_TD1, isL1_TD3, isL2_TD3,
     extractMRZ, getChecksums_TD3, parseResult,
-    validateMRZ, diagnoseMRZ
+    validateMRZ, diagnoseMRZ, validateNationalId
   };
 })();

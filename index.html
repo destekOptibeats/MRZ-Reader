@@ -588,7 +588,7 @@ const {
   chk, clean, cleanLine, fixLine, applyDigitFixes,
   isL1_TD1, isL2_TD1, isL3_TD1, isL1_TD3, isL2_TD3,
   extractMRZ, getChecksums_TD3, parseResult,
-  validateMRZ, diagnoseMRZ
+  validateMRZ, diagnoseMRZ, validateNationalId
 } = window.MRZCore;
 
 let worker       = null;
@@ -809,6 +809,8 @@ function addSerialResult(mrzResult, ocrMeta) {
       birthDate: parsed.dob || null,
       surname: parsed.surname || null,
       givenNames: parsed.given || null,
+      nationalId: parsed.nationalId || null,
+      nationalIdValid: parsed.nationalIdValid || false,
     }
   });
 
@@ -923,6 +925,7 @@ function formatResultForCopy(r) {
     lines.push('Doğum Tarihi: ' + (pf.birthDate || '—'));
     lines.push('Soyad: ' + (pf.surname || '—'));
     lines.push('Ad: ' + (pf.givenNames || '—'));
+    if (pf.nationalId) lines.push('TC Kimlik No: ' + pf.nationalId + (pf.nationalIdValid ? ' ✓' : ' ⚠ Geçersiz'));
   }
   if (r.rawOcrText) {
     lines.push('--- Raw OCR ---');
@@ -1294,8 +1297,8 @@ function stopScan() {
 // ── MRZ BAND — single source of truth for overlay + OCR crop ───────────
 function getMRZBandSize(vh) {
   const isDesktop = window.innerWidth >= 768;
-  const hRatio = isDesktop ? 0.25 : 0.28;
-  const h = Math.max(Math.round(vh * hRatio), 140);
+  const hRatio = isDesktop ? 0.22 : 0.24;
+  const h = Math.max(Math.round(vh * hRatio), 120);
   return h;
 }
 
@@ -1839,14 +1842,23 @@ function showParsed(p, entry, isNew) {
   document.getElementById('edit-surname').value = p.surname || '';
   document.getElementById('edit-given').value   = p.given   || '';
 
-  document.getElementById('res-fields').innerHTML = [
+  const rows = [
     ['Belge Tipi',     p.docType  || '—', ''],
     ['Pasaport/Doc No',p.passNo   || '—', ck(cs.passOk)],
     ['Uyruk',          p.nation   || '—', ''],
     ['Doğum Tarihi',   fmtDate(p.dob),    ck(cs.dobOk)],
     ['Cinsiyet',       p.sex==='M'?'Erkek':p.sex==='F'?'Kadın':(p.sex||'—'), ''],
     ['Son Geçerlilik', fmtDate(p.expiry), ck(cs.expOk)],
-  ].map(([l,v,b]) => `
+  ];
+  // TC Kimlik No — only for TD1
+  if (p.nationalId) {
+    const nidValid = p.nationalIdValid;
+    const nidBadge = nidValid
+      ? '<span class="ok">✓</span>'
+      : '<span class="fail">⚠ Geçersiz</span>';
+    rows.push(['TC Kimlik No', p.nationalId, nidBadge]);
+  }
+  document.getElementById('res-fields').innerHTML = rows.map(([l,v,b]) => `
     <div class="row">
       <div class="rl">${l}</div>
       <div class="rv">${v}${b}</div>
