@@ -1483,6 +1483,54 @@ function drawOverlayState(state) {
   setHint(hints[state] || hints.searching, hintType);
 }
 
+// ── SHADOW DETECTION ────────────────────────────────────────────────────
+function measureBrightness(canvas) {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  let sum = 0;
+  const count = data.length / 4;
+  for (let i = 0; i < data.length; i += 4) {
+    sum += 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
+  }
+  return count > 0 ? sum / count : 128;
+}
+
+function shadowPreprocess(canvas) {
+  const w = canvas.width, h = canvas.height;
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(canvas, 0, 0, w, h, 0, 0, w, h);
+  const imgData = ctx.getImageData(0, 0, w, h);
+  const d = imgData.data;
+
+  // Grayscale + find min/max
+  const gray = new Uint8Array(w * h);
+  let min = 255, max = 0;
+  for (let i = 0; i < w * h; i++) {
+    const g = Math.round(0.299 * d[i*4] + 0.587 * d[i*4+1] + 0.114 * d[i*4+2]);
+    gray[i] = g;
+    if (g < min) min = g;
+    if (g > max) max = g;
+  }
+
+  // Histogram stretch (brightness normalize) + contrast boost
+  const range = max - min;
+  const stretch = range > 20;
+  for (let i = 0; i < w * h; i++) {
+    let v = gray[i];
+    if (stretch) v = Math.round(((v - min) / range) * 255);
+    // Light threshold: push toward black/white
+    v = v > 140 ? Math.min(255, v + 40) : Math.max(0, v - 40);
+    d[i*4] = d[i*4+1] = d[i*4+2] = v;
+    d[i*4+3] = 255;
+  }
+  ctx.putImageData(imgData, 0, 0);
+  return c;
+}
+
+let _lastShadowHintTime = 0;
+
 // ── SCAN LOOP ───────────────────────────────────────────────────────────
 const SCAN_INTERVAL = 250;
 
@@ -1585,6 +1633,69 @@ async function scanLoop() {
     console.log('[ScanDebug] frame', scanDebugCount,
       'selected: band' + (bestBandIdx+1), 'score:', bestScore,
       'longest:', longestOCRLine(bestText));
+  }
+
+  // Shadow fallback: if no strong result AND MRZ area is dark, retry with shadow preprocess
+  const bestLongest = longestOCRLine(bestText);
+  const noStrongResult = !bestResult || !validateMRZ(bestResult).valid;
+  if (noStrongResult && bestLongest < 28 && bestBandIdx >= 0) {
+    const brightness = measureBrightness(mainC);
+    if (isDebug) console.log('[ScanDebug] brightness:', Math.round(brightness), 'shadow fallback:', brightness < 80);
+
+    if (brightness < 80) {
+      // Show shadow hint (throttled: max once per 3s)
+      const now = Date.now();
+      if (now - _lastShadowHintTime > 3000) {
+        _lastShadowHintTime = now;
+        setHint('Gölgeyi azaltın — belgeyi ışığa çevirin', 'warn');
+      }
+
+      // Retry OCR on best band with shadow preprocessing
+      const band = candidates[bestBandIdx];
+      let ocrW = band.w, ocrH = band.h;
+      if (ocrW < 600) { ocrW *= 2; ocrH *= 2; }
+      if (ocrW > 1200) { const ds = 1200 / ocrW; ocrH = Math.round(ocrH * ds); ocrW = 1200; }
+
+      mainC.width = ocrW;
+      mainC.height = ocrH;
+      mainCtx.drawImage(video, band.x, band.y, band.w, band.h, 0, 0, ocrW, ocrH);
+      const shadowCanvas = shadowPreprocess(mainC);
+
+      try {
+        const { data: { text: shadowText } } = await worker.recognize(shadowCanvas);
+        const shadowLongest = longestOCRLine(shadowText);
+        const shadowScore = scoreMRZText(shadowText);
+        if (isDebug) console.log('[ScanDebug] shadow fallback: longest:', shadowLongest, 'score:', shadowScore);
+
+        // Use shadow result if better
+        if (shadowScore > bestScore) {
+          const shadowResult = extractMRZ(clean(shadowText));
+          if (shadowResult) {
+            const sv = validateMRZ(shadowResult);
+            if (sv.valid) {
+              // Shadow result is valid — accept it
+              checksumPassed = true;
+              const l2 = shadowResult.lines[1];
+              if (l2 === lastL2) l2Count++; else { lastL2 = l2; l2Count = 1; }
+              if (l2Count >= 2) {
+                drawOverlayState('accepted');
+                const diag = diagnoseMRZ(shadowText);
+                addLog('ok', `${shadowResult.type} → KABUL (shadow)`, [`L2: ${l2}`], null, sv.checksums, diag);
+                if (serialMode) { addSerialResult(shadowResult, { ocrText: shadowText, bandIdx: bestBandIdx, ocrAttempts: candidates.length + 1 }); setTimeout(scanLoop, 500); return; }
+                setTimeout(() => { stopCamera(); saveAndShow(shadowResult); }, 250);
+                return;
+              }
+              drawOverlayState('confirming');
+              setTimeout(scanLoop, SCAN_INTERVAL);
+              return;
+            }
+            bestResult = shadowResult;
+            bestText = shadowText;
+            bestScore = shadowScore;
+          }
+        }
+      } catch(e) { /* shadow OCR failed, continue with best */ }
+    }
   }
 
   // Process best result
