@@ -856,35 +856,120 @@ function finishSerialScan() {
   showSerialReport();
 }
 
+// ── REPORT HELPERS ─────────────────────────────────────────────────────
+function classifyFailure(opts) {
+  // opts: { parseOk, checksumOk, longestLine, isBlurry, chevrons }
+  if (opts.isBlurry) return 'BLURRY_FRAME';
+  if (!opts.longestLine || opts.longestLine < 10) return 'MRZ_NOT_FOUND';
+  if (opts.longestLine < 28) return 'LINES_TOO_SHORT';
+  if ((!opts.chevrons || opts.chevrons < 3) && opts.longestLine < 35) return 'LOW_CHEVRON_COUNT';
+  if (!opts.parseOk) return 'PARSE_FAILED';
+  if (!opts.checksumOk) return 'CHECKSUM_FAILED';
+  return 'UNKNOWN_ERROR';
+}
+
+const RESULT_COMMENTS = {
+  BLURRY_FRAME: 'Görüntü bulanık',
+  MRZ_NOT_FOUND: 'MRZ bulunamadı',
+  LINES_TOO_SHORT: 'Satırlar çok kısa',
+  LOW_CHEVRON_COUNT: 'MRZ deseni yetersiz',
+  PARSE_FAILED: 'MRZ bulundu ama parse edilemedi',
+  CHECKSUM_FAILED: 'Checksum geçmedi',
+  NO_STABLE_FRAME: 'Kararlı kare yakalanamadı',
+  DOCUMENT_TOO_FAR: 'Belge çok uzak',
+  UNKNOWN_ERROR: 'Bilinmeyen hata',
+  SUCCESS: 'Okuma başarılı',
+};
+
+function getResultComment(reason) {
+  return RESULT_COMMENTS[reason] || RESULT_COMMENTS.UNKNOWN_ERROR;
+}
+
+function formatResultForCopy(r) {
+  return [
+    'Belge: ' + (r.name || '—'),
+    'Tip: ' + (r.docType || '—'),
+    'Sonuç: ' + (r.finalResult || '—'),
+    'Süre: ' + (r.durationMs != null ? r.durationMs + 'ms' : '—'),
+    'Band: ' + (r.selectedBand || '—'),
+    'En Uzun Satır: ' + (r.longestLine || '—'),
+    'Parse: ' + (r.parseOk ? 'OK' : 'FAIL'),
+    'Checksum: ' + (r.checksumOk ? 'OK' : 'FAIL'),
+    'Sebep: ' + (r.failReason || '—'),
+    'Yorum: ' + (r.comment || '—'),
+  ].join('\n');
+}
+
+function formatAllResultsForCopy(results, summary) {
+  let md = '| # | Belge | Tip | Sonuç | Süre | Band | Uzun Satır | Parse | CS | Yorum |\n';
+  md += '|---|-------|-----|-------|------|------|------------|-------|----|---------|\n';
+  results.forEach((r, i) => {
+    md += '| ' + (i+1) + ' | ' + (r.name||'—') + ' | ' + (r.docType||'—') + ' | ' + (r.finalResult||'—') +
+      ' | ' + (r.durationMs != null ? r.durationMs+'ms' : '—') + ' | ' + (r.selectedBand||'—') +
+      ' | ' + (r.longestLine||'—') + ' | ' + (r.parseOk?'OK':'FAIL') + ' | ' + (r.checksumOk?'OK':'FAIL') +
+      ' | ' + (r.comment||'—') + ' |\n';
+  });
+  if (summary) md += '\n' + summary;
+  return md;
+}
+
+function copyToClipboard(text) {
+  navigator.clipboard?.writeText(text).then(
+    () => showCamToast ? showCamToast('📋 Kopyalandı', 1500) : null,
+    () => {}
+  );
+}
+
 function showSerialReport() {
   const totalSec = Math.round((Date.now() - serialStartTime) / 1000);
   const mm = String(Math.floor(totalSec / 60)).padStart(2, '0');
   const ss = String(totalSec % 60).padStart(2, '0');
   const avgSec = serialEntries.length > 0 ? (totalSec / serialEntries.length).toFixed(1) : '0.0';
   const totalReads = serialEntries.reduce((s, e) => s + e.readCount, 0);
+  const summaryText = '📄 ' + serialEntries.length + ' belge · 📷 ' + totalReads + ' okuma · ⏱ ' + mm + ':' + ss + ' · Ort: ' + avgSec + 's/belge';
+
+  // Build structured results for copy
+  const structuredResults = serialEntries.map((e, i) => ({
+    name: e.name,
+    docType: e.type,
+    finalResult: 'SUCCESS',
+    durationMs: Math.round((e.firstReadTime - serialStartTime) * 1),
+    durationSec: Math.round((e.firstReadTime - serialStartTime) / 1000),
+    selectedBand: '—',
+    ocrAttempts: e.readCount,
+    longestLine: '—',
+    parseOk: true,
+    checksumOk: true,
+    failReason: null,
+    comment: getResultComment('SUCCESS'),
+    docId: e.docId,
+    readCount: e.readCount,
+  }));
 
   let html = '<table class="batch-table"><thead><tr>' +
-    '<th>Sıra</th><th>Ad Soyad</th><th>Belge No</th><th>Tip</th><th>Okuma</th><th>Süre</th>' +
+    '<th>#</th><th>Ad Soyad</th><th>Belge No</th><th>Tip</th><th>Durum</th><th>Okuma</th><th>Süre</th><th>Yorum</th><th></th>' +
     '</tr></thead><tbody>';
 
-  serialEntries.forEach((e, i) => {
-    const elapsed = Math.round((e.firstReadTime - serialStartTime) / 1000);
+  structuredResults.forEach((r, i) => {
     html += '<tr>' +
       '<td>' + (i+1) + '</td>' +
-      '<td>' + e.name + '</td>' +
-      '<td>' + e.docId + '</td>' +
-      '<td>' + e.type + '</td>' +
-      '<td><span style="background:#f59e0b;color:#000;padding:1px 6px;border-radius:5px;font-weight:700;font-size:.75rem">' + e.readCount + 'x</span></td>' +
-      '<td>' + elapsed + 's</td>' +
+      '<td>' + r.name + '</td>' +
+      '<td>' + r.docId + '</td>' +
+      '<td>' + r.docType + '</td>' +
+      '<td class="bt-ok">✅</td>' +
+      '<td><span style="background:#f59e0b;color:#000;padding:1px 6px;border-radius:5px;font-weight:700;font-size:.75rem">' + r.readCount + 'x</span></td>' +
+      '<td>' + r.durationSec + 's</td>' +
+      '<td style="font-size:.75rem;color:var(--muted)">' + r.comment + '</td>' +
+      '<td><button onclick="copyToClipboard(formatResultForCopy(serialReportData[' + i + ']))" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--muted);cursor:pointer;font-size:.7rem">📋</button></td>' +
       '</tr>';
   });
 
   html += '</tbody></table>';
-  html += '<div class="batch-summary">' +
-    '📄 ' + serialEntries.length + ' belge · ' +
-    '📷 ' + totalReads + ' toplam okuma · ' +
-    '⏱ ' + mm + ':' + ss + ' · ' +
-    '📊 Ort: ' + avgSec + 's/belge</div>';
+  html += '<div class="batch-summary">' + summaryText + '</div>';
+  html += '<div style="text-align:center;margin-top:10px"><button class="btn ghost btn-sm" onclick="copyToClipboard(formatAllResultsForCopy(serialReportData,\'' + summaryText.replace(/'/g,'') + '\'))">📋 Tüm Sonuçları Kopyala</button></div>';
+
+  // Store for copy access
+  window.serialReportData = structuredResults;
 
   document.getElementById('serial-report-body').innerHTML = html;
   goScreen('s-serial-report');
@@ -2340,10 +2425,25 @@ async function startBatchTest(files) {
           const key = ['passOk','dobOk','expOk'][idx];
           return k + (v.checksums[key] ? '✓' : '✗');
         }).join(' ');
-        rows.push({ name: file.name, ok: true, type: ocrResult.extracted.type, cs: csStr, time: timings.total, timing: timingStr, reason: '' });
+        rows.push({
+          name: file.name, ok: true, docType: ocrResult.extracted.type, cs: csStr,
+          finalResult: 'SUCCESS', durationMs: timings.total, timing: timingStr,
+          selectedBand: '—', ocrAttempts: ocrResult.attempts || 1,
+          longestLine: '—', parseOk: true, checksumOk: true,
+          failReason: null, comment: getResultComment('SUCCESS'), reason: ''
+        });
       } else {
-        const reasons = ocrResult.diag ? ocrResult.diag.failureReasons.join('; ') : 'OCR çıktısı alınamadı';
-        rows.push({ name: file.name, ok: false, type: '—', cs: '—', time: timings.total, timing: timingStr, reason: reasons });
+        const diag = ocrResult.diag;
+        const longest = diag ? longestOCRLine(diag.rawText || '') : 0;
+        const chevrons = diag ? countChevrons(diag.rawText || '') : 0;
+        const failReason = classifyFailure({ parseOk: !!diag?.extracted, checksumOk: false, longestLine: longest, isBlurry: false, chevrons });
+        rows.push({
+          name: file.name, ok: false, docType: '—', cs: '—',
+          finalResult: 'FAIL', durationMs: timings.total, timing: timingStr,
+          selectedBand: '—', ocrAttempts: ocrResult.attempts || 0,
+          longestLine: longest, parseOk: false, checksumOk: false,
+          failReason, comment: getResultComment(failReason), reason: getResultComment(failReason)
+        });
       }
     }
   } finally {
@@ -2359,21 +2459,26 @@ async function startBatchTest(files) {
   status.textContent = 'Tamamlandı';
   const avg = files.length > 0 ? Math.round(totalTime / files.length) : 0;
 
+  // Store for copy access
+  window.batchReportData = rows;
+  const batchSummaryText = successCount + '/' + files.length + ' başarılı, ort ' + avg + 'ms/dosya · Worker init: ' + workerInitTime + 'ms · Toplam: ' + batchTotal + 'ms';
+
   results.innerHTML = '<table class="batch-table"><thead><tr>' +
-    '<th>Dosya</th><th>Sonuç</th><th>Tip</th><th>Checksum</th><th>Süre</th><th>Detay</th>' +
+    '<th>Dosya</th><th>Sonuç</th><th>Tip</th><th>CS</th><th>Süre</th><th>Yorum</th><th></th>' +
     '</tr></thead><tbody>' +
-    rows.map(r => '<tr>' +
+    rows.map((r, idx) => '<tr>' +
       '<td>' + r.name + '</td>' +
       '<td class="' + (r.ok ? 'bt-ok' : 'bt-fail') + '">' + (r.ok ? '✅' : '❌') + '</td>' +
-      '<td>' + r.type + '</td>' +
-      '<td>' + r.cs + '</td>' +
-      '<td>' + r.time + 'ms</td>' +
-      '<td style="font-size:.68rem;color:var(--muted)">' + (r.timing || '') + '</td>' +
-      '</tr>' + (r.reason ? '<tr><td colspan="6"><div class="batch-reason">' + r.reason + '</div></td></tr>' : '')
+      '<td>' + (r.docType || '—') + '</td>' +
+      '<td>' + (r.cs || '—') + '</td>' +
+      '<td>' + (r.durationMs || 0) + 'ms</td>' +
+      '<td style="font-size:.72rem;color:var(--muted)">' + (r.comment || '') + '</td>' +
+      '<td><button onclick="copyToClipboard(formatResultForCopy(batchReportData[' + idx + ']))" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--muted);cursor:pointer;font-size:.7rem">📋</button></td>' +
+      '</tr>' + (r.timing ? '<tr><td colspan="7" style="font-size:.65rem;color:var(--muted);padding:2px 6px">' + r.timing + '</td></tr>' : '')
     ).join('') +
     '</tbody></table>' +
-    '<div class="batch-summary">' + successCount + '/' + files.length + ' başarılı, ort ' + avg + 'ms/dosya' +
-    ' · Worker init: ' + workerInitTime + 'ms · Toplam: ' + batchTotal + 'ms</div>';
+    '<div class="batch-summary">' + batchSummaryText + '</div>' +
+    '<div style="text-align:center;margin-top:10px"><button class="btn ghost btn-sm" onclick="copyToClipboard(formatAllResultsForCopy(batchReportData,\'' + batchSummaryText.replace(/'/g,'') + '\'))">📋 Tüm Sonuçları Kopyala</button></div>';
 
   document.getElementById('batch-file-in').value = '';
 }
