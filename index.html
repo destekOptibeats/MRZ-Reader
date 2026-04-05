@@ -1292,11 +1292,18 @@ function stopScan() {
 }
 
 // ── MRZ BAND — single source of truth for overlay + OCR crop ───────────
+function getMRZBandSize(vh) {
+  const isDesktop = window.innerWidth >= 768;
+  const hRatio = isDesktop ? 0.25 : 0.28;
+  const h = Math.max(Math.round(vh * hRatio), 140);
+  return h;
+}
+
 function getMRZBand(vw, vh) {
-  const w = Math.round(vw * 0.90);
-  const h = Math.round(vh * 0.18);
+  const w = Math.round(vw * 0.94);
+  const h = getMRZBandSize(vh);
   let x = Math.round((vw - w) / 2);
-  let y = Math.round(vh * 0.65 - h / 2); // centered around bottom 35%
+  let y = Math.round(vh * 0.60 - h / 2);
   // Clamp within video bounds
   if (x < 0) x = 0;
   if (y < 0) y = 0;
@@ -1307,9 +1314,9 @@ function getMRZBand(vw, vh) {
 
 // 3 candidate bands at different vertical positions for adaptive detection
 function getMRZBandCandidates(vw, vh) {
-  const w = Math.round(vw * 0.90);
-  const h = Math.round(vh * 0.18);
-  const positions = [0.60, 0.70, 0.80]; // center Y ratios
+  const w = Math.round(vw * 0.94);
+  const h = getMRZBandSize(vh);
+  const positions = [0.55, 0.65, 0.75];
   return positions.map(p => {
     let x = Math.round((vw - w) / 2);
     let y = Math.round(vh * p - h / 2);
