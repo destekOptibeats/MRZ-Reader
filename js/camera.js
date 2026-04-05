@@ -71,39 +71,48 @@ function stopCamera() {
   if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
 }
 
-function getMRZBandSize(vh) {
-  const isDesktop = window.innerWidth >= 768;
-  const hRatio = isDesktop ? 0.22 : 0.24;
-  const h = Math.max(Math.round(vh * hRatio), 120);
-  return h;
-}
-
 function getMRZBand(vw, vh) {
-  const w = Math.round(vw * 0.94);
-  const h = getMRZBandSize(vh);
-  let x = Math.round((vw - w) / 2);
-  let y = Math.round(vh * 0.60 - h / 2);
-  // Clamp within video bounds
+  const isLandscape = vw > vh;
+  const isMobile = window.innerWidth <= 768;
+
+  let w, h, x, y;
+  if (isMobile && !isLandscape) {
+    // Mobil dikey (portrait) — MRZ target zone, lower area
+    w = Math.round(vw * 0.92);
+    h = Math.round(vh * 0.20);
+    y = Math.round(vh * 0.70);
+  } else if (isMobile && isLandscape) {
+    // Mobil yatay (landscape)
+    w = Math.round(vw * 0.90);
+    h = Math.round(vh * 0.35);
+    y = Math.round(vh * 0.60);
+  } else {
+    // Desktop
+    w = Math.round(vw * 0.85);
+    h = Math.round(vh * 0.25);
+    y = Math.round(vh * 0.72);
+  }
+
+  x = Math.round((vw - w) / 2);
+
+  // Bounds safety
+  if (y + h > vh - 8) y = vh - h - 8;
   if (x < 0) x = 0;
-  if (y < 0) y = 0;
-  if (x + w > vw) x = vw - w;
-  if (y + h > vh) y = vh - h;
+  if (x + w > vw) w = vw - x;
+
   return { x, y, w, h };
 }
 
-// 3 candidate bands — ilk band overlay (0.60) ile aynı, sonra üst/alt
+// 3 candidate bands — primary band = getMRZBand, then shifted up/down
 function getMRZBandCandidates(vw, vh) {
-  const w = Math.round(vw * 0.94);
-  const h = getMRZBandSize(vh);
-  const positions = [0.60, 0.55, 0.68];
-  return positions.map(p => {
-    let x = Math.round((vw - w) / 2);
-    let y = Math.round(vh * p - h / 2);
-    if (x < 0) x = 0;
+  const primary = getMRZBand(vw, vh);
+  const shift = Math.round(primary.h * 0.6);
+  const offsets = [0, -shift, shift]; // center, upper, lower
+  return offsets.map(dy => {
+    let y = primary.y + dy;
     if (y < 0) y = 0;
-    if (x + w > vw) x = vw - w;
-    if (y + h > vh) y = vh - h;
-    return { x, y, w, h };
+    if (y + primary.h > vh - 8) y = vh - primary.h - 8;
+    return { x: primary.x, y, w: primary.w, h: primary.h };
   });
 }
 
