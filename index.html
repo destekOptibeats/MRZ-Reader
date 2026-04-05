@@ -1221,7 +1221,9 @@ async function startCamera() {
     console.log('[Camera] ready — videoWidth:', video.videoWidth, 'videoHeight:', video.videoHeight,
       'readyState:', video.readyState);
 
-    resizeOverlay();
+    // Reset shrink guard and do safe delayed overlay sizing
+    _lastOvlW = 0; _lastOvlH = 0;
+    requestAnimationFrame(() => resizeOverlay());
 
     scanning = true;
     scanDebugCount = 0;
@@ -1237,14 +1239,19 @@ async function startCamera() {
   }
 }
 
+// Only update canvas internal size when dimensions are valid, stable, and not shrinking
+let _lastOvlW = 0, _lastOvlH = 0;
 function resizeOverlay() {
   const wrap = document.getElementById('video-wrap');
   const w = wrap.offsetWidth;
   const h = wrap.offsetHeight;
-  if (w > 0 && h > 0) {
-    camOvl.width  = w;
-    camOvl.height = h;
-  }
+  // Reject invalid, tiny, or shrinking sizes (transient layout)
+  if (w < 100 || h < 80) return;
+  // Allow grow or first set; reject shrink by more than 10px (transient)
+  if (w < _lastOvlW - 10 || h < _lastOvlH - 10) return;
+  _lastOvlW = w; _lastOvlH = h;
+  camOvl.width  = w;
+  camOvl.height = h;
 }
 
 // Calculate where the video actually displays inside the container (object-fit:contain letterbox)
@@ -1412,7 +1419,7 @@ function drawOverlayState(state) {
     blurry:     '✋ Sabit tutun',
   };
 
-  resizeOverlay();
+  // Use current canvas size — do NOT call resizeOverlay() here (causes shrink)
   const ovlW = camOvl.width, ovlH = camOvl.height;
   if (!ovlW || !ovlH || !video.videoWidth || !video.videoHeight) return;
 
