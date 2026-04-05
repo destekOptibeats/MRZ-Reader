@@ -1230,8 +1230,7 @@ async function startCamera() {
     console.log('[Camera] ready — videoWidth:', video.videoWidth, 'videoHeight:', video.videoHeight,
       'readyState:', video.readyState);
 
-    // Reset shrink guard and do safe delayed overlay sizing
-    _lastOvlW = 0; _lastOvlH = 0;
+    // Safe delayed overlay sizing after layout settles
     requestAnimationFrame(() => resizeOverlay());
 
     scanning = true;
@@ -1248,19 +1247,17 @@ async function startCamera() {
   }
 }
 
-// Only update canvas internal size when dimensions are valid, stable, and not shrinking
-let _lastOvlW = 0, _lastOvlH = 0;
+// Sync canvas drawing resolution to container — always update, no shrink guard
 function resizeOverlay() {
   const wrap = document.getElementById('video-wrap');
   const w = wrap.offsetWidth;
   const h = wrap.offsetHeight;
-  // Reject invalid, tiny, or shrinking sizes (transient layout)
-  if (w < 100 || h < 80) return;
-  // Allow grow or first set; reject shrink by more than 10px (transient)
-  if (w < _lastOvlW - 10 || h < _lastOvlH - 10) return;
-  _lastOvlW = w; _lastOvlH = h;
-  camOvl.width  = w;
-  camOvl.height = h;
+  if (w < 50 || h < 50) return; // reject truly invalid
+  // Only update if size actually changed (avoid unnecessary canvas clear)
+  if (camOvl.width !== w || camOvl.height !== h) {
+    camOvl.width  = w;
+    camOvl.height = h;
+  }
 }
 
 // Calculate where the video actually displays inside the container (object-fit:contain letterbox)
@@ -1428,7 +1425,8 @@ function drawOverlayState(state) {
     blurry:     '✋ Sabit tutun',
   };
 
-  // Use current canvas size — do NOT call resizeOverlay() here (causes shrink)
+  // Always sync canvas to current container size for responsive behavior
+  resizeOverlay();
   const ovlW = camOvl.width, ovlH = camOvl.height;
   if (!ovlW || !ovlH || !video.videoWidth || !video.videoHeight) return;
 
@@ -2044,13 +2042,16 @@ function showError(msg) {
 window.addEventListener('offline', () => updatePill('offline'));
 window.addEventListener('online',  () => workerReady && updatePill('ready'));
 
-// Ekran döndürme ve resize'da overlay'i yeniden çiz
-window.addEventListener('resize', () => {
-  if (scanning) { resizeOverlay(); drawOverlayState('searching'); }
-});
-window.addEventListener('orientationchange', () => {
-  setTimeout(() => { if (scanning) { resizeOverlay(); drawOverlayState('searching'); } }, 200);
-});
+// Ekran döndürme ve resize'da overlay'i yeniden çiz (debounced)
+let _resizeTimer = null;
+function onVideoResize() {
+  if (_resizeTimer) clearTimeout(_resizeTimer);
+  _resizeTimer = setTimeout(() => {
+    if (scanning) { resizeOverlay(); drawOverlayState('searching'); }
+  }, 100);
+}
+window.addEventListener('resize', onVideoResize);
+window.addEventListener('orientationchange', () => setTimeout(onVideoResize, 200));
 
 // ── LOG SİSTEMİ ────────────────────────────────────────────────────────
 const MAX_LOGS = 20;
