@@ -400,7 +400,7 @@ input[type="text"] {
 </style>
 </head>
 <body>
-<div class="version-tag">v2.2.2</div>
+<div class="version-tag">v2.3.0</div>
 
 <!-- cache status pill -->
 <div id="cache-pill"><div class="pill-dot"></div><span id="pill-txt">Yükleniyor…</span></div>
@@ -1214,6 +1214,52 @@ let scanDebugCount = 0;
 let blurSkipCount = 0;
 let lastBlurLogTime = 0;
 
+// ── SESSION METRICS (telemetry only — does not affect decisions) ────────
+let metrics = null;
+const BAND_NAMES = ['main', 'upper', 'lower'];
+
+function resetMetrics() {
+  metrics = {
+    sessionStartTs: Date.now(),
+    firstLockMs: null,
+    successfulScans: 0,
+    attemptedOCR: 0,
+    blurSkips: 0,
+    motionSkips: 0,
+    rejectedOCR: 0,
+    acceptedOCR: 0,
+    bandHits: { main: 0, upper: 0, lower: 0 },
+    bestScoreUpdates: 0,
+    lastAcceptScore: null,
+    upload: { attempts: 0, successful: 0, successRotation: null, successBandIndex: null }
+  };
+}
+
+function getSessionMetricsSummary() {
+  if (!metrics) return 'No active session';
+  const now = Date.now();
+  const elapsed = ((now - metrics.sessionStartTs) / 1000).toFixed(1);
+  const avgMs = metrics.successfulScans > 0
+    ? Math.round((metrics.firstLockMs || 0) / metrics.successfulScans)
+    : null;
+  return {
+    elapsed: elapsed + 's',
+    firstLockMs: metrics.firstLockMs,
+    successfulScans: metrics.successfulScans,
+    attemptedOCR: metrics.attemptedOCR,
+    acceptedOCR: metrics.acceptedOCR,
+    rejectedOCR: metrics.rejectedOCR,
+    blurSkips: metrics.blurSkips,
+    motionSkips: metrics.motionSkips,
+    bandHits: { ...metrics.bandHits },
+    bestScoreUpdates: metrics.bestScoreUpdates,
+    lastAcceptScore: metrics.lastAcceptScore,
+    upload: { ...metrics.upload },
+    avgScanMs: avgMs
+  };
+}
+window.getMetrics = getSessionMetricsSummary;
+
 async function startCamera() {
   if (stream) return;
   try {
@@ -1261,6 +1307,7 @@ async function startCamera() {
     lastL2 = null;
     l2Count = 0;
     checksumPassed = false;
+    resetMetrics();
     setHint('MRZ satırlarını kutuya hizalayın');
     drawOverlayState('searching');
     loopId = setTimeout(() => scanLoop(), 800);
@@ -1588,6 +1635,7 @@ async function scanLoop() {
   const z = getScanZone(vw, vh);
   const hash = getFrameHash(z);
   if (Math.abs(hash - lastFrameHash) < 5000 && !checksumPassed) {
+    if (metrics) metrics.motionSkips++;
     setTimeout(scanLoop, SCAN_INTERVAL); return;
   }
   lastFrameHash = hash;
@@ -1616,9 +1664,10 @@ async function scanLoop() {
     // Sharpness check on first band only
     if (bi === 0 && !isSharpEnough(mainC)) {
       blurSkipCount++;
+      if (metrics) metrics.blurSkips++;
       const now = Date.now();
       if (now - lastBlurLogTime > 3000) {
-        console.log('[Blur] son 3s: ' + blurSkipCount + ' frame atlandı');
+        console.log('[Blur] son 3s: ' + blurSkipCount + ' frame atlandı (toplam: ' + (metrics ? metrics.blurSkips : '?') + ')');
         lastBlurLogTime = now;
         blurSkipCount = 0;
       }
@@ -1627,7 +1676,7 @@ async function scanLoop() {
     }
 
     let text;
-    try { text = (await worker.recognize(mainC)).data.text; }
+    try { text = (await worker.recognize(mainC)).data.text; if (metrics) metrics.attemptedOCR++; }
     catch(e) { continue; }
 
     const longest = longestOCRLine(text);
@@ -1652,8 +1701,21 @@ async function scanLoop() {
 
         if (l2Count >= 2) {
           drawOverlayState('accepted');
+          if (metrics) {
+            metrics.acceptedOCR++;
+            metrics.successfulScans++;
+            metrics.lastAcceptScore = score;
+            if (!metrics.firstLockMs) metrics.firstLockMs = Date.now() - metrics.sessionStartTs;
+            const bname = BAND_NAMES[bi] || 'band' + bi;
+            metrics.bandHits[bname] = (metrics.bandHits[bname] || 0) + 1;
+          }
           const diag = diagnoseMRZ(text);
-          addLog('ok', `${result.type} → KABUL`, [`L2: ${l2}`], null, validation.checksums, diag);
+          addLog('ok', `${result.type} → KABUL`, [
+            `L2: ${l2}`,
+            `band: ${BAND_NAMES[bi] || bi} | score: ${score} | l2Count: ${l2Count}`,
+            `OCR: ${metrics ? metrics.attemptedOCR : '?'} | blur: ${metrics ? metrics.blurSkips : '?'} | motion: ${metrics ? metrics.motionSkips : '?'}`,
+            metrics && metrics.firstLockMs ? `firstLock: ${metrics.firstLockMs}ms` : ''
+          ].filter(Boolean), null, validation.checksums, diag);
           if (serialMode) { addSerialResult(result, { ocrText: text, bandIdx: bi, ocrAttempts: bi + 1 }); setTimeout(scanLoop, 500); return; }
           setTimeout(() => { stopCamera(); saveAndShow(result); }, 250);
           return;
@@ -1666,7 +1728,7 @@ async function scanLoop() {
     }
 
     // Track best
-    if (score > bestScore) { bestScore = score; bestText = text; bestResult = result; bestBandIdx = bi; }
+    if (score > bestScore) { bestScore = score; bestText = text; bestResult = result; bestBandIdx = bi; if (metrics) metrics.bestScoreUpdates++; }
 
     // Early exit: longest > 35 → no need to try more bands
     if (longest > 35) {
@@ -1709,6 +1771,7 @@ async function scanLoop() {
 
       try {
         const { data: { text: shadowText } } = await worker.recognize(shadowCanvas);
+        if (metrics) metrics.attemptedOCR++;
         const shadowLongest = longestOCRLine(shadowText);
         const shadowScore = scoreMRZText(shadowText);
         if (isDebug) console.log('[ScanDebug] shadow fallback: longest:', shadowLongest, 'score:', shadowScore);
@@ -1725,8 +1788,21 @@ async function scanLoop() {
               if (l2 === lastL2) l2Count++; else { lastL2 = l2; l2Count = 1; }
               if (l2Count >= 2) {
                 drawOverlayState('accepted');
+                if (metrics) {
+                  metrics.acceptedOCR++;
+                  metrics.successfulScans++;
+                  metrics.lastAcceptScore = shadowScore;
+                  if (!metrics.firstLockMs) metrics.firstLockMs = Date.now() - metrics.sessionStartTs;
+                  const bname = BAND_NAMES[bestBandIdx] || 'band' + bestBandIdx;
+                  metrics.bandHits[bname] = (metrics.bandHits[bname] || 0) + 1;
+                }
                 const diag = diagnoseMRZ(shadowText);
-                addLog('ok', `${shadowResult.type} → KABUL (shadow)`, [`L2: ${l2}`], null, sv.checksums, diag);
+                addLog('ok', `${shadowResult.type} → KABUL (shadow)`, [
+                  `L2: ${l2}`,
+                  `band: ${BAND_NAMES[bestBandIdx] || bestBandIdx} | score: ${shadowScore} | l2Count: ${l2Count}`,
+                  `OCR: ${metrics ? metrics.attemptedOCR : '?'} | blur: ${metrics ? metrics.blurSkips : '?'} | motion: ${metrics ? metrics.motionSkips : '?'}`,
+                  metrics && metrics.firstLockMs ? `firstLock: ${metrics.firstLockMs}ms` : ''
+                ].filter(Boolean), null, sv.checksums, diag);
                 if (serialMode) { addSerialResult(shadowResult, { ocrText: shadowText, bandIdx: bestBandIdx, ocrAttempts: candidates.length + 1 }); setTimeout(scanLoop, 500); return; }
                 setTimeout(() => { stopCamera(); saveAndShow(shadowResult); }, 250);
                 return;
@@ -1744,7 +1820,8 @@ async function scanLoop() {
     }
   }
 
-  // Process best result
+  // Process best result (no checksum pass — rejected)
+  if (metrics) metrics.rejectedOCR++;
   if (bestResult) {
     const l2 = bestResult.lines[1];
     if (l2 === lastL2) l2Count++; else { lastL2 = l2; l2Count = 1; }
@@ -1909,6 +1986,7 @@ async function processImage(img) {
   const procMsg  = document.getElementById('proc-msg');
 
   procProg.style.width = '10%';
+  if (metrics) { metrics.upload.attempts = 0; metrics.upload.successful = 0; }
 
   // Vertical band search positions: center Y ratio, height ratio, label
   const bandConfigs = [
@@ -1916,6 +1994,8 @@ async function processImage(img) {
     { cy: 0.65, hr: 0.50, label: 'orta-alt %50' },
     { cy: 0.50, hr: 1.00, label: 'tam resim' },
   ];
+
+  let uploadOcrCount = 0;
 
   for (const deg of [0, 90, 270]) {
     if (processingCancelled) return;
@@ -1933,16 +2013,28 @@ async function processImage(img) {
 
       // Preprocessed attempt
       const enhanced = uploadPreprocess(cropped);
+      uploadOcrCount++;
       let result = await uploadTryRecognize(enhanced);
-      if (result) { procProg.style.width='100%'; document.getElementById('proc-cancel-btn').style.display='none'; saveAndShow(result); return; }
+      if (result) {
+        if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = bi; }
+        console.log('[Upload] SUCCESS rot=' + deg + '° band=' + bc.label + ' ocrAttempts=' + uploadOcrCount);
+        procProg.style.width='100%'; document.getElementById('proc-cancel-btn').style.display='none'; saveAndShow(result); return;
+      }
 
       // Raw attempt (no preprocessing)
       if (processingCancelled) return;
+      uploadOcrCount++;
       result = await uploadTryRecognize(cropped);
-      if (result) { procProg.style.width='100%'; document.getElementById('proc-cancel-btn').style.display='none'; saveAndShow(result); return; }
+      if (result) {
+        if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = bi; }
+        console.log('[Upload] SUCCESS (raw) rot=' + deg + '° band=' + bc.label + ' ocrAttempts=' + uploadOcrCount);
+        procProg.style.width='100%'; document.getElementById('proc-cancel-btn').style.display='none'; saveAndShow(result); return;
+      }
     }
   }
 
+  if (metrics) metrics.upload.attempts = uploadOcrCount;
+  console.log('[Upload] FAILED after ' + uploadOcrCount + ' OCR attempts');
   document.getElementById('proc-cancel-btn').style.display = 'none';
   showError('MRZ tespit edilemedi. Kimliğin arka yüzünü yükleyin.');
 }
