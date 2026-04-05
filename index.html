@@ -116,8 +116,9 @@ video{
   height:100%;
   position:absolute;
   top:0; left:0;
-  object-fit: fill;
+  object-fit: contain;
   display:block;
+  background:#000;
 }
 #cam-overlay{
   position:absolute;
@@ -1121,6 +1122,33 @@ function resizeOverlay() {
   }
 }
 
+// Calculate where the video actually displays inside the container (object-fit:contain letterbox)
+function getVideoDisplayRect() {
+  const wrap = document.getElementById('video-wrap');
+  const cw = wrap.offsetWidth, ch = wrap.offsetHeight;
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!cw || !ch || !vw || !vh) return null;
+
+  const containerAR = cw / ch;
+  const videoAR = vw / vh;
+
+  let dw, dh, dx, dy;
+  if (videoAR > containerAR) {
+    // Video wider than container → letterbox top/bottom
+    dw = cw;
+    dh = cw / videoAR;
+    dx = 0;
+    dy = (ch - dh) / 2;
+  } else {
+    // Video taller than container → letterbox left/right
+    dh = ch;
+    dw = ch * videoAR;
+    dx = (cw - dw) / 2;
+    dy = 0;
+  }
+  return { dx, dy, dw, dh, sx: dw / vw, sy: dh / vh };
+}
+
 function stopCamera() {
   scanning = false;
   if (loopId) { clearTimeout(loopId); loopId = null; }
@@ -1237,22 +1265,23 @@ function drawOverlayState(state) {
   };
 
   resizeOverlay();
-  const vw = camOvl.width, vh = camOvl.height;
-  if (!vw || !vh || !video.videoWidth || !video.videoHeight) return;
+  const ovlW = camOvl.width, ovlH = camOvl.height;
+  if (!ovlW || !ovlH || !video.videoWidth || !video.videoHeight) return;
 
-  // Dark overlay
-  camCtx.clearRect(0, 0, vw, vh);
+  const vdr = getVideoDisplayRect();
+  if (!vdr) return;
+
+  // Dark overlay over entire canvas
+  camCtx.clearRect(0, 0, ovlW, ovlH);
   camCtx.fillStyle = 'rgba(0,0,0,0.50)';
-  camCtx.fillRect(0, 0, vw, vh);
+  camCtx.fillRect(0, 0, ovlW, ovlH);
 
-  // MRZ band — single source of truth
+  // MRZ band — mapped from video pixel space to display space via letterbox offset
   const band = getMRZBand(video.videoWidth, video.videoHeight);
-  const sx = vw / video.videoWidth;
-  const sy = vh / video.videoHeight;
-  const bx = band.x * sx;
-  const by = band.y * sy;
-  const bw = band.w * sx;
-  const bh = band.h * sy;
+  const bx = vdr.dx + band.x * vdr.sx;
+  const by = vdr.dy + band.y * vdr.sy;
+  const bw = band.w * vdr.sx;
+  const bh = band.h * vdr.sy;
 
   const color = colors[state] || colors.searching;
 
@@ -1323,23 +1352,37 @@ async function scanLoop() {
   }
   lastFrameHash = hash;
 
-  // OCR crop = exact MRZ band from getMRZBand
-  const scale = band.w < 600 ? 2 : 1;
-  mainC.width  = band.w * scale;
-  mainC.height = band.h * scale;
+  // OCR crop = exact MRZ band from getMRZBand (video pixel space)
+  let ocrW = band.w, ocrH = band.h;
+
+  // Upscale small bands for better OCR
+  if (ocrW < 600) { ocrW *= 2; ocrH *= 2; }
+
+  // Limit OCR input: max 1200px width
+  if (ocrW > 1200) {
+    const ds = 1200 / ocrW;
+    ocrH = Math.round(ocrH * ds);
+    ocrW = 1200;
+  }
+
+  mainC.width  = ocrW;
+  mainC.height = ocrH;
   mainCtx.filter = 'grayscale(1) contrast(1.4)';
-  mainCtx.drawImage(video, band.x, band.y, band.w, band.h, 0, 0, mainC.width, mainC.height);
+  mainCtx.drawImage(video, band.x, band.y, band.w, band.h, 0, 0, ocrW, ocrH);
   mainCtx.filter = 'none';
 
   // Debug first 3 frames
   if (scanDebugCount < 3) {
     scanDebugCount++;
     const videoRect = video.getBoundingClientRect();
+    const vdr = getVideoDisplayRect();
     console.log('[ScanDebug] frame', scanDebugCount, '{',
       'videoNatural:', vw + 'x' + vh,
       'videoDOM:', Math.round(videoRect.width) + 'x' + Math.round(videoRect.height),
+      'displayRect:', vdr ? Math.round(vdr.dx)+','+Math.round(vdr.dy)+' '+Math.round(vdr.dw)+'x'+Math.round(vdr.dh) : 'null',
       'mrzBand: {x:' + band.x + ' y:' + band.y + ' w:' + band.w + ' h:' + band.h + '}',
-      'ocrCanvas:', mainC.width + 'x' + mainC.height,
+      'ocrRaw:', band.w + 'x' + band.h,
+      'ocrScaled:', ocrW + 'x' + ocrH,
     '}');
   }
 
