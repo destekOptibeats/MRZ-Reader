@@ -1355,11 +1355,11 @@ function getMRZBand(vw, vh) {
   return { x, y, w, h };
 }
 
-// 3 candidate bands at different vertical positions for adaptive detection
+// 3 candidate bands — ilk band overlay (0.60) ile aynı, sonra üst/alt
 function getMRZBandCandidates(vw, vh) {
   const w = Math.round(vw * 0.94);
   const h = getMRZBandSize(vh);
-  const positions = [0.55, 0.65, 0.75];
+  const positions = [0.60, 0.55, 0.68];
   return positions.map(p => {
     let x = Math.round((vw - w) / 2);
     let y = Math.round(vh * p - h / 2);
@@ -1371,10 +1371,16 @@ function getMRZBandCandidates(vw, vh) {
   });
 }
 
-// Legacy — kept for getFrameHash compatibility (uses wider zone for motion detect)
+// Motion detection zone — MRZ band çevresi + padding
 function getScanZone(vw, vh) {
-  const h = Math.round(vh * 0.55), w = Math.round(vw * 0.99);
-  return { x: Math.round((vw-w)/2), y: vh-h-Math.round(vh*0.03), w, h };
+  const band = getMRZBand(vw, vh);
+  const padX = Math.round(band.w * 0.05);
+  const padY = Math.round(band.h * 0.4);
+  let x = Math.max(band.x - padX, 0);
+  let y = Math.max(band.y - padY, 0);
+  let w = Math.min(band.w + padX * 2, vw - x);
+  let h = Math.min(band.h + padY * 2, vh - y);
+  return { x, y, w, h };
 }
 
 // ── SCAN HELPERS ────────────────────────────────────────────────────────
