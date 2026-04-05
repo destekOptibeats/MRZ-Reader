@@ -89,67 +89,60 @@ html,body{
 /* ── video — MOBİL KRİTİK ── */
 #s-scan {
   justify-content: flex-start;
-  padding: 0 !important;
-  padding-top: max(env(safe-area-inset-top, 0px), 4px) !important;
-  padding-bottom: max(env(safe-area-inset-bottom, 0px), 4px) !important;
+  padding: 0;
+  padding-top: max(env(safe-area-inset-top, 0px), 4px);
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), 4px);
   gap: 4px;
   height: 100vh;
   height: -webkit-fill-available;
   min-height: unset;
-  overflow: hidden;
-  align-items: stretch !important;
+  overflow: visible;
+  align-items: stretch;
 }
 #s-scan .title { font-size:1.1rem; flex-shrink:0; padding: 0 8px; }
 #s-scan .tabs  { flex-shrink:0; padding: 0 8px; }
 #tab-cam-content {
   flex:1; min-height:0; display:flex; flex-direction:column;
-  width: 100vw !important;
-  max-width: 100vw !important;
+  width: 100%;
   padding: 0;
 }
-#video-wrap{
-  position:relative;
-  width: 100% !important;
-  max-width: 100% !important;
+#video-wrap {
+  position: relative;
+  width: 100%;
   height: 60vh;
-  border-radius: 0;
+  min-height: 300px;
+  background: #000;
   overflow: hidden;
-  background:#000;
-  flex: 0 0 auto;
 }
-video{
-  width: 100% !important;
-  height: 100% !important;
-  position:absolute;
-  top:0; left:0;
+#video-wrap video {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%;
+  height: 100%;
   object-fit: cover;
-  display:block;
-  background:#000;
+}
+#cam-overlay {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
 @media (min-width: 768px) {
   #video-wrap {
-    max-width: 800px !important;
-    width: 100% !important;
     height: 70vh;
+    max-width: 800px;
     margin: 0 auto;
     border-radius: 14px;
   }
   #tab-cam-content {
-    width: 100% !important;
-    max-width: 800px !important;
+    max-width: 800px;
     margin: 0 auto;
   }
   #s-scan {
-    padding: 8px !important;
-    align-items: center !important;
+    padding: 8px;
+    align-items: center;
   }
-}
-#cam-overlay{
-  position:absolute;
-  top:0;left:0;
-  width:100%;height:100%;
-  pointer-events:none;
-  display:block;
 }
 
 /* ── passport list ── */
@@ -262,12 +255,10 @@ textarea::placeholder{color:var(--muted);letter-spacing:0;font-family:inherit;fo
 
 /* ── Tab cam content — tam genişlik ── */
 #tab-cam-content {
-  width: 100vw !important;
-  max-width: 100vw !important;
+  width: 100%;
   padding: 0;
   gap: 4px;
   align-items: stretch;
-  overflow: visible;
 }
 
 /* ── cache status pill ── */
@@ -409,7 +400,7 @@ input[type="text"] {
 </style>
 </head>
 <body>
-<div class="version-tag">v2.1.26</div>
+<div class="version-tag">v2.1.27</div>
 
 <!-- cache status pill -->
 <div id="cache-pill"><div class="pill-dot"></div><span id="pill-txt">Yükleniyor…</span></div>
