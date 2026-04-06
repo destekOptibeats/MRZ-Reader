@@ -116,6 +116,8 @@ function updateSerialStats() {
   }
 }
 
+window._serialSummaries = [];
+
 function startSerialScan() {
   serialMode = true;
   serialCount = 0;
@@ -124,6 +126,7 @@ function startSerialScan() {
   serialTotalShots = 0;
   serialStartTime = Date.now();
   serialCooldown = false;
+  window._serialSummaries = [];
   if (serialCooldownTimer) { clearTimeout(serialCooldownTimer); serialCooldownTimer = null; }
   document.getElementById('serial-panel').style.display = 'flex';
   document.getElementById('serial-finish-btn').style.display = 'flex';
@@ -235,6 +238,19 @@ function addSerialResult(mrzResult, ocrMeta) {
     }
   });
 
+  // Push pipeline summary for this scan
+  var scanSummary = window._lastSummary ? JSON.parse(JSON.stringify(window._lastSummary)) : {
+    mode: 'serial-camera', success: true, totalOCR: attempts, selectedRotations: [],
+    regionsFound: 0, regionsTried: 0, fallbackUsed: false,
+    winner: { rotation: 0, region: 0, method: bandLabel }, durationMs: 0
+  };
+  scanSummary.mode = scanSummary.mode === 'single-upload' ? 'serial-upload' : 'serial-camera';
+  scanSummary.docIndex = serialCount;
+  scanSummary.docId = docId;
+  scanSummary.name = parsed.surname + (parsed.given ? ' ' + parsed.given : '');
+  scanSummary.isDuplicate = isDuplicate;
+  window._serialSummaries.push(scanSummary);
+
   // UI güncelle
   document.getElementById('serial-counter').textContent = serialCount;
   bounceStat('serial-counter');
@@ -333,8 +349,10 @@ function formatResultForCopy(r) {
     'Tip: ' + (r.docType || '—'),
     'Sonuç: ' + (r.finalResult || '—'),
     'Süre: ' + (r.durationMs != null ? r.durationMs + 'ms' : (r.durationSec != null ? r.durationSec + 's' : '—')),
+    'Yöntem: ' + (r.method || '—'),
+    'OCR Deneme: ' + (r.totalOCR || r.ocrAttempts || '—'),
+    'Fallback: ' + (r.fallbackUsed ? 'Evet' : 'Hayır'),
     'Band: ' + (r.selectedBand || '—'),
-    'OCR Deneme: ' + (r.ocrAttempts || '—'),
     'En Uzun Satır: ' + (r.longestLine || '—'),
     'Chevron (<): ' + (r.chevronCount != null ? r.chevronCount : '—'),
     'Parse: ' + (r.parseOk ? 'OK' : 'FAIL'),
@@ -388,59 +406,133 @@ function showSerialReport() {
   const mm = String(Math.floor(totalSec / 60)).padStart(2, '0');
   const ss = String(totalSec % 60).padStart(2, '0');
   const uniqueDocs = new Set(serialEntries.map(e => e.docId)).size;
-  const avgSec = serialEntries.length > 0 ? (totalSec / serialEntries.length).toFixed(1) : '0.0';
-  const summaryText = '📷 ' + serialEntries.length + ' tarama · 📄 ' + uniqueDocs + ' benzersiz belge · ⏱ ' + mm + ':' + ss + ' · Ort: ' + avgSec + 's/tarama';
+  const summaries = window._serialSummaries || [];
 
   // Build structured results — every scan is a separate row
-  const structuredResults = serialEntries.map((e) => ({
-    name: e.name,
-    docType: e.type,
-    finalResult: 'SUCCESS',
-    durationSec: Math.round((e.firstReadTime - serialStartTime) / 1000),
-    selectedBand: e.selectedBand || '—',
-    ocrAttempts: e.ocrAttempts || 1,
-    longestLine: e.longestLine || 0,
-    chevronCount: e.chevronCount != null ? e.chevronCount : 0,
-    parseOk: true,
-    checksumOk: true,
-    failReason: null,
-    comment: e.isDuplicate ? 'Tekrar okuma' : getResultComment('SUCCESS'),
-    docId: e.docId,
-    isDuplicate: e.isDuplicate || false,
-    parsedFields: e.parsedFields || null,
-    rawOcrText: e.rawOcrText || '',
-  }));
+  const structuredResults = serialEntries.map((e, idx) => {
+    const s = summaries[idx] || {};
+    const winner = s.winner || {};
+    return {
+      name: e.name,
+      docType: e.type,
+      finalResult: s.success !== false ? 'SUCCESS' : 'FAIL',
+      durationMs: s.durationMs || 0,
+      totalOCR: s.totalOCR || e.ocrAttempts || 1,
+      method: winner.method || '—',
+      fallbackUsed: s.fallbackUsed || false,
+      selectedBand: e.selectedBand || '—',
+      longestLine: e.longestLine || 0,
+      chevronCount: e.chevronCount != null ? e.chevronCount : 0,
+      parseOk: true,
+      checksumOk: true,
+      failReason: null,
+      comment: e.isDuplicate ? 'Tekrar okuma' : getResultComment('SUCCESS'),
+      docId: e.docId,
+      isDuplicate: e.isDuplicate || false,
+      parsedFields: e.parsedFields || null,
+      rawOcrText: e.rawOcrText || '',
+    };
+  });
 
+  // ── Aggregate stats ──
+  var totalDocs = structuredResults.length;
+  var successCount = structuredResults.filter(function(r) { return r.finalResult === 'SUCCESS'; }).length;
+  var successRate = totalDocs > 0 ? Math.round(successCount / totalDocs * 100) : 0;
+  var totalOCRSum = 0, totalDurSum = 0, fallbackCount = 0;
+  for (var si = 0; si < structuredResults.length; si++) {
+    totalOCRSum += structuredResults[si].totalOCR;
+    totalDurSum += structuredResults[si].durationMs;
+    if (structuredResults[si].fallbackUsed) fallbackCount++;
+  }
+  var avgOCR = totalDocs > 0 ? (totalOCRSum / totalDocs).toFixed(1) : '0';
+  var avgDur = totalDocs > 0 ? Math.round(totalDurSum / totalDocs) : 0;
+  var fallbackRate = totalDocs > 0 ? Math.round(fallbackCount / totalDocs * 100) : 0;
+
+  // ── Table ──
   let html = '<table class="batch-table"><thead><tr>' +
-    '<th>#</th><th>Ad Soyad</th><th>Belge No</th><th>TC Kimlik No</th><th>Band</th><th>Uzun</th><th>&lt;</th><th>DOB</th><th>Süre</th><th>Yorum</th><th></th>' +
+    '<th>#</th><th></th><th>Ad Soyad</th><th>Belge No</th><th>OCR</th><th>Yöntem</th><th>Süre</th><th>DOB</th><th>Yorum</th><th></th>' +
     '</tr></thead><tbody>';
 
   structuredResults.forEach((r, i) => {
     const pf = r.parsedFields || {};
     const dupStyle = r.isDuplicate ? 'opacity:.6;' : '';
-    const nid = pf.nationalId ? (pf.nationalId + (pf.nationalIdValid ? ' ✓' : ' ⚠')) : '';
+    const icon = r.finalResult === 'SUCCESS' ? '✓' : '✗';
+    const iconColor = r.finalResult === 'SUCCESS' ? '#4caf50' : '#f44336';
+    const durStr = r.durationMs > 0 ? r.durationMs + 'ms' : '—';
     html += '<tr style="' + dupStyle + '">' +
       '<td>' + (i+1) + '</td>' +
+      '<td style="color:' + iconColor + ';font-weight:bold">' + icon + '</td>' +
       '<td>' + r.name + '</td>' +
       '<td style="font-family:monospace;font-size:.75rem">' + r.docId + '</td>' +
-      '<td style="font-family:monospace;font-size:.72rem">' + nid + '</td>' +
-      '<td>' + r.selectedBand + '</td>' +
-      '<td>' + r.longestLine + '</td>' +
-      '<td>' + r.chevronCount + '</td>' +
+      '<td>' + r.totalOCR + '</td>' +
+      '<td style="font-size:.72rem">' + r.method + '</td>' +
+      '<td style="font-size:.75rem">' + durStr + '</td>' +
       '<td style="font-size:.75rem">' + (pf.birthDate || '—') + '</td>' +
-      '<td>' + r.durationSec + 's</td>' +
       '<td style="font-size:.72rem;color:var(--muted)">' + r.comment + '</td>' +
       '<td><button onclick="copyToClipboard(formatResultForCopy(serialReportData[' + i + ']))" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--muted);cursor:pointer;font-size:.7rem">📋</button></td>' +
       '</tr>';
   });
-
   html += '</tbody></table>';
-  html += '<div class="batch-summary">' + summaryText + '</div>';
-  html += '<div style="text-align:center;margin-top:10px"><button class="btn ghost btn-sm" onclick="copyToClipboard(formatAllResultsForCopy(serialReportData,\'' + summaryText.replace(/'/g,'') + '\'))">📋 Tüm Sonuçları Kopyala</button></div>';
+
+  // ── Aggregate stats block ──
+  html += '<div class="batch-summary" style="text-align:left;font-family:monospace;font-size:.8rem;line-height:1.6;margin-top:12px;padding:10px 14px">' +
+    'Toplam: ' + totalDocs + ' · Benzersiz: ' + uniqueDocs + '<br>' +
+    'Başarılı: ' + successCount + ' (%' + successRate + ')<br>' +
+    'Ort OCR: ' + avgOCR + ' · Ort süre: ' + avgDur + 'ms<br>' +
+    'Fallback: %' + fallbackRate + ' · Süre: ' + mm + ':' + ss +
+    '</div>';
+
+  // ── Export buttons ──
+  html += '<div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:10px">' +
+    '<button class="btn ghost btn-sm" onclick="copySerialJSON()">{ } JSON</button>' +
+    '<button class="btn ghost btn-sm" onclick="copySerialAISummary()">AI Summary</button>' +
+    '<button class="btn ghost btn-sm" onclick="copyToClipboard(formatAllResultsForCopy(serialReportData))">📋 Tablo Kopyala</button>' +
+    '</div>';
 
   window.serialReportData = structuredResults;
   document.getElementById('serial-report-body').innerHTML = html;
   goScreen('s-serial-report');
+}
+
+function copySerialJSON() {
+  copyToClipboard(JSON.stringify(window._serialSummaries || [], null, 2));
+}
+
+function copySerialAISummary() {
+  var s = window._serialSummaries || [];
+  var total = s.length;
+  var success = s.filter(function(x) { return x.success !== false; }).length;
+  var rate = total > 0 ? Math.round(success / total * 100) : 0;
+  var ocrSum = 0, durSum = 0, fbCount = 0;
+  for (var i = 0; i < s.length; i++) {
+    ocrSum += (s[i].totalOCR || 0);
+    durSum += (s[i].durationMs || 0);
+    if (s[i].fallbackUsed) fbCount++;
+  }
+  var avgOcr = total > 0 ? (ocrSum / total).toFixed(1) : '0';
+  var avgDur = total > 0 ? Math.round(durSum / total) : 0;
+
+  var lines = [
+    'MRZ Serial Analysis',
+    'Total: ' + total,
+    'Success: ' + success + ' (' + rate + '%)',
+    'Avg OCR: ' + avgOcr,
+    'Avg Duration: ' + avgDur + 'ms',
+    'Fallback: ' + fbCount + '/' + total,
+    ''
+  ];
+  for (var i = 0; i < s.length; i++) {
+    var x = s[i];
+    var w = x.winner || {};
+    var icon = x.success !== false ? '✓' : '✗';
+    lines.push('#' + (i+1) + ' ' + icon +
+      ' OCR:' + (x.totalOCR || 0) +
+      ' ' + (w.method || '—') +
+      ' ' + (x.durationMs || 0) + 'ms' +
+      (x.name ? ' ' + x.name : '') +
+      (x.isDuplicate ? ' [dup]' : ''));
+  }
+  copyToClipboard(lines.join('\n'));
 }
 
 function leaveSerialReport() {
@@ -449,6 +541,7 @@ function leaveSerialReport() {
   serialScannedIds = [];
   serialCount = 0;
   serialTotalShots = 0;
+  window._serialSummaries = [];
   renderList();
   goScreen('s-home');
 }
