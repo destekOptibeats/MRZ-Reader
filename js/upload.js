@@ -128,8 +128,16 @@ function uploadPreprocess(srcCanvas, highContrast) {
 async function uploadTryRecognize(canvas) {
   try {
     const { data: { text } } = await worker.recognize(canvas);
+    // Diagnostic: log what Tesseract actually reads
+    var ocrLines = text.split('\n').filter(function(l) { return l.trim().length > 5; });
+    var longest = ocrLines.reduce(function(a, b) { return a.length > b.length ? a : b; }, '');
+    logStep('[OCR-raw] len=' + longest.length + ' "' + longest.substring(0, 44) + '"');
     const result = extractMRZ(clean(text));
-    if (result && validateMRZ(result).valid) return result;
+    if (result) {
+      var v = validateMRZ(result);
+      if (v.valid) return result;
+      logStep('[OCR-raw] parsed but checksum fail: ' + JSON.stringify(v.checksums));
+    }
   } catch(e) { /* devam */ }
   return null;
 }
