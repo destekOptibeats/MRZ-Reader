@@ -42,7 +42,6 @@ var UPLOAD_CFG = {
   // Phase 3: OCR budget
   REGION2_MIN_RATIO:    0.80,
   WIDER_CROP_MULT:      2.0,
-  FALLBACK_CROP_RATIO:  0.50,
   ROT_SCORE_W:          0.35,
   REG_SCORE_W:          0.65,
 };
@@ -166,7 +165,7 @@ function computeRowScores(canvas) {
   var total = sampleW * sampleH;
   var sumAll = 0;
   for (var t = 0; t < 256; t++) sumAll += t * histogram[t];
-  var sumB = 0, wB = 0, maxVar = 0, bestT = darkThresh;
+  var sumB = 0, wB = 0, maxBetween = 0, bestT = darkThresh;
   for (var t = 0; t < 256; t++) {
     wB += histogram[t];
     if (wB === 0) continue;
@@ -176,7 +175,7 @@ function computeRowScores(canvas) {
     var mB = sumB / wB;
     var mF = (sumAll - sumB) / wF;
     var between = wB * wF * (mB - mF) * (mB - mF);
-    if (between > maxVar) { maxVar = between; bestT = t; }
+    if (between > maxBetween) { maxBetween = between; bestT = t; }
   }
   darkThresh = Math.min(180, Math.max(80, bestT));
 
@@ -235,7 +234,7 @@ function scoreRotation(canvas) {
 
   // Focus on bottom ROTATION_CROP_RATIO of image
   var startY = Math.round(h * (1 - C.ROTATION_CROP_RATIO));
-  var sumScore = 0, count = 0;
+  var sumScore = 0;
 
   // Find top N rows by score in the bottom region
   var bottomScores = [];
@@ -576,9 +575,10 @@ async function processImage(img) {
         // Try wider crop (WIDER_CROP_MULT × region height)
         if (processingCancelled) return;
         procMsg.textContent = deg + '° geniş alan deneniyor…';
-        var widerPad = Math.round(region.h * (C.WIDER_CROP_MULT - 1) / 2);
-        var widerY = Math.max(0, region.y - widerPad);
-        var widerEnd = Math.min(rotated.height, region.y + region.h + widerPad);
+        var rawH = region.rawEnd - region.rawStart;
+        var widerPad = Math.round(rawH * (C.WIDER_CROP_MULT - 1) / 2);
+        var widerY = Math.max(0, region.rawStart - widerPad);
+        var widerEnd = Math.min(rotated.height, region.rawEnd + widerPad);
         var widerH = widerEnd - widerY;
         var wider = uploadCropRegion(rotated, widerY, widerH);
         var widerEnhanced = uploadPreprocess(wider);
