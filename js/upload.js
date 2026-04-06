@@ -512,6 +512,7 @@ async function processImage(img) {
 
   // ── PHASE 1: OCR-free Rotation Ranking ──────────────────────────────
   clearLiveLog();
+  logStep('[Start] processing image ' + img.naturalWidth + '×' + img.naturalHeight);
   procMsg.textContent = 'Belge yönü analiz ediliyor…';
   var rankedRotations = rankRotations(img);
   if (processingCancelled) return;
@@ -539,7 +540,10 @@ async function processImage(img) {
       var tryCount = 1;
       if (regions.length >= 2) {
         var ratio = regions[1].score / regions[0].score;
-        if (ratio >= C.REGION2_MIN_RATIO) tryCount = 2;
+        if (ratio >= C.REGION2_MIN_RATIO) {
+          tryCount = 2;
+          logStep('[Region] score-close → trying #2 (ratio=' + ratio.toFixed(3) + ')');
+        }
       }
 
       for (var rgi = 0; rgi < tryCount; rgi++) {
@@ -562,6 +566,7 @@ async function processImage(img) {
           if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = -1; }
           summary.success = true; summary.winner = { rotation: deg, region: rgi + 1, method: 'enhanced' };
           summary.durationMs = Date.now() - startTime; window._lastSummary = summary;
+          logStep('[Success] MRZ found in ' + summary.totalOCR + ' OCR attempts (' + summary.durationMs + 'ms)');
           console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
           procProg.style.width = '100%';
           document.getElementById('proc-cancel-btn').style.display = 'none';
@@ -578,6 +583,7 @@ async function processImage(img) {
           if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = -1; }
           summary.success = true; summary.winner = { rotation: deg, region: rgi + 1, method: 'raw' };
           summary.durationMs = Date.now() - startTime; window._lastSummary = summary;
+          logStep('[Success] MRZ found in ' + summary.totalOCR + ' OCR attempts (' + summary.durationMs + 'ms)');
           console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
           procProg.style.width = '100%';
           document.getElementById('proc-cancel-btn').style.display = 'none';
@@ -602,6 +608,7 @@ async function processImage(img) {
           if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = -2; }
           summary.success = true; summary.winner = { rotation: deg, region: rgi + 1, method: 'wider' };
           summary.durationMs = Date.now() - startTime; window._lastSummary = summary;
+          logStep('[Success] MRZ found in ' + summary.totalOCR + ' OCR attempts (' + summary.durationMs + 'ms)');
           console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
           procProg.style.width = '100%';
           document.getElementById('proc-cancel-btn').style.display = 'none';
@@ -639,6 +646,7 @@ async function processImage(img) {
           if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = bi; }
           summary.success = true; summary.winner = { rotation: deg, region: 0, method: 'fallback-' + bc.label };
           summary.durationMs = Date.now() - startTime; window._lastSummary = summary;
+          logStep('[Success] MRZ found in ' + summary.totalOCR + ' OCR attempts (' + summary.durationMs + 'ms)');
           console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
           procProg.style.width = '100%';
           document.getElementById('proc-cancel-btn').style.display = 'none';
