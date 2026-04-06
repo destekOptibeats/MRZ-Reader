@@ -32,6 +32,7 @@ function goScreen(id) {
   window.scrollTo(0, 0);
   if (id === 's-scan') setTimeout(() => startCamera(), 100);
   else stopCamera();
+  if (id === 's-analysis') renderAnalysis();
 }
 function goHome() {
   stopScan();
@@ -487,6 +488,7 @@ function showSerialReport() {
     '<button class="btn ghost btn-sm" onclick="copySerialJSON()">{ } JSON</button>' +
     '<button class="btn ghost btn-sm" onclick="copySerialAISummary()">AI Summary</button>' +
     '<button class="btn ghost btn-sm" onclick="copyToClipboard(formatAllResultsForCopy(serialReportData))">📋 Tablo Kopyala</button>' +
+    '<button class="btn ghost btn-sm" onclick="addSerialToAnalysis()">+ Analiz</button>' +
     '</div>';
 
   window.serialReportData = structuredResults;
@@ -544,6 +546,174 @@ function leaveSerialReport() {
   window._serialSummaries = [];
   renderList();
   goScreen('s-home');
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// ANALYSIS DASHBOARD
+// ═══════════════════════════════════════════════════════════════════════
+window._analysisSession = [];
+
+function addCurrentToAnalysis() {
+  var s = window._lastSummary;
+  if (!s) { flashCopyFeedback('Summary yok'); return; }
+  window._analysisSession.push(JSON.parse(JSON.stringify(s)));
+  flashCopyFeedback('Analiz\'e eklendi (#' + window._analysisSession.length + ')');
+}
+
+function addSerialToAnalysis() {
+  var ss = window._serialSummaries || [];
+  if (!ss.length) { flashCopyFeedback('Seri veri yok'); return; }
+  for (var i = 0; i < ss.length; i++) {
+    window._analysisSession.push(JSON.parse(JSON.stringify(ss[i])));
+  }
+  flashCopyFeedback(ss.length + ' kayıt eklendi');
+}
+
+function renderAnalysis() {
+  var data = window._analysisSession;
+  var emptyEl = document.getElementById('analysis-empty');
+  var bodyEl = document.getElementById('analysis-body');
+  var actionsEl = document.getElementById('analysis-actions');
+
+  if (!data.length) {
+    emptyEl.style.display = '';
+    bodyEl.innerHTML = '';
+    actionsEl.style.display = 'none';
+    return;
+  }
+  emptyEl.style.display = 'none';
+  actionsEl.style.display = 'flex';
+
+  // Aggregate stats
+  var total = data.length;
+  var successCount = 0, ocrSum = 0, durSum = 0, fbCount = 0;
+  var methodMap = {}, rotMap = {};
+  for (var i = 0; i < total; i++) {
+    var d = data[i];
+    if (d.success !== false) successCount++;
+    ocrSum += (d.totalOCR || 0);
+    durSum += (d.durationMs || 0);
+    if (d.fallbackUsed) fbCount++;
+    var m = (d.winner && d.winner.method) || '—';
+    methodMap[m] = (methodMap[m] || 0) + 1;
+    if (d.winner && d.winner.rotation != null) {
+      var rk = d.winner.rotation + '°';
+      rotMap[rk] = (rotMap[rk] || 0) + 1;
+    }
+  }
+  var successRate = Math.round(successCount / total * 100);
+  var avgOCR = (ocrSum / total).toFixed(1);
+  var avgDur = Math.round(durSum / total);
+  var fbRate = Math.round(fbCount / total * 100);
+
+  // Stats block
+  var html = '<div class="batch-summary" style="text-align:left;font-family:monospace;font-size:.8rem;line-height:1.7;padding:10px 14px">' +
+    'Toplam: ' + total + ' · Başarılı: ' + successCount + ' (%' + successRate + ')<br>' +
+    'Ort OCR: ' + avgOCR + ' · Ort süre: ' + avgDur + 'ms<br>' +
+    'Fallback: %' + fbRate + '</div>';
+
+  // Method distribution
+  var methodKeys = Object.keys(methodMap);
+  if (methodKeys.length) {
+    html += '<div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin:12px 0 4px">Yöntem Dağılımı</div>';
+    html += '<div style="font-family:monospace;font-size:.78rem;line-height:1.6">';
+    for (var mi = 0; mi < methodKeys.length; mi++) {
+      var mk = methodKeys[mi];
+      var pct = Math.round(methodMap[mk] / total * 100);
+      html += mk + ': ' + methodMap[mk] + ' (%' + pct + ')<br>';
+    }
+    html += '</div>';
+  }
+
+  // Rotation distribution
+  var rotKeys = Object.keys(rotMap);
+  if (rotKeys.length) {
+    html += '<div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin:12px 0 4px">Rotation Dağılımı</div>';
+    html += '<div style="font-family:monospace;font-size:.78rem;line-height:1.6">';
+    for (var ri2 = 0; ri2 < rotKeys.length; ri2++) {
+      var rk2 = rotKeys[ri2];
+      var rpct = Math.round(rotMap[rk2] / total * 100);
+      html += rk2 + ': ' + rotMap[rk2] + ' (%' + rpct + ')<br>';
+    }
+    html += '</div>';
+  }
+
+  // Table
+  html += '<table class="batch-table" style="margin-top:12px"><thead><tr>' +
+    '<th>#</th><th>Mode</th><th></th><th>OCR</th><th>Yöntem</th><th>ms</th>' +
+    '</tr></thead><tbody>';
+  for (var ti = 0; ti < data.length; ti++) {
+    var d2 = data[ti];
+    var icon = d2.success !== false ? '✓' : '✗';
+    var iconColor = d2.success !== false ? '#4caf50' : '#f44336';
+    var w2 = d2.winner || {};
+    var modeShort = (d2.mode || '—').replace('single-', 's-').replace('serial-', 'sr-');
+    html += '<tr>' +
+      '<td>' + (ti+1) + '</td>' +
+      '<td style="font-size:.7rem">' + modeShort + '</td>' +
+      '<td style="color:' + iconColor + ';font-weight:bold">' + icon + '</td>' +
+      '<td>' + (d2.totalOCR || 0) + '</td>' +
+      '<td style="font-size:.72rem">' + (w2.method || '—') + '</td>' +
+      '<td>' + (d2.durationMs || 0) + '</td>' +
+      '</tr>';
+  }
+  html += '</tbody></table>';
+
+  bodyEl.innerHTML = html;
+}
+
+function copyAnalysisJSON() {
+  copyToClipboard(JSON.stringify(window._analysisSession, null, 2));
+}
+
+function copyAnalysisAI() {
+  var data = window._analysisSession;
+  if (!data.length) { flashCopyFeedback('Veri yok'); return; }
+
+  var total = data.length;
+  var successCount = 0, ocrSum = 0, durSum = 0, fbCount = 0;
+  var methodMap = {};
+  for (var i = 0; i < total; i++) {
+    if (data[i].success !== false) successCount++;
+    ocrSum += (data[i].totalOCR || 0);
+    durSum += (data[i].durationMs || 0);
+    if (data[i].fallbackUsed) fbCount++;
+    var m = (data[i].winner && data[i].winner.method) || '—';
+    methodMap[m] = (methodMap[m] || 0) + 1;
+  }
+
+  var lines = [
+    'MRZ Pipeline Analysis',
+    '',
+    'Total: ' + total,
+    'Success: ' + successCount + ' (' + Math.round(successCount/total*100) + '%)',
+    'Avg OCR: ' + (ocrSum/total).toFixed(1),
+    'Avg Duration: ' + Math.round(durSum/total) + 'ms',
+    'Fallback: ' + Math.round(fbCount/total*100) + '%',
+    '',
+    'Method distribution:'
+  ];
+  var mks = Object.keys(methodMap);
+  for (var mi2 = 0; mi2 < mks.length; mi2++) {
+    lines.push('  ' + mks[mi2] + ': ' + Math.round(methodMap[mks[mi2]]/total*100) + '%');
+  }
+  lines.push('');
+  for (var j = 0; j < data.length; j++) {
+    var d3 = data[j];
+    var w3 = d3.winner || {};
+    var ic = d3.success !== false ? '✓' : '✗';
+    lines.push('#' + (j+1) + ' ' + (d3.mode||'—') + ' ' + ic +
+      ' OCR:' + (d3.totalOCR||0) +
+      ' ' + (w3.method||'—') +
+      ' ' + (d3.durationMs||0) + 'ms');
+  }
+  copyToClipboard(lines.join('\n'));
+}
+
+function clearAnalysis() {
+  window._analysisSession = [];
+  renderAnalysis();
+  flashCopyFeedback('Analiz temizlendi');
 }
 
 function nextScan() {
