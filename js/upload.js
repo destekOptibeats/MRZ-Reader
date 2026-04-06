@@ -269,6 +269,27 @@ function rankRotations(img) {
 
   scored.sort(function(a, b) { return b.score - a.score; });
   var top = scored.slice(0, C.ROTATION_KEEP_TOP);
+
+  // Guarantee at least one primary rotation (0° or 180°) is included
+  // Portrait photos can cause 90°/270° to score artificially high
+  var hasPrimary = false;
+  for (var ti = 0; ti < top.length; ti++) {
+    if (top[ti].deg === 0 || top[ti].deg === 180) { hasPrimary = true; break; }
+  }
+  if (!hasPrimary) {
+    // Find best primary from scored list
+    var best0 = null, best180 = null;
+    for (var si = 0; si < scored.length; si++) {
+      if (scored[si].deg === 0) best0 = scored[si];
+      if (scored[si].deg === 180) best180 = scored[si];
+    }
+    var bestPrimary = (!best0 || (best180 && best180.score > best0.score)) ? best180 : best0;
+    if (bestPrimary) {
+      top[top.length - 1] = bestPrimary; // replace weakest
+      logStep('[Rot] primary fix: forced ' + bestPrimary.deg + '° (portrait guard)');
+    }
+  }
+
   logStep('[Rot] top: ' + top.map(function(r) { return r.deg + '°(' + r.score.toFixed(3) + ')'; }).join(', '));
   return top;
 }
