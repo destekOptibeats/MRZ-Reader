@@ -506,11 +506,16 @@ async function processImage(img) {
 
   var C = UPLOAD_CFG;
   var uploadOcrCount = 0;
+  var summary = {
+    success: false, totalOCR: 0, selectedRotations: [],
+    regionsFound: 0, regionsTried: 0, fallbackUsed: false, winner: null
+  };
 
   // ── PHASE 1: OCR-free Rotation Ranking ──────────────────────────────
   procMsg.textContent = 'Belge yönü analiz ediliyor…';
   var rankedRotations = rankRotations(img);
   if (processingCancelled) return;
+  summary.selectedRotations = rankedRotations.map(function(r) { return r.deg; });
   procProg.style.width = '15%';
 
   // ── PHASE 2 + 3: For each top rotation, locate regions and OCR ──────
@@ -527,6 +532,8 @@ async function processImage(img) {
     // Phase 2: Locate MRZ regions
     var regions = locateMRZRegions(rotated);
 
+    summary.regionsFound = Math.max(summary.regionsFound, regions.length);
+
     if (regions.length > 0) {
       // Determine how many regions to try
       var tryCount = 1;
@@ -538,6 +545,7 @@ async function processImage(img) {
       for (var rgi = 0; rgi < tryCount; rgi++) {
         if (processingCancelled) return;
         var region = regions[rgi];
+        summary.regionsTried++;
         procMsg.textContent = deg + '° bölge #' + (rgi+1) + ' okunuyor…';
 
         // finalCandidateScore for logging
@@ -548,11 +556,13 @@ async function processImage(img) {
         // Try enhanced crop
         var cropped = uploadCropRegion(rotated, region.y, region.h);
         var enhanced = uploadPreprocess(cropped);
-        uploadOcrCount++;
+        uploadOcrCount++; summary.totalOCR++;
         var result = await uploadTryRecognize(enhanced);
         if (result) {
           if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = -1; }
+          summary.success = true; summary.winner = { rotation: deg, region: rgi + 1, method: 'enhanced' };
           console.log('[Upload] SUCCESS rot=' + deg + '° region#' + (rgi+1) + ' (enhanced) ocrAttempts=' + uploadOcrCount);
+          console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
           procProg.style.width = '100%';
           document.getElementById('proc-cancel-btn').style.display = 'none';
           saveAndShow(result);
@@ -561,11 +571,13 @@ async function processImage(img) {
 
         // Try raw crop
         if (processingCancelled) return;
-        uploadOcrCount++;
+        uploadOcrCount++; summary.totalOCR++;
         result = await uploadTryRecognize(cropped);
         if (result) {
           if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = -1; }
+          summary.success = true; summary.winner = { rotation: deg, region: rgi + 1, method: 'raw' };
           console.log('[Upload] SUCCESS rot=' + deg + '° region#' + (rgi+1) + ' (raw) ocrAttempts=' + uploadOcrCount);
+          console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
           procProg.style.width = '100%';
           document.getElementById('proc-cancel-btn').style.display = 'none';
           saveAndShow(result);
@@ -582,11 +594,13 @@ async function processImage(img) {
         var widerH = widerEnd - widerY;
         var wider = uploadCropRegion(rotated, widerY, widerH);
         var widerEnhanced = uploadPreprocess(wider);
-        uploadOcrCount++;
+        uploadOcrCount++; summary.totalOCR++;
         result = await uploadTryRecognize(widerEnhanced);
         if (result) {
           if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = -2; }
+          summary.success = true; summary.winner = { rotation: deg, region: rgi + 1, method: 'wider' };
           console.log('[Upload] SUCCESS rot=' + deg + '° region#' + (rgi+1) + ' (wider) ocrAttempts=' + uploadOcrCount);
+          console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
           procProg.style.width = '100%';
           document.getElementById('proc-cancel-btn').style.display = 'none';
           saveAndShow(result);
@@ -599,6 +613,7 @@ async function processImage(img) {
 
     // Fallback: band search on first rotation only
     if (ri === 0) {
+      summary.fallbackUsed = true;
       if (processingCancelled) return;
       procMsg.textContent = deg + '° band taraması…';
       var bandConfigs = [
@@ -614,11 +629,13 @@ async function processImage(img) {
 
         var bandCrop = bc.hr >= 1.0 ? rotated : uploadCropBand(rotated, bc.cy, bc.hr);
         var bandEnhanced = uploadPreprocess(bandCrop);
-        uploadOcrCount++;
+        uploadOcrCount++; summary.totalOCR++;
         var result = await uploadTryRecognize(bandEnhanced);
         if (result) {
           if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = bi; }
+          summary.success = true; summary.winner = { rotation: deg, region: 0, method: 'fallback-' + bc.label };
           console.log('[Upload] SUCCESS (fallback band) rot=' + deg + '° band=' + bc.label + ' ocrAttempts=' + uploadOcrCount);
+          console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
           procProg.style.width = '100%';
           document.getElementById('proc-cancel-btn').style.display = 'none';
           saveAndShow(result);
@@ -631,6 +648,7 @@ async function processImage(img) {
   // ── FAIL ───────────────────────────────────────────────────────────
   if (metrics) metrics.upload.attempts = uploadOcrCount;
   console.log('[Upload] FAILED after ' + uploadOcrCount + ' OCR attempts');
+  console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
   document.getElementById('proc-cancel-btn').style.display = 'none';
   showError('MRZ tespit edilemedi. Kimliğin arka yüzünü yükleyin.');
 }
