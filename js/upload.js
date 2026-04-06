@@ -124,14 +124,73 @@ function uploadPreprocess(srcCanvas, highContrast) {
   return c;
 }
 
+// Parçalı MRZ satırlarını OCR çıktısından toplayan fonksiyon
+// Her OCR denemesinden sonra potansiyel satırları biriktirir
+function collectMRZLines(text, acc) {
+  if (!text) return;
+  var cleaned = clean(text);
+  var lines = cleaned.split(/\n+/).map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 20; });
+
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+
+    // TD1 satırları (30 karakter)
+    var l1 = fixLine(line, {targetLen: 30, kind: 'TD1_L1'});
+    if (l1 && isL1_TD1(l1) && acc.td1_l1.indexOf(l1) === -1) acc.td1_l1.push(l1);
+
+    var l2 = fixLine(line, {targetLen: 30, kind: 'TD1_L2'});
+    if (l2 && isL2_TD1(l2) && acc.td1_l2.indexOf(l2) === -1) acc.td1_l2.push(l2);
+
+    var l3 = fixLine(line, {targetLen: 30, kind: 'TD1_L3'});
+    if (l3 && isL3_TD1(l3) && acc.td1_l3.indexOf(l3) === -1) acc.td1_l3.push(l3);
+
+    // TD3 satırları (44 karakter)
+    var t1 = fixLine(line, {targetLen: 44, kind: 'TD3_L1'});
+    if (t1 && isL1_TD3(t1) && acc.td3_l1.indexOf(t1) === -1) acc.td3_l1.push(t1);
+
+    var t2 = fixLine(line, {targetLen: 44, kind: 'TD3_L2'});
+    if (t2 && isL2_TD3(t2) && acc.td3_l2.indexOf(t2) === -1) acc.td3_l2.push(t2);
+  }
+}
+
+// Biriktirilen satırlardan geçerli MRZ oluşturmayı dener
+function tryAssemblyFromAcc(acc) {
+  // TD1: L1 + L2 + L3 gerekli
+  for (var a = 0; a < acc.td1_l1.length; a++) {
+    for (var b = 0; b < acc.td1_l2.length; b++) {
+      for (var c = 0; c < acc.td1_l3.length; c++) {
+        var result = { type: 'TD1', lines: [acc.td1_l1[a], acc.td1_l2[b], acc.td1_l3[c]] };
+        var v = validateMRZ(result);
+        if (v.valid) return result;
+      }
+    }
+  }
+
+  // TD3: L1 + L2 gerekli
+  for (var a = 0; a < acc.td3_l1.length; a++) {
+    for (var b = 0; b < acc.td3_l2.length; b++) {
+      var result = { type: 'TD3', lines: [acc.td3_l1[a], acc.td3_l2[b]] };
+      var v = validateMRZ(result);
+      if (v.valid) return result;
+    }
+  }
+
+  return null;
+}
+
 // Upload-only: OCR → parse → checksum denemesi
-async function uploadTryRecognize(canvas) {
+// acc: opsiyonel satır biriktirici — başarısız olsa bile parçalı satırları toplar
+async function uploadTryRecognize(canvas, acc) {
   try {
     const { data: { text } } = await worker.recognize(canvas);
     // Diagnostic: log what Tesseract actually reads
     var ocrLines = text.split('\n').filter(function(l) { return l.trim().length > 5; });
     var longest = ocrLines.reduce(function(a, b) { return a.length > b.length ? a : b; }, '');
     logStep('[OCR-raw] len=' + longest.length + ' "' + longest.substring(0, 44) + '"');
+
+    // Parçalı satırları biriktir (her zaman, başarılı/başarısız fark etmez)
+    if (acc) collectMRZLines(text, acc);
+
     const result = extractMRZ(clean(text));
     if (result) {
       var v = validateMRZ(result);
@@ -548,6 +607,9 @@ function scoreCluster(peakGroup, imgH, C) {
 async function tryRotation(rotated, deg, ctx) {
   var C = UPLOAD_CFG;
 
+  // Satır biriktirici — aynı rotasyondaki OCR denemelerinden parçalı satırları toplar
+  var acc = { td1_l1: [], td1_l2: [], td1_l3: [], td3_l1: [], td3_l2: [] };
+
   // ── Region detection + OCR ──
   var regions = locateMRZRegions(rotated);
   ctx.summary.regionsFound = Math.max(ctx.summary.regionsFound, regions.length);
@@ -573,14 +635,14 @@ async function tryRotation(rotated, deg, ctx) {
       // Enhanced
       var enhanced = uploadPreprocess(cropped);
       ctx.ocrCount++; ctx.summary.totalOCR++;
-      var result = await uploadTryRecognize(enhanced);
+      var result = await uploadTryRecognize(enhanced, acc);
       logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' enhanced → ' + (result ? 'SUCCESS' : 'FAIL'));
       if (result) return { result: result, method: 'enhanced', region: rgi + 1, bandIdx: -1 };
 
       // Raw
       if (processingCancelled) return null;
       ctx.ocrCount++; ctx.summary.totalOCR++;
-      result = await uploadTryRecognize(cropped);
+      result = await uploadTryRecognize(cropped, acc);
       logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' raw → ' + (result ? 'SUCCESS' : 'FAIL'));
       if (result) return { result: result, method: 'raw', region: rgi + 1, bandIdx: -1 };
 
@@ -593,7 +655,7 @@ async function tryRotation(rotated, deg, ctx) {
       var wider = uploadCropRegion(rotated, widerY, widerEnd - widerY);
       var widerEnh = uploadPreprocess(wider);
       ctx.ocrCount++; ctx.summary.totalOCR++;
-      result = await uploadTryRecognize(widerEnh);
+      result = await uploadTryRecognize(widerEnh, acc);
       logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' wider → ' + (result ? 'SUCCESS' : 'FAIL'));
       if (result) return { result: result, method: 'wider', region: rgi + 1, bandIdx: -2 };
 
@@ -601,7 +663,7 @@ async function tryRotation(rotated, deg, ctx) {
       if (processingCancelled) return null;
       var hiCon = uploadPreprocess(cropped, true);
       ctx.ocrCount++; ctx.summary.totalOCR++;
-      result = await uploadTryRecognize(hiCon);
+      result = await uploadTryRecognize(hiCon, acc);
       logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' hi-contrast → ' + (result ? 'SUCCESS' : 'FAIL'));
       if (result) return { result: result, method: 'hi-contrast', region: rgi + 1, bandIdx: -1 };
     }
@@ -625,9 +687,20 @@ async function tryRotation(rotated, deg, ctx) {
     var bandCrop = bc.hr >= 1.0 ? rotated : uploadCropBand(rotated, bc.cy, bc.hr);
     var bandEnh = uploadPreprocess(bandCrop);
     ctx.ocrCount++; ctx.summary.totalOCR++;
-    var result = await uploadTryRecognize(bandEnh);
+    var result = await uploadTryRecognize(bandEnh, acc);
     logStep('[OCR] ' + deg + '° ' + bc.label + ' → ' + (result ? 'SUCCESS' : 'FAIL'));
     if (result) return { result: result, method: 'band-' + bc.label, region: 0, bandIdx: bi };
+  }
+
+  // ── Parçalı satır birleştirme denemesi ──
+  var accTotal = acc.td1_l1.length + acc.td1_l2.length + acc.td1_l3.length + acc.td3_l1.length + acc.td3_l2.length;
+  if (accTotal >= 2) {
+    logStep('[Assembly] ' + deg + '° biriktirilen: L1=' + acc.td1_l1.length + ' L2=' + acc.td1_l2.length + ' L3=' + acc.td1_l3.length);
+    var assembled = tryAssemblyFromAcc(acc);
+    if (assembled) {
+      logStep('[Assembly] ' + deg + '° birleştirme BAŞARILI!');
+      return { result: assembled, method: 'assembly', region: 0, bandIdx: -1 };
+    }
   }
 
   return null;
