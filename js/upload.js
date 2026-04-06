@@ -597,44 +597,33 @@ async function processImage(img) {
       console.log('[Upload] no regions found at ' + deg + '°');
     }
 
-    // Fallback: band search on this rotation
-    if (processingCancelled) return;
-    procMsg.textContent = deg + '° band taraması…';
-    var bandConfigs = [
-      { cy: 0.80, hr: 0.40, label: 'alt %40' },
-      { cy: 0.65, hr: 0.50, label: 'orta-alt %50' },
-      { cy: 0.50, hr: 1.00, label: 'tam resim' },
-    ];
-
-    for (var bi = 0; bi < bandConfigs.length; bi++) {
+    // Fallback: band search on first rotation only
+    if (ri === 0) {
       if (processingCancelled) return;
-      var bc = bandConfigs[bi];
-      procMsg.textContent = deg + '° ' + bc.label + ' taranıyor…';
-      procProg.style.width = (25 + ri * 35 + bi * 8) + '%';
+      procMsg.textContent = deg + '° band taraması…';
+      var bandConfigs = [
+        { cy: 0.75, hr: 0.50, label: 'alt %50' },
+        { cy: 0.50, hr: 1.00, label: 'tam resim' },
+      ];
 
-      var bandCrop = bc.hr >= 1.0 ? rotated : uploadCropBand(rotated, bc.cy, bc.hr);
-      var bandEnhanced = uploadPreprocess(bandCrop);
-      uploadOcrCount++;
-      var result = await uploadTryRecognize(bandEnhanced);
-      if (result) {
-        if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = bi; }
-        console.log('[Upload] SUCCESS (fallback band) rot=' + deg + '° band=' + bc.label + ' ocrAttempts=' + uploadOcrCount);
-        procProg.style.width = '100%';
-        document.getElementById('proc-cancel-btn').style.display = 'none';
-        saveAndShow(result);
-        return;
-      }
+      for (var bi = 0; bi < bandConfigs.length; bi++) {
+        if (processingCancelled) return;
+        var bc = bandConfigs[bi];
+        procMsg.textContent = deg + '° ' + bc.label + ' taranıyor…';
+        procProg.style.width = (60 + bi * 15) + '%';
 
-      if (processingCancelled) return;
-      uploadOcrCount++;
-      result = await uploadTryRecognize(bandCrop);
-      if (result) {
-        if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = bi; }
-        console.log('[Upload] SUCCESS (fallback raw) rot=' + deg + '° band=' + bc.label + ' ocrAttempts=' + uploadOcrCount);
-        procProg.style.width = '100%';
-        document.getElementById('proc-cancel-btn').style.display = 'none';
-        saveAndShow(result);
-        return;
+        var bandCrop = bc.hr >= 1.0 ? rotated : uploadCropBand(rotated, bc.cy, bc.hr);
+        var bandEnhanced = uploadPreprocess(bandCrop);
+        uploadOcrCount++;
+        var result = await uploadTryRecognize(bandEnhanced);
+        if (result) {
+          if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = bi; }
+          console.log('[Upload] SUCCESS (fallback band) rot=' + deg + '° band=' + bc.label + ' ocrAttempts=' + uploadOcrCount);
+          procProg.style.width = '100%';
+          document.getElementById('proc-cancel-btn').style.display = 'none';
+          saveAndShow(result);
+          return;
+        }
       }
     }
   }
