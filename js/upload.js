@@ -533,14 +533,73 @@ async function processImage(img) {
     regionsFound: 0, regionsTried: 0, fallbackUsed: false, winner: null, durationMs: 0
   };
 
-  // ── PHASE 1: OCR-free Rotation Ranking ──────────────────────────────
+  // ── FAST PATH: Try 0° directly (most photos are upright) ────────────
   clearLiveLog();
   logStep('[Start] processing image ' + img.naturalWidth + '×' + img.naturalHeight);
+  procMsg.textContent = '0° hızlı deneme…';
+
+  var rotated0 = uploadMakeCanvas(img, 0);
+  var regions0 = locateMRZRegions(rotated0);
+  procProg.style.width = '10%';
+
+  if (regions0.length > 0 && !processingCancelled) {
+    logStep('[Fast] 0° → ' + regions0.length + ' region(s), trying OCR');
+    var fastRegion = regions0[0];
+    summary.regionsFound = regions0.length;
+    summary.regionsTried = 1;
+
+    // Enhanced crop
+    var fastCropped = uploadCropRegion(rotated0, fastRegion.y, fastRegion.h);
+    var fastEnhanced = uploadPreprocess(fastCropped);
+    uploadOcrCount++; summary.totalOCR++;
+    var fastResult = await uploadTryRecognize(fastEnhanced);
+    logStep('[Fast] 0° enhanced → ' + (fastResult ? 'SUCCESS' : 'FAIL'));
+
+    if (fastResult) {
+      if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = 0; metrics.upload.successBandIndex = -1; }
+      summary.success = true; summary.winner = { rotation: 0, region: 1, method: 'fast-enhanced' };
+      summary.selectedRotations = [0];
+      summary.durationMs = Date.now() - startTime; window._lastSummary = summary;
+      logStep('[Success] MRZ found in ' + summary.totalOCR + ' OCR attempts (' + summary.durationMs + 'ms)');
+      console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
+      procProg.style.width = '100%';
+      document.getElementById('proc-cancel-btn').style.display = 'none';
+      saveAndShow(fastResult);
+      return;
+    }
+
+    // Raw crop
+    if (!processingCancelled) {
+      uploadOcrCount++; summary.totalOCR++;
+      fastResult = await uploadTryRecognize(fastCropped);
+      logStep('[Fast] 0° raw → ' + (fastResult ? 'SUCCESS' : 'FAIL'));
+      if (fastResult) {
+        if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = 0; metrics.upload.successBandIndex = -1; }
+        summary.success = true; summary.winner = { rotation: 0, region: 1, method: 'fast-raw' };
+        summary.selectedRotations = [0];
+        summary.durationMs = Date.now() - startTime; window._lastSummary = summary;
+        logStep('[Success] MRZ found in ' + summary.totalOCR + ' OCR attempts (' + summary.durationMs + 'ms)');
+        console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
+        procProg.style.width = '100%';
+        document.getElementById('proc-cancel-btn').style.display = 'none';
+        saveAndShow(fastResult);
+        return;
+      }
+    }
+
+    logStep('[Fast] 0° failed, entering full pipeline');
+  } else {
+    logStep('[Fast] 0° → no regions, entering full pipeline');
+  }
+
+  if (processingCancelled) return;
+
+  // ── FULL PIPELINE: Rotation ranking + region + OCR ─────────────────
   procMsg.textContent = 'Belge yönü analiz ediliyor…';
   var rankedRotations = rankRotations(img);
   if (processingCancelled) return;
   summary.selectedRotations = rankedRotations.map(function(r) { return r.deg; });
-  procProg.style.width = '15%';
+  procProg.style.width = '25%';
 
   // ── PHASE 2 + 3: For each top rotation, locate regions and OCR ──────
   for (var ri = 0; ri < rankedRotations.length; ri++) {
@@ -551,7 +610,7 @@ async function processImage(img) {
 
     procMsg.textContent = deg + '° MRZ alanı aranıyor…';
     var rotated = uploadMakeCanvas(img, deg);
-    procProg.style.width = (15 + ri * 35) + '%';
+    procProg.style.width = (25 + ri * 30) + '%';
 
     // Phase 2: Locate MRZ regions
     var regions = locateMRZRegions(rotated);
