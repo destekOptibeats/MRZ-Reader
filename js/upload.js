@@ -88,13 +88,14 @@ function uploadCropRegion(srcCanvas, sy, cropH) {
 }
 
 // Upload-only: grayscale + contrast + unsharp mask
-function uploadPreprocess(srcCanvas) {
+function uploadPreprocess(srcCanvas, highContrast) {
   const w = srcCanvas.width, h = srcCanvas.height;
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
   const ctx = c.getContext('2d');
 
-  ctx.filter = 'grayscale(1) contrast(1.6)';
+  var contrastVal = highContrast ? 2.2 : 1.6;
+  ctx.filter = 'grayscale(1) contrast(' + contrastVal + ')';
   ctx.drawImage(srcCanvas, 0, 0);
   ctx.filter = 'none';
 
@@ -127,8 +128,16 @@ function uploadPreprocess(srcCanvas) {
 async function uploadTryRecognize(canvas) {
   try {
     const { data: { text } } = await worker.recognize(canvas);
+    // Diagnostic: log what Tesseract actually reads
+    var ocrLines = text.split('\n').filter(function(l) { return l.trim().length > 5; });
+    var longest = ocrLines.reduce(function(a, b) { return a.length > b.length ? a : b; }, '');
+    logStep('[OCR-raw] len=' + longest.length + ' "' + longest.substring(0, 44) + '"');
     const result = extractMRZ(clean(text));
-    if (result && validateMRZ(result).valid) return result;
+    if (result) {
+      var v = validateMRZ(result);
+      if (v.valid) return result;
+      logStep('[OCR-raw] parsed but checksum fail: ' + JSON.stringify(v.checksums));
+    }
   } catch(e) { /* devam */ }
   return null;
 }
@@ -264,13 +273,35 @@ function rankRotations(img) {
     var thumb = uploadMakeCanvas(img, deg, C.ROTATION_THUMB_SIZE);
     var score = scoreRotation(thumb);
     scored.push({ deg: deg, score: score });
-    console.log('[rankRotations] ' + deg + '° → score: ' + score.toFixed(4));
+    logStep('[Rot] ' + deg + '° → ' + score.toFixed(4));
   }
 
   scored.sort(function(a, b) { return b.score - a.score; });
   var top = scored.slice(0, C.ROTATION_KEEP_TOP);
-  console.log('[rankRotations] top ' + C.ROTATION_KEEP_TOP + ': ' +
-    top.map(function(r) { return r.deg + '°(' + r.score.toFixed(3) + ')'; }).join(', '));
+
+  // Portrait guard: documents are never sideways.
+  // If top slots are all secondary (90°/270°), replace with 0° and 180°.
+  // If only one primary missing, force the best primary in.
+  var primaryInTop = 0;
+  for (var ti = 0; ti < top.length; ti++) {
+    if (top[ti].deg === 0 || top[ti].deg === 180) primaryInTop++;
+  }
+  if (primaryInTop === 0) {
+    // Both slots are 90°/270° — replace both with 0° and 180°
+    var s0 = null, s180 = null;
+    for (var si = 0; si < scored.length; si++) {
+      if (scored[si].deg === 0) s0 = scored[si];
+      if (scored[si].deg === 180) s180 = scored[si];
+    }
+    if (s0 && s180) {
+      top = s0.score >= s180.score ? [s0, s180] : [s180, s0];
+    } else {
+      top = [s0 || s180];
+    }
+    logStep('[Rot] portrait guard: forced 0° + 180° (both 90/270 replaced)');
+  }
+
+  logStep('[Rot] top: ' + top.map(function(r) { return r.deg + '°(' + r.score.toFixed(3) + ')'; }).join(', '));
   return top;
 }
 
@@ -341,7 +372,7 @@ function locateMRZRegions(canvas) {
   }
   vals.sort(function(a, b) { return a - b; });
   var median = vals.length > 0 ? vals[Math.floor(vals.length * 0.5)] : 0;
-  var peakThreshold = Math.max(median * 2.0, 0.03);
+  var peakThreshold = Math.max(median * 1.5, 0.03);
 
   // Find peaks (dense text rows)
   var peaks = [];
@@ -370,8 +401,29 @@ function locateMRZRegions(canvas) {
     }
   }
 
-  console.log('[MRZLocate] peaks: ' + peaks.length + ' threshold: ' + peakThreshold.toFixed(3) + ' darkThresh: ' + darkThresh);
-  if (peaks.length < 2) return [];
+  logStep('[Region] peaks: ' + peaks.length + ' thresh: ' + peakThreshold.toFixed(3));
+  if (peaks.length < 1) return [];
+
+  // Single peak: create expanded region around it (MRZ lines likely nearby but below threshold)
+  if (peaks.length === 1) {
+    var sp = peaks[0];
+    // Estimate MRZ height: ~3× single peak height (TD1 has 3 lines)
+    var estMrzH = sp.width * 3;
+    var spStart = Math.max(0, sp.start - estMrzH);
+    var spEnd = Math.min(h, sp.end + estMrzH);
+    var spPad = Math.round((spEnd - spStart) * 0.3);
+    var spCropStart = Math.max(0, spStart - spPad);
+    var spCropEnd = Math.min(h, spEnd + spPad);
+    logStep('[Region] single-peak fallback: y=' + spCropStart + '-' + spCropEnd);
+    return [{
+      y: spCropStart,
+      h: spCropEnd - spCropStart,
+      lines: 1,
+      score: sp.density * 0.5,
+      rawStart: spStart,
+      rawEnd: spEnd
+    }];
+  }
 
   // Measure line widths for each peak
   for (var pi = 0; pi < peaks.length; pi++) {
@@ -401,7 +453,7 @@ function locateMRZRegions(canvas) {
   }
 
   if (clusters.length === 0) {
-    console.log('[MRZLocate] no valid clusters');
+    logStep('[Region] no valid clusters');
     return [];
   }
 
@@ -423,8 +475,7 @@ function locateMRZRegions(canvas) {
       rawStart: cl.start,
       rawEnd: cl.end
     });
-    console.log('[MRZLocate] region #' + (ci+1) + ': y=' + cropStart + '-' + cropEnd +
-      ' lines=' + cl.lines + ' score=' + cl.score.toFixed(4));
+    logStep('[Region] #' + (ci+1) + ': y=' + cropStart + '-' + cropEnd + ' lines=' + cl.lines + ' score=' + cl.score.toFixed(4));
   }
   return results;
 }
@@ -493,6 +544,114 @@ function scoreCluster(peakGroup, imgH, C) {
 // PHASE 3: FOCUSED OCR WITH CONDITIONAL BUDGET
 // ═══════════════════════════════════════════════════════════════════════
 
+// Try all OCR methods for a single rotation. Returns result or null.
+async function tryRotation(rotated, deg, ctx) {
+  var C = UPLOAD_CFG;
+
+  // ── Region detection + OCR ──
+  var regions = locateMRZRegions(rotated);
+  ctx.summary.regionsFound = Math.max(ctx.summary.regionsFound, regions.length);
+
+  if (regions.length > 0) {
+    var tryCount = 1;
+    if (regions.length >= 2) {
+      var ratio = regions[1].score / regions[0].score;
+      if (ratio >= C.REGION2_MIN_RATIO) {
+        tryCount = 2;
+        logStep('[Region] score-close → trying #2 (ratio=' + ratio.toFixed(3) + ')');
+      }
+    }
+
+    for (var rgi = 0; rgi < tryCount; rgi++) {
+      if (processingCancelled) return null;
+      var region = regions[rgi];
+      ctx.summary.regionsTried++;
+      logStep('[OCR] rot=' + deg + '° reg#' + (rgi+1) + ' score=' + region.score.toFixed(3));
+
+      var cropped = uploadCropRegion(rotated, region.y, region.h);
+
+      // Enhanced
+      var enhanced = uploadPreprocess(cropped);
+      ctx.ocrCount++; ctx.summary.totalOCR++;
+      var result = await uploadTryRecognize(enhanced);
+      logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' enhanced → ' + (result ? 'SUCCESS' : 'FAIL'));
+      if (result) return { result: result, method: 'enhanced', region: rgi + 1, bandIdx: -1 };
+
+      // Raw
+      if (processingCancelled) return null;
+      ctx.ocrCount++; ctx.summary.totalOCR++;
+      result = await uploadTryRecognize(cropped);
+      logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' raw → ' + (result ? 'SUCCESS' : 'FAIL'));
+      if (result) return { result: result, method: 'raw', region: rgi + 1, bandIdx: -1 };
+
+      // Wider
+      if (processingCancelled) return null;
+      var rawH = region.rawEnd - region.rawStart;
+      var widerPad = Math.round(rawH * (C.WIDER_CROP_MULT - 1) / 2);
+      var widerY = Math.max(0, region.rawStart - widerPad);
+      var widerEnd = Math.min(rotated.height, region.rawEnd + widerPad);
+      var wider = uploadCropRegion(rotated, widerY, widerEnd - widerY);
+      var widerEnh = uploadPreprocess(wider);
+      ctx.ocrCount++; ctx.summary.totalOCR++;
+      result = await uploadTryRecognize(widerEnh);
+      logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' wider → ' + (result ? 'SUCCESS' : 'FAIL'));
+      if (result) return { result: result, method: 'wider', region: rgi + 1, bandIdx: -2 };
+
+      // Hi-contrast
+      if (processingCancelled) return null;
+      var hiCon = uploadPreprocess(cropped, true);
+      ctx.ocrCount++; ctx.summary.totalOCR++;
+      result = await uploadTryRecognize(hiCon);
+      logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' hi-contrast → ' + (result ? 'SUCCESS' : 'FAIL'));
+      if (result) return { result: result, method: 'hi-contrast', region: rgi + 1, bandIdx: -1 };
+    }
+  } else {
+    logStep('[Region] no regions at ' + deg + '°');
+  }
+
+  // ── Band fallback ──
+  ctx.summary.fallbackUsed = true;
+  logStep('[Fallback] band search at ' + deg + '°');
+  var bands = [
+    { cy: 0.85, hr: 0.25, label: 'alt %25' },
+    { cy: 0.75, hr: 0.50, label: 'alt %50' },
+    { cy: 0.15, hr: 0.25, label: 'üst %25' },
+    { cy: 0.50, hr: 1.00, label: 'tam resim' },
+  ];
+
+  for (var bi = 0; bi < bands.length; bi++) {
+    if (processingCancelled) return null;
+    var bc = bands[bi];
+    var bandCrop = bc.hr >= 1.0 ? rotated : uploadCropBand(rotated, bc.cy, bc.hr);
+    var bandEnh = uploadPreprocess(bandCrop);
+    ctx.ocrCount++; ctx.summary.totalOCR++;
+    var result = await uploadTryRecognize(bandEnh);
+    logStep('[OCR] ' + deg + '° ' + bc.label + ' → ' + (result ? 'SUCCESS' : 'FAIL'));
+    if (result) return { result: result, method: 'band-' + bc.label, region: 0, bandIdx: bi };
+  }
+
+  return null;
+}
+
+// Handle successful OCR result
+function handleOCRSuccess(hit, deg, ctx) {
+  if (metrics) {
+    metrics.upload.attempts = ctx.ocrCount;
+    metrics.upload.successful++;
+    metrics.upload.successRotation = deg;
+    metrics.upload.successBandIndex = hit.bandIdx;
+  }
+  ctx.summary.success = true;
+  ctx.summary.winner = { rotation: deg, region: hit.region, method: hit.method };
+  ctx.summary.durationMs = Date.now() - ctx.startTime;
+  window._lastSummary = ctx.summary;
+  logStep('[Success] MRZ found in ' + ctx.summary.totalOCR + ' OCR attempts (' + ctx.summary.durationMs + 'ms)');
+  console.log('[MRZ_SUMMARY]', JSON.stringify(ctx.summary));
+  document.getElementById('proc-prog').style.width = '100%';
+  document.getElementById('proc-cancel-btn').style.display = 'none';
+  saveAndShow(hit.result);
+}
+
 async function processImage(img) {
   if (!workerReady) return;
   processingCancelled = false;
@@ -504,151 +663,59 @@ async function processImage(img) {
   procProg.style.width = '5%';
   if (metrics) { metrics.upload.attempts = 0; metrics.upload.successful = 0; }
 
-  var C = UPLOAD_CFG;
-  var uploadOcrCount = 0;
-  var summary = {
-    success: false, totalOCR: 0, selectedRotations: [],
-    regionsFound: 0, regionsTried: 0, fallbackUsed: false, winner: null
+  var ctx = {
+    ocrCount: 0,
+    startTime: Date.now(),
+    summary: {
+      mode: 'single-upload', success: false, totalOCR: 0, selectedRotations: [],
+      regionsFound: 0, regionsTried: 0, fallbackUsed: false, winner: null, durationMs: 0
+    }
   };
 
-  // ── PHASE 1: OCR-free Rotation Ranking ──────────────────────────────
-  procMsg.textContent = 'Belge yönü analiz ediliyor…';
-  var rankedRotations = rankRotations(img);
-  if (processingCancelled) return;
-  summary.selectedRotations = rankedRotations.map(function(r) { return r.deg; });
-  procProg.style.width = '15%';
+  clearLiveLog();
+  logStep('[Start] processing image ' + img.naturalWidth + '×' + img.naturalHeight);
 
-  // ── PHASE 2 + 3: For each top rotation, locate regions and OCR ──────
+  // ── 1. Try 0° first (most photos are upright) ──────────────────────
+  procMsg.textContent = '0° deneniyor…';
+  var rotated0 = uploadMakeCanvas(img, 0);
+  procProg.style.width = '10%';
+
+  var hit = await tryRotation(rotated0, 0, ctx);
+  if (hit) {
+    ctx.summary.selectedRotations = [0];
+    handleOCRSuccess(hit, 0, ctx);
+    return;
+  }
+  if (processingCancelled) return;
+
+  // ── 2. Rank remaining rotations, skip 0° ───────────────────────────
+  procMsg.textContent = 'Diğer yönler analiz ediliyor…';
+  var rankedRotations = rankRotations(img);
+  // Filter out 0° (already fully tried)
+  rankedRotations = rankedRotations.filter(function(r) { return r.deg !== 0; });
+  ctx.summary.selectedRotations = [0].concat(rankedRotations.map(function(r) { return r.deg; }));
+  procProg.style.width = '40%';
+
+  // ── 3. Try each remaining rotation ─────────────────────────────────
   for (var ri = 0; ri < rankedRotations.length; ri++) {
     if (processingCancelled) return;
-    var rot = rankedRotations[ri];
-    var deg = rot.deg;
-    var rotScore = rot.score;
+    var deg = rankedRotations[ri].deg;
+    procMsg.textContent = deg + '° deneniyor…';
+    procProg.style.width = (40 + ri * 25) + '%';
 
-    procMsg.textContent = deg + '° MRZ alanı aranıyor…';
     var rotated = uploadMakeCanvas(img, deg);
-    procProg.style.width = (15 + ri * 35) + '%';
-
-    // Phase 2: Locate MRZ regions
-    var regions = locateMRZRegions(rotated);
-
-    summary.regionsFound = Math.max(summary.regionsFound, regions.length);
-
-    if (regions.length > 0) {
-      // Determine how many regions to try
-      var tryCount = 1;
-      if (regions.length >= 2) {
-        var ratio = regions[1].score / regions[0].score;
-        if (ratio >= C.REGION2_MIN_RATIO) tryCount = 2;
-      }
-
-      for (var rgi = 0; rgi < tryCount; rgi++) {
-        if (processingCancelled) return;
-        var region = regions[rgi];
-        summary.regionsTried++;
-        procMsg.textContent = deg + '° bölge #' + (rgi+1) + ' okunuyor…';
-
-        // finalCandidateScore for logging
-        var finalScore = C.ROT_SCORE_W * rotScore + C.REG_SCORE_W * region.score;
-        console.log('[Upload] trying rot=' + deg + '° region#' + (rgi+1) +
-          ' regScore=' + region.score.toFixed(3) + ' finalScore=' + finalScore.toFixed(3));
-
-        // Try enhanced crop
-        var cropped = uploadCropRegion(rotated, region.y, region.h);
-        var enhanced = uploadPreprocess(cropped);
-        uploadOcrCount++; summary.totalOCR++;
-        var result = await uploadTryRecognize(enhanced);
-        if (result) {
-          if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = -1; }
-          summary.success = true; summary.winner = { rotation: deg, region: rgi + 1, method: 'enhanced' };
-          console.log('[Upload] SUCCESS rot=' + deg + '° region#' + (rgi+1) + ' (enhanced) ocrAttempts=' + uploadOcrCount);
-          console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
-          procProg.style.width = '100%';
-          document.getElementById('proc-cancel-btn').style.display = 'none';
-          saveAndShow(result);
-          return;
-        }
-
-        // Try raw crop
-        if (processingCancelled) return;
-        uploadOcrCount++; summary.totalOCR++;
-        result = await uploadTryRecognize(cropped);
-        if (result) {
-          if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = -1; }
-          summary.success = true; summary.winner = { rotation: deg, region: rgi + 1, method: 'raw' };
-          console.log('[Upload] SUCCESS rot=' + deg + '° region#' + (rgi+1) + ' (raw) ocrAttempts=' + uploadOcrCount);
-          console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
-          procProg.style.width = '100%';
-          document.getElementById('proc-cancel-btn').style.display = 'none';
-          saveAndShow(result);
-          return;
-        }
-
-        // Try wider crop (WIDER_CROP_MULT × region height)
-        if (processingCancelled) return;
-        procMsg.textContent = deg + '° geniş alan deneniyor…';
-        var rawH = region.rawEnd - region.rawStart;
-        var widerPad = Math.round(rawH * (C.WIDER_CROP_MULT - 1) / 2);
-        var widerY = Math.max(0, region.rawStart - widerPad);
-        var widerEnd = Math.min(rotated.height, region.rawEnd + widerPad);
-        var widerH = widerEnd - widerY;
-        var wider = uploadCropRegion(rotated, widerY, widerH);
-        var widerEnhanced = uploadPreprocess(wider);
-        uploadOcrCount++; summary.totalOCR++;
-        result = await uploadTryRecognize(widerEnhanced);
-        if (result) {
-          if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = -2; }
-          summary.success = true; summary.winner = { rotation: deg, region: rgi + 1, method: 'wider' };
-          console.log('[Upload] SUCCESS rot=' + deg + '° region#' + (rgi+1) + ' (wider) ocrAttempts=' + uploadOcrCount);
-          console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
-          procProg.style.width = '100%';
-          document.getElementById('proc-cancel-btn').style.display = 'none';
-          saveAndShow(result);
-          return;
-        }
-      }
-    } else {
-      console.log('[Upload] no regions found at ' + deg + '°');
-    }
-
-    // Fallback: band search on first rotation only
-    if (ri === 0) {
-      summary.fallbackUsed = true;
-      if (processingCancelled) return;
-      procMsg.textContent = deg + '° band taraması…';
-      var bandConfigs = [
-        { cy: 0.75, hr: 0.50, label: 'alt %50' },
-        { cy: 0.50, hr: 1.00, label: 'tam resim' },
-      ];
-
-      for (var bi = 0; bi < bandConfigs.length; bi++) {
-        if (processingCancelled) return;
-        var bc = bandConfigs[bi];
-        procMsg.textContent = deg + '° ' + bc.label + ' taranıyor…';
-        procProg.style.width = (60 + bi * 15) + '%';
-
-        var bandCrop = bc.hr >= 1.0 ? rotated : uploadCropBand(rotated, bc.cy, bc.hr);
-        var bandEnhanced = uploadPreprocess(bandCrop);
-        uploadOcrCount++; summary.totalOCR++;
-        var result = await uploadTryRecognize(bandEnhanced);
-        if (result) {
-          if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = bi; }
-          summary.success = true; summary.winner = { rotation: deg, region: 0, method: 'fallback-' + bc.label };
-          console.log('[Upload] SUCCESS (fallback band) rot=' + deg + '° band=' + bc.label + ' ocrAttempts=' + uploadOcrCount);
-          console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
-          procProg.style.width = '100%';
-          document.getElementById('proc-cancel-btn').style.display = 'none';
-          saveAndShow(result);
-          return;
-        }
-      }
+    hit = await tryRotation(rotated, deg, ctx);
+    if (hit) {
+      handleOCRSuccess(hit, deg, ctx);
+      return;
     }
   }
 
   // ── FAIL ───────────────────────────────────────────────────────────
-  if (metrics) metrics.upload.attempts = uploadOcrCount;
-  console.log('[Upload] FAILED after ' + uploadOcrCount + ' OCR attempts');
-  console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
+  if (metrics) metrics.upload.attempts = ctx.ocrCount;
+  logStep('[FAIL] no MRZ found after ' + ctx.ocrCount + ' OCR attempts');
+  ctx.summary.durationMs = Date.now() - ctx.startTime; window._lastSummary = ctx.summary;
+  console.log('[MRZ_SUMMARY]', JSON.stringify(ctx.summary));
   document.getElementById('proc-cancel-btn').style.display = 'none';
   showError('MRZ tespit edilemedi. Kimliğin arka yüzünü yükleyin.');
 }
