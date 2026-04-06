@@ -270,24 +270,26 @@ function rankRotations(img) {
   scored.sort(function(a, b) { return b.score - a.score; });
   var top = scored.slice(0, C.ROTATION_KEEP_TOP);
 
-  // Guarantee at least one primary rotation (0° or 180°) is included
-  // Portrait photos can cause 90°/270° to score artificially high
-  var hasPrimary = false;
+  // Portrait guard: documents are never sideways.
+  // If top slots are all secondary (90°/270°), replace with 0° and 180°.
+  // If only one primary missing, force the best primary in.
+  var primaryInTop = 0;
   for (var ti = 0; ti < top.length; ti++) {
-    if (top[ti].deg === 0 || top[ti].deg === 180) { hasPrimary = true; break; }
+    if (top[ti].deg === 0 || top[ti].deg === 180) primaryInTop++;
   }
-  if (!hasPrimary) {
-    // Find best primary from scored list
-    var best0 = null, best180 = null;
+  if (primaryInTop === 0) {
+    // Both slots are 90°/270° — replace both with 0° and 180°
+    var s0 = null, s180 = null;
     for (var si = 0; si < scored.length; si++) {
-      if (scored[si].deg === 0) best0 = scored[si];
-      if (scored[si].deg === 180) best180 = scored[si];
+      if (scored[si].deg === 0) s0 = scored[si];
+      if (scored[si].deg === 180) s180 = scored[si];
     }
-    var bestPrimary = (!best0 || (best180 && best180.score > best0.score)) ? best180 : best0;
-    if (bestPrimary) {
-      top[top.length - 1] = bestPrimary; // replace weakest
-      logStep('[Rot] primary fix: forced ' + bestPrimary.deg + '° (portrait guard)');
+    if (s0 && s180) {
+      top = s0.score >= s180.score ? [s0, s180] : [s180, s0];
+    } else {
+      top = [s0 || s180];
     }
+    logStep('[Rot] portrait guard: forced 0° + 180° (both 90/270 replaced)');
   }
 
   logStep('[Rot] top: ' + top.map(function(r) { return r.deg + '°(' + r.score.toFixed(3) + ')'; }).join(', '));
@@ -361,7 +363,7 @@ function locateMRZRegions(canvas) {
   }
   vals.sort(function(a, b) { return a - b; });
   var median = vals.length > 0 ? vals[Math.floor(vals.length * 0.5)] : 0;
-  var peakThreshold = Math.max(median * 2.0, 0.03);
+  var peakThreshold = Math.max(median * 1.5, 0.03);
 
   // Find peaks (dense text rows)
   var peaks = [];
@@ -641,8 +643,9 @@ async function processImage(img) {
       logStep('[Region] no regions at ' + deg + '°');
     }
 
-    // Fallback: band search on first rotation only
-    if (ri === 0) {
+    // Fallback: band search on first rotation OR any primary rotation (0°/180°)
+    var isPrimary = (deg === 0 || deg === 180);
+    if (ri === 0 || (isPrimary && !summary.fallbackUsed)) {
       summary.fallbackUsed = true;
       logStep('[Fallback] entering band search at ' + deg + '°');
       if (processingCancelled) return;
