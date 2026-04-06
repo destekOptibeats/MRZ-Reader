@@ -556,6 +556,19 @@ input[type="text"] {
   </div>
   <div class="card"><div id="res-fields"></div></div>
   <div class="mrz-raw" id="mrz-raw"></div>
+  <!-- Pipeline Summary Panel -->
+  <div class="card" id="pipeline-summary" style="display:none;max-width:460px">
+    <div style="font-size:0.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px">Pipeline Summary</div>
+    <div id="pipeline-summary-body" style="font-size:0.82rem;line-height:1.7"></div>
+  </div>
+  <!-- Developer Actions -->
+  <div id="dev-actions" style="display:none;width:100%;max-width:460px;">
+    <div style="display:flex;gap:8px;">
+      <button class="btn ghost btn-sm" style="flex:1;font-size:0.76rem" onclick="copySummaryJSON()">JSON</button>
+      <button class="btn ghost btn-sm" style="flex:1;font-size:0.76rem" onclick="copyAIPrompt()">AI Prompt</button>
+      <button class="btn ghost btn-sm" style="flex:1;font-size:0.76rem" onclick="copyPipelineLog()">Log</button>
+    </div>
+  </div>
   <button class="btn green" id="next-scan-btn" onclick="nextScan()" style="display:none">
     📷 Sonraki Pasaport →
   </button>
@@ -572,6 +585,18 @@ input[type="text"] {
   <div class="title">Hata</div>
   <div class="banner b-err" style="max-width:460px">
     <span style="flex-shrink:0">❌</span><span id="err-msg"></span>
+  </div>
+  <!-- Pipeline Summary (fail) -->
+  <div class="card" id="err-pipeline-summary" style="display:none;max-width:460px">
+    <div style="font-size:0.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px">Pipeline Summary</div>
+    <div id="err-pipeline-summary-body" style="font-size:0.82rem;line-height:1.7"></div>
+  </div>
+  <div id="err-dev-actions" style="display:none;width:100%;max-width:460px;">
+    <div style="display:flex;gap:8px;">
+      <button class="btn ghost btn-sm" style="flex:1;font-size:0.76rem" onclick="copySummaryJSON()">JSON</button>
+      <button class="btn ghost btn-sm" style="flex:1;font-size:0.76rem" onclick="copyAIPrompt()">AI Prompt</button>
+      <button class="btn ghost btn-sm" style="flex:1;font-size:0.76rem" onclick="copyPipelineLog()">Log</button>
+    </div>
   </div>
   <button class="btn blue" onclick="goHome()">← Ana Ekran</button>
 </div>

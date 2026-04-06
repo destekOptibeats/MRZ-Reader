@@ -786,6 +786,9 @@ function showParsed(p, entry, isNew) {
     document.getElementById('next-scan-btn').style.display = 'none';
   }
 
+  // Pipeline Summary panel
+  renderPipelineSummary('pipeline-summary', 'pipeline-summary-body', 'dev-actions');
+
   goScreen('s-result');
 }
 
@@ -812,7 +815,82 @@ function fmtDate(d) {
 
 function showError(msg) {
   document.getElementById('err-msg').textContent = msg;
+  renderPipelineSummary('err-pipeline-summary', 'err-pipeline-summary-body', 'err-dev-actions');
   goScreen('s-error');
+}
+
+// ── Pipeline Summary Renderer ──────────────────────────────────────────
+function renderPipelineSummary(panelId, bodyId, actionsId) {
+  var s = window._lastSummary;
+  var panel = document.getElementById(panelId);
+  var body = document.getElementById(bodyId);
+  var actions = document.getElementById(actionsId);
+  if (!s || !panel || !body) {
+    if (panel) panel.style.display = 'none';
+    if (actions) actions.style.display = 'none';
+    return;
+  }
+  var icon = s.success ? '<span class="ok">OK</span>' : '<span class="fail">FAIL</span>';
+  var winnerTxt = s.winner
+    ? s.winner.rotation + '° reg#' + s.winner.region + ' ' + s.winner.method
+    : '—';
+  var dur = s.durationMs ? (s.durationMs / 1000).toFixed(1) + 's' : '—';
+  body.innerHTML = [
+    '<div class="row"><div class="rl">Durum</div><div class="rv">' + icon + '</div></div>',
+    '<div class="row"><div class="rl">Total OCR</div><div class="rv">' + s.totalOCR + '</div></div>',
+    '<div class="row"><div class="rl">Rotations</div><div class="rv">' + s.selectedRotations.map(function(d){return d+'°';}).join(', ') + '</div></div>',
+    '<div class="row"><div class="rl">Regions</div><div class="rv">' + s.regionsTried + ' / ' + s.regionsFound + ' found</div></div>',
+    '<div class="row"><div class="rl">Fallback</div><div class="rv">' + (s.fallbackUsed ? 'Evet' : 'Hayır') + '</div></div>',
+    '<div class="row"><div class="rl">Winner</div><div class="rv">' + winnerTxt + '</div></div>',
+    '<div class="row"><div class="rl">Sure</div><div class="rv">' + dur + '</div></div>',
+  ].join('');
+  panel.style.display = 'block';
+  if (actions) actions.style.display = 'block';
+}
+
+function copySummaryJSON() {
+  var s = window._lastSummary;
+  if (!s) return;
+  navigator.clipboard.writeText(JSON.stringify(s, null, 2)).then(function() {
+    flashCopyFeedback('JSON kopyalandı');
+  });
+}
+
+function copyAIPrompt() {
+  var s = window._lastSummary;
+  if (!s) return;
+  var lines = [
+    'MRZ Pipeline Result:',
+    '- Mode: ' + (s.mode || 'unknown'),
+    '- Success: ' + s.success,
+    '- Total OCR: ' + s.totalOCR,
+    '- Rotations: ' + s.selectedRotations.map(function(d){return d+'°';}).join(', '),
+    '- Regions found: ' + s.regionsFound + ', tried: ' + s.regionsTried,
+    '- Fallback: ' + (s.fallbackUsed ? 'yes' : 'no'),
+    '- Winner: ' + (s.winner ? s.winner.rotation + '° region#' + s.winner.region + ' ' + s.winner.method : 'none'),
+    '- Duration: ' + (s.durationMs ? s.durationMs + 'ms' : 'unknown'),
+  ];
+  navigator.clipboard.writeText(lines.join('\n')).then(function() {
+    flashCopyFeedback('AI Prompt kopyalandı');
+  });
+}
+
+function copyPipelineLog() {
+  var s = window._lastSummary;
+  if (!s) return;
+  var text = '[MRZ_SUMMARY] ' + JSON.stringify(s);
+  navigator.clipboard.writeText(text).then(function() {
+    flashCopyFeedback('Log kopyalandı');
+  });
+}
+
+function flashCopyFeedback(msg) {
+  var el = document.createElement('div');
+  el.textContent = msg;
+  el.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--green);color:#fff;padding:8px 18px;border-radius:8px;font-size:0.84rem;font-weight:600;z-index:9999;opacity:1;transition:opacity 0.5s;';
+  document.body.appendChild(el);
+  setTimeout(function() { el.style.opacity = '0'; }, 1200);
+  setTimeout(function() { el.remove(); }, 1800);
 }
 
 window.addEventListener('offline', () => updatePill('offline'));

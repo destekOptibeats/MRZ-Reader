@@ -319,6 +319,14 @@ async function scanLoop() {
             `OCR: ${metrics ? metrics.attemptedOCR : '?'} | blur: ${metrics ? metrics.blurSkips : '?'} | motion: ${metrics ? metrics.motionSkips : '?'}`,
             metrics && metrics.firstLockMs ? `firstLock: ${metrics.firstLockMs}ms` : ''
           ].filter(Boolean), null, validation.checksums, diag);
+          window._lastSummary = {
+            mode: 'single-camera', success: true,
+            totalOCR: metrics ? metrics.attemptedOCR : 0,
+            selectedRotations: [], regionsFound: 0, regionsTried: 0,
+            fallbackUsed: false,
+            winner: { rotation: 0, region: 0, method: 'camera-band-' + (BAND_NAMES[bi] || bi) },
+            durationMs: metrics && metrics.firstLockMs ? metrics.firstLockMs : 0
+          };
           if (serialMode) { addSerialResult(result, { ocrText: text, bandIdx: bi, ocrAttempts: bi + 1 }); setTimeout(scanLoop, 500); return; }
           setTimeout(() => { stopCamera(); saveAndShow(result); }, 250);
           return;
@@ -406,6 +414,14 @@ async function scanLoop() {
                   `OCR: ${metrics ? metrics.attemptedOCR : '?'} | blur: ${metrics ? metrics.blurSkips : '?'} | motion: ${metrics ? metrics.motionSkips : '?'}`,
                   metrics && metrics.firstLockMs ? `firstLock: ${metrics.firstLockMs}ms` : ''
                 ].filter(Boolean), null, sv.checksums, diag);
+                window._lastSummary = {
+                  mode: 'single-camera', success: true,
+                  totalOCR: metrics ? metrics.attemptedOCR : 0,
+                  selectedRotations: [], regionsFound: 0, regionsTried: 0,
+                  fallbackUsed: false,
+                  winner: { rotation: 0, region: 0, method: 'camera-shadow-' + (BAND_NAMES[bestBandIdx] || bestBandIdx) },
+                  durationMs: metrics && metrics.firstLockMs ? metrics.firstLockMs : 0
+                };
                 if (serialMode) { addSerialResult(shadowResult, { ocrText: shadowText, bandIdx: bestBandIdx, ocrAttempts: candidates.length + 1 }); setTimeout(scanLoop, 500); return; }
                 setTimeout(() => { stopCamera(); saveAndShow(shadowResult); }, 250);
                 return;

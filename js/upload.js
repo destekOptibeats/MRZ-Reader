@@ -506,9 +506,10 @@ async function processImage(img) {
 
   var C = UPLOAD_CFG;
   var uploadOcrCount = 0;
+  var startTime = Date.now();
   var summary = {
-    success: false, totalOCR: 0, selectedRotations: [],
-    regionsFound: 0, regionsTried: 0, fallbackUsed: false, winner: null
+    mode: 'single-upload', success: false, totalOCR: 0, selectedRotations: [],
+    regionsFound: 0, regionsTried: 0, fallbackUsed: false, winner: null, durationMs: 0
   };
 
   // ── PHASE 1: OCR-free Rotation Ranking ──────────────────────────────
@@ -562,6 +563,7 @@ async function processImage(img) {
           if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = -1; }
           summary.success = true; summary.winner = { rotation: deg, region: rgi + 1, method: 'enhanced' };
           console.log('[Upload] SUCCESS rot=' + deg + '° region#' + (rgi+1) + ' (enhanced) ocrAttempts=' + uploadOcrCount);
+          summary.durationMs = Date.now() - startTime; window._lastSummary = summary;
           console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
           procProg.style.width = '100%';
           document.getElementById('proc-cancel-btn').style.display = 'none';
@@ -577,6 +579,7 @@ async function processImage(img) {
           if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = -1; }
           summary.success = true; summary.winner = { rotation: deg, region: rgi + 1, method: 'raw' };
           console.log('[Upload] SUCCESS rot=' + deg + '° region#' + (rgi+1) + ' (raw) ocrAttempts=' + uploadOcrCount);
+          summary.durationMs = Date.now() - startTime; window._lastSummary = summary;
           console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
           procProg.style.width = '100%';
           document.getElementById('proc-cancel-btn').style.display = 'none';
@@ -600,6 +603,7 @@ async function processImage(img) {
           if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = -2; }
           summary.success = true; summary.winner = { rotation: deg, region: rgi + 1, method: 'wider' };
           console.log('[Upload] SUCCESS rot=' + deg + '° region#' + (rgi+1) + ' (wider) ocrAttempts=' + uploadOcrCount);
+          summary.durationMs = Date.now() - startTime; window._lastSummary = summary;
           console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
           procProg.style.width = '100%';
           document.getElementById('proc-cancel-btn').style.display = 'none';
@@ -635,6 +639,7 @@ async function processImage(img) {
           if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = bi; }
           summary.success = true; summary.winner = { rotation: deg, region: 0, method: 'fallback-' + bc.label };
           console.log('[Upload] SUCCESS (fallback band) rot=' + deg + '° band=' + bc.label + ' ocrAttempts=' + uploadOcrCount);
+          summary.durationMs = Date.now() - startTime; window._lastSummary = summary;
           console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
           procProg.style.width = '100%';
           document.getElementById('proc-cancel-btn').style.display = 'none';
@@ -648,6 +653,7 @@ async function processImage(img) {
   // ── FAIL ───────────────────────────────────────────────────────────
   if (metrics) metrics.upload.attempts = uploadOcrCount;
   console.log('[Upload] FAILED after ' + uploadOcrCount + ' OCR attempts');
+  summary.durationMs = Date.now() - startTime; window._lastSummary = summary;
   console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
   document.getElementById('proc-cancel-btn').style.display = 'none';
   showError('MRZ tespit edilemedi. Kimliğin arka yüzünü yükleyin.');
