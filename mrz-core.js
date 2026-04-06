@@ -235,8 +235,8 @@
     const givenRaw   = dblIdx >= 0 ? namePart.substring(dblIdx+2) : '';
     const dob    = l2.substring(0,6);
     const expiry = l2.substring(8,14);
-    // TC Kimlik No: line1 positions 15-25 (11 chars)
-    const rawNatId = l1.substring(15,26).replace(/</g,'').replace(/\s/g,'').replace(/[^0-9]/g,'');
+    // TC Kimlik No: line1 positions 15 onward (11 digits after stripping fillers)
+    const rawNatId = l1.substring(15).replace(/</g,'').replace(/\s/g,'').replace(/[^0-9]/g,'');
     const nationalId = rawNatId.length === 11 ? rawNatId : null;
     return {
       docType: 'TC Kimlik',
