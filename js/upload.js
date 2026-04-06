@@ -609,7 +609,28 @@ async function processImage(img) {
       }
     }
 
-    logStep('[Fast] 0° region OCR failed, entering full pipeline');
+    // Region OCR failed — still try band fallback before full pipeline
+    logStep('[Fast] 0° region OCR failed, trying band fallback');
+    if (!processingCancelled) {
+      var fastFallBand = uploadCropBand(rotated0, 0.85, 0.25);
+      var fastFallEnh = uploadPreprocess(fastFallBand);
+      uploadOcrCount++; summary.totalOCR++;
+      var fastFallResult = await uploadTryRecognize(fastFallEnh);
+      logStep('[Fast] 0° alt %25 → ' + (fastFallResult ? 'SUCCESS' : 'FAIL'));
+      if (fastFallResult) {
+        if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = 0; metrics.upload.successBandIndex = 0; }
+        summary.success = true; summary.winner = { rotation: 0, region: 0, method: 'fast-band-25' };
+        summary.selectedRotations = [0];
+        summary.durationMs = Date.now() - startTime; window._lastSummary = summary;
+        logStep('[Success] MRZ found in ' + summary.totalOCR + ' OCR attempts (' + summary.durationMs + 'ms)');
+        console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
+        procProg.style.width = '100%';
+        document.getElementById('proc-cancel-btn').style.display = 'none';
+        saveAndShow(fastFallResult);
+        return;
+      }
+    }
+    logStep('[Fast] 0° failed, entering full pipeline');
   } else {
     // No regions at 0° — try bottom quarter band directly (MRZ usually at bottom)
     logStep('[Fast] 0° → no regions, trying alt %25 band');
