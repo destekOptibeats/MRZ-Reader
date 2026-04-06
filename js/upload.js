@@ -88,13 +88,14 @@ function uploadCropRegion(srcCanvas, sy, cropH) {
 }
 
 // Upload-only: grayscale + contrast + unsharp mask
-function uploadPreprocess(srcCanvas) {
+function uploadPreprocess(srcCanvas, highContrast) {
   const w = srcCanvas.width, h = srcCanvas.height;
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
   const ctx = c.getContext('2d');
 
-  ctx.filter = 'grayscale(1) contrast(1.6)';
+  var contrastVal = highContrast ? 2.2 : 1.6;
+  ctx.filter = 'grayscale(1) contrast(' + contrastVal + ')';
   ctx.drawImage(srcCanvas, 0, 0);
   ctx.filter = 'none';
 
@@ -393,7 +394,28 @@ function locateMRZRegions(canvas) {
   }
 
   logStep('[Region] peaks: ' + peaks.length + ' thresh: ' + peakThreshold.toFixed(3));
-  if (peaks.length < 2) return [];
+  if (peaks.length < 1) return [];
+
+  // Single peak: create expanded region around it (MRZ lines likely nearby but below threshold)
+  if (peaks.length === 1) {
+    var sp = peaks[0];
+    // Estimate MRZ height: ~3× single peak height (TD1 has 3 lines)
+    var estMrzH = sp.width * 3;
+    var spStart = Math.max(0, sp.start - estMrzH);
+    var spEnd = Math.min(h, sp.end + estMrzH);
+    var spPad = Math.round((spEnd - spStart) * 0.3);
+    var spCropStart = Math.max(0, spStart - spPad);
+    var spCropEnd = Math.min(h, spEnd + spPad);
+    logStep('[Region] single-peak fallback: y=' + spCropStart + '-' + spCropEnd);
+    return [{
+      y: spCropStart,
+      h: spCropEnd - spCropStart,
+      lines: 1,
+      score: sp.density * 0.5,
+      rawStart: spStart,
+      rawEnd: spEnd
+    }];
+  }
 
   // Measure line widths for each peak
   for (var pi = 0; pi < peaks.length; pi++) {
@@ -710,6 +732,24 @@ async function processImage(img) {
         if (result) {
           if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = -2; }
           summary.success = true; summary.winner = { rotation: deg, region: rgi + 1, method: 'wider' };
+          summary.durationMs = Date.now() - startTime; window._lastSummary = summary;
+          logStep('[Success] MRZ found in ' + summary.totalOCR + ' OCR attempts (' + summary.durationMs + 'ms)');
+          console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
+          procProg.style.width = '100%';
+          document.getElementById('proc-cancel-btn').style.display = 'none';
+          saveAndShow(result);
+          return;
+        }
+
+        // Try high-contrast enhanced (for faded/light MRZ text)
+        if (processingCancelled) return;
+        var hiContrast = uploadPreprocess(cropped, true);
+        uploadOcrCount++; summary.totalOCR++;
+        result = await uploadTryRecognize(hiContrast);
+        logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' hi-contrast → ' + (result ? 'SUCCESS' : 'FAIL'));
+        if (result) {
+          if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = -1; }
+          summary.success = true; summary.winner = { rotation: deg, region: rgi + 1, method: 'hi-contrast' };
           summary.durationMs = Date.now() - startTime; window._lastSummary = summary;
           logStep('[Success] MRZ found in ' + summary.totalOCR + ' OCR attempts (' + summary.durationMs + 'ms)');
           console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
