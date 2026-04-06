@@ -819,6 +819,28 @@ function showError(msg) {
   goScreen('s-error');
 }
 
+// ── Live Log ───────────────────────────────────────────────────────────
+var _liveLogLines = [];
+
+function logStep(msg) {
+  console.log(msg);
+  _liveLogLines.push(msg);
+  var panel = document.getElementById('live-log');
+  if (panel) {
+    panel.style.display = 'block';
+    var el = document.createElement('div');
+    el.textContent = msg;
+    panel.appendChild(el);
+    panel.scrollTop = panel.scrollHeight;
+  }
+}
+
+function clearLiveLog() {
+  _liveLogLines = [];
+  var panel = document.getElementById('live-log');
+  if (panel) { panel.innerHTML = ''; panel.style.display = 'none'; }
+}
+
 // ── Pipeline Summary Renderer ──────────────────────────────────────────
 function renderPipelineSummary(panelId, bodyId, actionsId) {
   var s = window._lastSummary;
@@ -876,11 +898,12 @@ function copyAIPrompt() {
 }
 
 function copyPipelineLog() {
+  var lines = _liveLogLines.slice();
   var s = window._lastSummary;
-  if (!s) return;
-  var text = '[MRZ_SUMMARY] ' + JSON.stringify(s);
-  navigator.clipboard.writeText(text).then(function() {
-    flashCopyFeedback('Log kopyalandı');
+  if (s) lines.push('[MRZ_SUMMARY] ' + JSON.stringify(s));
+  if (lines.length === 0) return;
+  navigator.clipboard.writeText(lines.join('\n')).then(function() {
+    flashCopyFeedback('Log kopyalandı (' + lines.length + ' satır)');
   });
 }
 
