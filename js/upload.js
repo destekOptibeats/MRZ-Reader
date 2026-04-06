@@ -643,15 +643,16 @@ async function processImage(img) {
       logStep('[Region] no regions at ' + deg + '°');
     }
 
-    // Fallback: band search on first rotation OR any primary rotation (0°/180°)
+    // Fallback: band search on primary rotations (0°/180°) and first rotation
     var isPrimary = (deg === 0 || deg === 180);
-    if (ri === 0 || (isPrimary && !summary.fallbackUsed)) {
+    if (ri === 0 || isPrimary) {
       summary.fallbackUsed = true;
       logStep('[Fallback] entering band search at ' + deg + '°');
       if (processingCancelled) return;
       procMsg.textContent = deg + '° band taraması…';
       var bandConfigs = [
         { cy: 0.75, hr: 0.50, label: 'alt %50' },
+        { cy: 0.25, hr: 0.50, label: 'üst %50' },
         { cy: 0.50, hr: 1.00, label: 'tam resim' },
       ];
 
