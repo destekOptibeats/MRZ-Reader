@@ -611,17 +611,17 @@ async function processImage(img) {
 
     logStep('[Fast] 0° region OCR failed, entering full pipeline');
   } else {
-    // No regions at 0° — try bottom half band directly (MRZ usually at bottom)
-    logStep('[Fast] 0° → no regions, trying alt %50 band');
+    // No regions at 0° — try bottom quarter band directly (MRZ usually at bottom)
+    logStep('[Fast] 0° → no regions, trying alt %25 band');
     if (!processingCancelled) {
-      var fastBand = uploadCropBand(rotated0, 0.75, 0.50);
+      var fastBand = uploadCropBand(rotated0, 0.85, 0.25);
       var fastBandEnh = uploadPreprocess(fastBand);
       uploadOcrCount++; summary.totalOCR++;
       var fastBandResult = await uploadTryRecognize(fastBandEnh);
-      logStep('[Fast] 0° alt %50 → ' + (fastBandResult ? 'SUCCESS' : 'FAIL'));
+      logStep('[Fast] 0° alt %25 → ' + (fastBandResult ? 'SUCCESS' : 'FAIL'));
       if (fastBandResult) {
         if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = 0; metrics.upload.successBandIndex = 0; }
-        summary.success = true; summary.winner = { rotation: 0, region: 0, method: 'fast-band' };
+        summary.success = true; summary.winner = { rotation: 0, region: 0, method: 'fast-band-25' };
         summary.selectedRotations = [0];
         summary.durationMs = Date.now() - startTime; window._lastSummary = summary;
         logStep('[Success] MRZ found in ' + summary.totalOCR + ' OCR attempts (' + summary.durationMs + 'ms)');
@@ -629,6 +629,26 @@ async function processImage(img) {
         procProg.style.width = '100%';
         document.getElementById('proc-cancel-btn').style.display = 'none';
         saveAndShow(fastBandResult);
+        return;
+      }
+    }
+    // Try alt %50 in fast path too
+    if (!processingCancelled) {
+      var fastBand50 = uploadCropBand(rotated0, 0.75, 0.50);
+      var fastBand50Enh = uploadPreprocess(fastBand50);
+      uploadOcrCount++; summary.totalOCR++;
+      var fastBand50Result = await uploadTryRecognize(fastBand50Enh);
+      logStep('[Fast] 0° alt %50 → ' + (fastBand50Result ? 'SUCCESS' : 'FAIL'));
+      if (fastBand50Result) {
+        if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = 0; metrics.upload.successBandIndex = 1; }
+        summary.success = true; summary.winner = { rotation: 0, region: 0, method: 'fast-band-50' };
+        summary.selectedRotations = [0];
+        summary.durationMs = Date.now() - startTime; window._lastSummary = summary;
+        logStep('[Success] MRZ found in ' + summary.totalOCR + ' OCR attempts (' + summary.durationMs + 'ms)');
+        console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
+        procProg.style.width = '100%';
+        document.getElementById('proc-cancel-btn').style.display = 'none';
+        saveAndShow(fastBand50Result);
         return;
       }
     }
@@ -771,8 +791,9 @@ async function processImage(img) {
       if (processingCancelled) return;
       procMsg.textContent = deg + '° band taraması…';
       var bandConfigs = [
+        { cy: 0.85, hr: 0.25, label: 'alt %25' },
         { cy: 0.75, hr: 0.50, label: 'alt %50' },
-        { cy: 0.25, hr: 0.50, label: 'üst %50' },
+        { cy: 0.15, hr: 0.25, label: 'üst %25' },
         { cy: 0.50, hr: 1.00, label: 'tam resim' },
       ];
 
