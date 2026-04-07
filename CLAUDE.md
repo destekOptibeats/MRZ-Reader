@@ -1,18 +1,33 @@
-# MRZ-Reader Proje Kuralları
+# MRZ-Reader
 
-## Otomatik Git Kuralları
-Her zaman direkt main branch'ine commit ve push et, asla yeni branch oluşturma.
+Browser-based MRZ (Machine Readable Zone) reader for passports and ID cards. Built as a single-page web app with Turkish UI.
 
-Her görev tamamlandıktan sonra onay beklemeden otomatik olarak:
-1. git add -u
-2. git commit -m "fix: [değişiklik açıklaması]"
-3. git push origin main
+## Tech Stack
+- **Frontend**: Vanilla HTML/CSS/JS (no framework)
+- **OCR**: Tesseract.js with custom `mrz.traineddata` model
+- **Structure**: `index.html` (UI + styles), `mrz-core.js` (MRZ parsing logic), `js/` (app modules)
 
-## Çalışma Dizini Kuralı
-Her zaman ~/Desktop/MRZ-Reader ana klasöründe çalış, asla worktree veya alt dizin kullanma.
-
-## Deploy Bildirimi
-Her başarılı git push işleminden sonra şu komutu çalıştır:
+## Project Structure
 ```
-osascript -e 'display notification "Test edebilirsin! 🚀" with title "MRZ Deploy Tamamlandı" subtitle "GitHub güncellendi"'
+index.html          # Main SPA — all UI, styles, and screen logic
+mrz-core.js         # MRZ line parsing, checksum validation, field extraction
+js/app.js           # App initialization and screen management
+js/camera.js        # Camera capture and live MRZ scanning
+js/upload.js        # Image upload and processing
+js/batch.js         # Batch document processing
+js/overlay.js       # MRZ zone overlay rendering
+js/telemetry.js     # Usage analytics
+mrz.traineddata     # Custom Tesseract OCR model for MRZ fonts
+mrz.traineddata.gz  # Gzipped version of the model
 ```
+
+## Development Guidelines
+- This is a static web app — no build step, no bundler
+- Test changes by opening `index.html` in a browser
+- UI language is Turkish
+- Version string in `index.html` is auto-bumped by CI on push to main
+
+## Git Conventions
+- Use conventional commit prefixes: `feat:`, `fix:`, `refactor:`, `chore:`, `docs:`
+- Keep commits focused and atomic
+- Write commit messages in English
