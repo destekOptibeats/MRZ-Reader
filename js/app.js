@@ -1087,6 +1087,8 @@ var _liveLogLines = [];
 
 function logStep(msg) {
   console.log(msg);
+  // Batch mode: log'u yakala
+  if (window._batchLogFn) { window._batchLogFn(msg); return; }
   _liveLogLines.push(msg);
   var panel = document.getElementById('live-log');
   if (panel) {

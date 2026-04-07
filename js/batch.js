@@ -454,54 +454,39 @@ async function startBatchTest(files) {
         continue;
       }
 
-      // Debug: source image dimensions
-      const srcW = imgData.img.width || imgData.img.naturalWidth || 0;
-      const srcH = imgData.img.height || imgData.img.naturalHeight || 0;
-      timings.srcSize = srcW + 'x' + srcH;
+      // Cleanup objectURL after creating HTMLImageElement for batchProcessImage
+      // batchProcessImage needs an img element (uses .naturalWidth/.naturalHeight)
+      const batchImg = imgData.img;
 
-      // Resize to max 1400px long side
-      t = performance.now();
-      const resized = resizeForOCR(imgData.img, 1400);
-      timings.resize = Math.round(performance.now() - t);
-
-      // Cleanup objectURL
+      // Use shared pipeline (same as upload)
+      const ocrResult = await batchProcessImage(batchImg, batchWorker);
       imgData.cleanup();
-
-      // Validate resized canvas
-      if (!resized || resized.width <= 50 || resized.height <= 50) {
-        rows.push({ name: file.name, ok: false, type: '—', cs: '—', time: Math.round(performance.now() - t0), timing: 'src:' + timings.srcSize, reason: 'Resize failed: invalid dimensions' });
-        continue;
-      }
-
-      // Fast OCR with dedicated batch worker (max 3 attempts)
-      const ocrResult = await fastBatchOCR(resized, timings, batchWorker, file.name, i);
 
       timings.total = Math.round(performance.now() - t0);
       totalTime += timings.total;
-      const timingStr = 'src:' + timings.srcSize + ' rs:' + (timings.resizedSize||'?') +
-        (timings.sz1 ? ' a1:' + timings.sz1 : '') + (timings.sz2 ? ' a2:' + timings.sz2 : '') + (timings.sz3 ? ' a3:' + timings.sz3 : '') +
-        ' D:' + timings.decode + ' R:' + timings.resize + ' C:' + (timings.crop||0) +
-        ' O1:' + (timings.ocr1||0) + (timings.ocr2 ? ' O2:' + timings.ocr2 : '') + (timings.ocr3 ? ' O3:' + timings.ocr3 : '') + ' T:' + timings.total + 'ms';
+      const sm = ocrResult.summary;
+      const timingStr = 'OCR:' + sm.totalOCR + ' rot:' + (sm.selectedRotations||[]).join(',') + ' T:' + timings.total + 'ms';
 
-      if (ocrResult.extracted) {
+      if (ocrResult.result) {
         successCount++;
-        const v = validateMRZ(ocrResult.extracted);
-        const parsed = parseResult(ocrResult.extracted);
-        const batchMrzName = MRZCore.parseMRZName(ocrResult.extracted);
+        const v = validateMRZ(ocrResult.result);
+        const parsed = parseResult(ocrResult.result);
+        const batchMrzName = MRZCore.parseMRZName(ocrResult.result);
         parsed.surname = batchMrzName.surname;
         parsed.given   = batchMrzName.given;
         const csStr = ['Pass','DOB','EXP'].map((k, idx) => {
           const key = ['passOk','dobOk','expOk'][idx];
           return k + (v.checksums[key] ? '✓' : '✗');
         }).join(' ');
+        const winner = sm.winner || {};
         const row = {
-          name: file.name, ok: true, docType: ocrResult.extracted.type, cs: csStr,
+          name: file.name, ok: true, docType: ocrResult.result.type, cs: csStr,
           finalResult: 'SUCCESS', durationMs: timings.total, timing: timingStr,
-          selectedBand: ocrResult.selectedBand || '—', ocrAttempts: ocrResult.attempts || 1,
-          longestLine: ocrResult.longestLine || 0, chevronCount: ocrResult.chevronCount || 0,
+          selectedBand: winner.method || '—', ocrAttempts: sm.totalOCR,
+          longestLine: 0, chevronCount: 0,
           parseOk: true, checksumOk: true,
           failReason: null, comment: getResultComment('SUCCESS'), reason: '',
-          rawOcrText: ocrResult.rawOcrText || '',
+          rawOcrText: '', batchLog: ocrResult.log,
           parsedFields: {
             documentNumber: (parsed.passNo || '').replace(/</g,'') || null,
             birthDate: parsed.dob || null,
@@ -511,23 +496,18 @@ async function startBatchTest(files) {
             nationalIdValid: parsed.nationalIdValid || false,
           }
         };
-        if (i < 2) console.log('[BatchReport] row', i, row);
         rows.push(row);
       } else {
-        const longest = ocrResult.longestLine || 0;
-        const chevrons = ocrResult.chevronCount || 0;
-        const failReason = classifyFailure({ parseOk: false, checksumOk: false, longestLine: longest, isBlurry: false, chevrons });
         const row = {
           name: file.name, ok: false, docType: '—', cs: '—',
           finalResult: 'FAIL', durationMs: timings.total, timing: timingStr,
-          selectedBand: ocrResult.selectedBand || '—', ocrAttempts: ocrResult.attempts || 0,
-          longestLine: longest, chevronCount: chevrons,
+          selectedBand: '—', ocrAttempts: sm.totalOCR,
+          longestLine: 0, chevronCount: 0,
           parseOk: false, checksumOk: false,
-          failReason, comment: getResultComment(failReason), reason: getResultComment(failReason),
-          rawOcrText: ocrResult.rawOcrText || '',
+          failReason: 'NO_MRZ', comment: 'Tüm yöntemler başarısız', reason: 'Tüm yöntemler başarısız',
+          rawOcrText: '', batchLog: ocrResult.log,
           parsedFields: null
         };
-        if (i < 2) console.log('[BatchReport] row', i, row);
         rows.push(row);
       }
     }
@@ -549,31 +529,44 @@ async function startBatchTest(files) {
   const batchSummaryText = successCount + '/' + files.length + ' başarılı, ort ' + avg + 'ms/dosya · Worker init: ' + workerInitTime + 'ms · Toplam: ' + batchTotal + 'ms';
 
   results.innerHTML = '<table class="batch-table"><thead><tr>' +
-    '<th>Dosya</th><th>Sonuç</th><th>Tip</th><th>CS</th><th>Band</th><th>Uzun</th><th>&lt;</th><th>DocNo</th><th>TC Kimlik No</th><th>DOB</th><th>Soyad</th><th>Süre</th><th>Yorum</th><th></th>' +
+    '<th>Dosya</th><th>Sonuç</th><th>Tip</th><th>CS</th><th>Yöntem</th><th>OCR</th><th>DocNo</th><th>TC Kimlik No</th><th>DOB</th><th>Soyad</th><th>Ad</th><th>Süre</th><th></th>' +
     '</tr></thead><tbody>' +
     rows.map((r, idx) => {
       const pf = r.parsedFields || {};
       const nid = pf.nationalId ? (pf.nationalId + (pf.nationalIdValid ? ' ✓' : ' ⚠')) : '';
+      const logBtn = r.batchLog && r.batchLog.length ? '<button onclick="copyToClipboard(batchReportData[' + idx + '].batchLog.join(\'\\n\'))" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--muted);cursor:pointer;font-size:.7rem" title="Log kopyala">📋</button>' : '';
       return '<tr>' +
       '<td>' + r.name + '</td>' +
       '<td class="' + (r.ok ? 'bt-ok' : 'bt-fail') + '">' + (r.ok ? '✅' : '❌') + '</td>' +
       '<td>' + (r.docType || '—') + '</td>' +
       '<td style="font-size:.7rem">' + (r.cs || '—') + '</td>' +
       '<td style="font-size:.7rem">' + (r.selectedBand || '—') + '</td>' +
-      '<td>' + (r.longestLine || 0) + '</td>' +
-      '<td>' + (r.chevronCount != null ? r.chevronCount : 0) + '</td>' +
+      '<td>' + (r.ocrAttempts || 0) + '</td>' +
       '<td style="font-family:monospace;font-size:.72rem">' + (pf.documentNumber || '—') + '</td>' +
       '<td style="font-family:monospace;font-size:.72rem">' + nid + '</td>' +
       '<td style="font-size:.72rem">' + (pf.birthDate || '—') + '</td>' +
       '<td style="font-size:.72rem">' + (pf.surname || '—') + '</td>' +
+      '<td style="font-size:.72rem">' + (pf.givenNames || '—') + '</td>' +
       '<td>' + (r.durationMs || 0) + 'ms</td>' +
-      '<td style="font-size:.72rem;color:var(--muted)">' + (r.comment || '') + '</td>' +
-      '<td><button onclick="copyToClipboard(formatResultForCopy(batchReportData[' + idx + ']))" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--muted);cursor:pointer;font-size:.7rem">📋</button></td>' +
-      '</tr>' + (r.timing ? '<tr><td colspan="14" style="font-size:.65rem;color:var(--muted);padding:2px 6px">' + r.timing + '</td></tr>' : '');
+      '<td>' + logBtn + '</td>' +
+      '</tr>';
     }).join('') +
     '</tbody></table>' +
     '<div class="batch-summary">' + batchSummaryText + '</div>' +
-    '<div style="text-align:center;margin-top:10px"><button class="btn ghost btn-sm" onclick="copyToClipboard(formatAllResultsForCopy(batchReportData,\'' + batchSummaryText.replace(/'/g,'') + '\'))">📋 Tüm Sonuçları Kopyala</button></div>';
+    '<div style="text-align:center;margin-top:10px">' +
+    '<button class="btn ghost btn-sm" onclick="copyToClipboard(formatAllResultsForCopy(batchReportData,\'' + batchSummaryText.replace(/'/g,'') + '\'))">📋 Tüm Sonuçları Kopyala</button> ' +
+    '<button class="btn ghost btn-sm" onclick="copyAllBatchLogs()">📋 Tüm Logları Kopyala</button>' +
+    '</div>';
 
   document.getElementById('batch-file-in').value = '';
+}
+
+function copyAllBatchLogs() {
+  if (!window.batchReportData) return;
+  var text = window.batchReportData.map(function(r, i) {
+    var header = '=== ' + (i+1) + '. ' + r.name + ' (' + (r.ok ? 'SUCCESS' : 'FAIL') + ') ===';
+    var log = (r.batchLog || []).join('\n');
+    return header + '\n' + log;
+  }).join('\n\n');
+  copyToClipboard(text);
 }

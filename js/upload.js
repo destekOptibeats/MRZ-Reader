@@ -51,9 +51,11 @@ var UPLOAD_CFG = {
 // Resmi max genişliğe ölçekle + döndür (upload-only)
 function uploadMakeCanvas(img, deg, maxW) {
   maxW = maxW || 1600;
+  var imgW = img.naturalWidth || img.width;
+  var imgH = img.naturalHeight || img.height;
   const swap = deg === 90 || deg === 270;
-  const sw = swap ? img.naturalHeight : img.naturalWidth;
-  const sh = swap ? img.naturalWidth  : img.naturalHeight;
+  const sw = swap ? imgH : imgW;
+  const sh = swap ? imgW : imgH;
   const scale = sw > maxW ? maxW / sw : 1;
   const rw = Math.round(sw * scale), rh = Math.round(sh * scale);
   const c = document.createElement('canvas');
@@ -61,7 +63,7 @@ function uploadMakeCanvas(img, deg, maxW) {
   const ctx = c.getContext('2d');
   ctx.save(); ctx.translate(rw/2, rh/2);
   ctx.rotate(deg * Math.PI / 180); ctx.scale(scale, scale);
-  ctx.drawImage(img, -img.naturalWidth/2, -img.naturalHeight/2);
+  ctx.drawImage(img, -imgW/2, -imgH/2);
   ctx.restore(); return c;
 }
 
@@ -180,9 +182,10 @@ function tryAssemblyFromAcc(acc) {
 
 // Upload-only: OCR → parse → checksum denemesi
 // acc: opsiyonel satır biriktirici — başarısız olsa bile parçalı satırları toplar
-async function uploadTryRecognize(canvas, acc) {
+async function uploadTryRecognize(canvas, acc, ocrWorker) {
   try {
-    const { data: { text } } = await worker.recognize(canvas);
+    const wr = ocrWorker || worker;
+    const { data: { text } } = await wr.recognize(canvas);
     // Diagnostic: log what Tesseract actually reads
     var ocrLines = text.split('\n').filter(function(l) { return l.trim().length > 5; });
     var longest = ocrLines.reduce(function(a, b) { return a.length > b.length ? a : b; }, '');
@@ -604,7 +607,7 @@ function scoreCluster(peakGroup, imgH, C) {
 // ═══════════════════════════════════════════════════════════════════════
 
 // Try all OCR methods for a single rotation. Returns result or null.
-async function tryRotation(rotated, deg, ctx) {
+async function tryRotation(rotated, deg, ctx, ocrWorker) {
   var C = UPLOAD_CFG;
 
   // Satır biriktirici — aynı rotasyondaki OCR denemelerinden parçalı satırları toplar
@@ -635,14 +638,14 @@ async function tryRotation(rotated, deg, ctx) {
       // Enhanced
       var enhanced = uploadPreprocess(cropped);
       ctx.ocrCount++; ctx.summary.totalOCR++;
-      var result = await uploadTryRecognize(enhanced, acc);
+      var result = await uploadTryRecognize(enhanced, acc, ocrWorker);
       logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' enhanced → ' + (result ? 'SUCCESS' : 'FAIL'));
       if (result) return { result: result, method: 'enhanced', region: rgi + 1, bandIdx: -1 };
 
       // Raw
       if (processingCancelled) return null;
       ctx.ocrCount++; ctx.summary.totalOCR++;
-      result = await uploadTryRecognize(cropped, acc);
+      result = await uploadTryRecognize(cropped, acc, ocrWorker);
       logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' raw → ' + (result ? 'SUCCESS' : 'FAIL'));
       if (result) return { result: result, method: 'raw', region: rgi + 1, bandIdx: -1 };
 
@@ -655,7 +658,7 @@ async function tryRotation(rotated, deg, ctx) {
       var wider = uploadCropRegion(rotated, widerY, widerEnd - widerY);
       var widerEnh = uploadPreprocess(wider);
       ctx.ocrCount++; ctx.summary.totalOCR++;
-      result = await uploadTryRecognize(widerEnh, acc);
+      result = await uploadTryRecognize(widerEnh, acc, ocrWorker);
       logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' wider → ' + (result ? 'SUCCESS' : 'FAIL'));
       if (result) return { result: result, method: 'wider', region: rgi + 1, bandIdx: -2 };
 
@@ -663,7 +666,7 @@ async function tryRotation(rotated, deg, ctx) {
       if (processingCancelled) return null;
       var hiCon = uploadPreprocess(cropped, true);
       ctx.ocrCount++; ctx.summary.totalOCR++;
-      result = await uploadTryRecognize(hiCon, acc);
+      result = await uploadTryRecognize(hiCon, acc, ocrWorker);
       logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' hi-contrast → ' + (result ? 'SUCCESS' : 'FAIL'));
       if (result) return { result: result, method: 'hi-contrast', region: rgi + 1, bandIdx: -1 };
     }
@@ -690,7 +693,7 @@ async function tryRotation(rotated, deg, ctx) {
 
     var bandEnh = uploadPreprocess(bandCrop);
     ctx.ocrCount++; ctx.summary.totalOCR++;
-    var result = await uploadTryRecognize(bandEnh, acc);
+    var result = await uploadTryRecognize(bandEnh, acc, ocrWorker);
     logStep('[OCR] ' + deg + '° ' + bc.label + ' → ' + (result ? 'SUCCESS' : 'FAIL'));
     if (result) return { result: result, method: 'band-' + bc.label, region: 0, bandIdx: bi };
   }
@@ -794,4 +797,67 @@ async function processImage(img) {
   console.log('[MRZ_SUMMARY]', JSON.stringify(ctx.summary));
   document.getElementById('proc-cancel-btn').style.display = 'none';
   showError('MRZ tespit edilemedi. Kimliğin arka yüzünü yükleyin.');
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// BATCH PROCESS — Aynı karar ağacı, UI olmadan, batch worker ile
+// Returns { result, summary, log } or { result: null, summary, log }
+// ═══════════════════════════════════════════════════════════════════════
+async function batchProcessImage(img, ocrWorker) {
+  var ctx = {
+    ocrCount: 0,
+    startTime: Date.now(),
+    summary: {
+      mode: 'batch', success: false, totalOCR: 0, selectedRotations: [],
+      regionsFound: 0, regionsTried: 0, fallbackUsed: false, winner: null, durationMs: 0
+    }
+  };
+
+  var batchLog = [];
+  var origLogStep = window._batchLogFn;
+  // Batch sırasında logStep çıktısını yakala
+  window._batchLogFn = function(msg) { batchLog.push(msg); };
+
+  try {
+    logStep('[Start] batch processing ' + (img.naturalWidth || img.width) + '×' + (img.naturalHeight || img.height));
+
+    // 1. Try 0° first
+    var rotated0 = uploadMakeCanvas(img, 0);
+    var hit = await tryRotation(rotated0, 0, ctx, ocrWorker);
+    if (hit) {
+      ctx.summary.selectedRotations = [0];
+      ctx.summary.success = true;
+      ctx.summary.winner = { rotation: 0, region: hit.region, method: hit.method };
+      ctx.summary.durationMs = Date.now() - ctx.startTime;
+      logStep('[Success] MRZ found in ' + ctx.summary.totalOCR + ' OCR attempts (' + ctx.summary.durationMs + 'ms)');
+      return { result: hit.result, method: hit.method, summary: ctx.summary, log: batchLog };
+    }
+
+    // 2. Rank remaining rotations, skip 0°
+    var rankedRotations = rankRotations(img);
+    rankedRotations = rankedRotations.filter(function(r) { return r.deg !== 0; });
+    ctx.summary.selectedRotations = [0].concat(rankedRotations.map(function(r) { return r.deg; }));
+
+    // 3. Try each remaining rotation
+    for (var ri = 0; ri < rankedRotations.length; ri++) {
+      var deg = rankedRotations[ri].deg;
+      var rotated = uploadMakeCanvas(img, deg);
+      hit = await tryRotation(rotated, deg, ctx, ocrWorker);
+      if (hit) {
+        ctx.summary.success = true;
+        ctx.summary.winner = { rotation: deg, region: hit.region, method: hit.method };
+        ctx.summary.durationMs = Date.now() - ctx.startTime;
+        logStep('[Success] MRZ found in ' + ctx.summary.totalOCR + ' OCR attempts (' + ctx.summary.durationMs + 'ms)');
+        return { result: hit.result, method: hit.method, summary: ctx.summary, log: batchLog };
+      }
+    }
+
+    // FAIL
+    ctx.summary.durationMs = Date.now() - ctx.startTime;
+    logStep('[FAIL] no MRZ found after ' + ctx.ocrCount + ' OCR attempts');
+    return { result: null, method: null, summary: ctx.summary, log: batchLog };
+
+  } finally {
+    window._batchLogFn = origLogStep;
+  }
 }
