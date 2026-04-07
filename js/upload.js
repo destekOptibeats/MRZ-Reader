@@ -341,14 +341,21 @@ function rankRotations(img) {
   scored.sort(function(a, b) { return b.score - a.score; });
   var top = scored.slice(0, C.ROTATION_KEEP_TOP);
 
-  // Portrait guard: documents are never sideways.
-  // If top slots are all secondary (90°/270°), replace with 0° and 180°.
-  // If only one primary missing, force the best primary in.
+  // Portrait guard: only for portrait photos (height > width).
+  // Landscape photos may have the card sideways, so 90°/270° can be valid.
+  var imgW = img.naturalWidth || img.width;
+  var imgH = img.naturalHeight || img.height;
+  var isPortrait = imgH > imgW;
+
+  if (!isPortrait) {
+    logStep('[Rot] landscape image — portrait guard atlandı');
+  }
+
   var primaryInTop = 0;
   for (var ti = 0; ti < top.length; ti++) {
     if (top[ti].deg === 0 || top[ti].deg === 180) primaryInTop++;
   }
-  if (primaryInTop === 0) {
+  if (isPortrait && primaryInTop === 0) {
     // Both slots are 90°/270° — replace both with 0° and 180°
     var s0 = null, s180 = null;
     for (var si = 0; si < scored.length; si++) {
