@@ -26,8 +26,9 @@
         const c = s.substring(skip, skip + targetLen);
         if (kind === 'TD1_L1' && /^[IAC]/.test(c)) return applyDigitFixes(c, kind);
         if (kind === 'TD3_L1' && c[0] === 'P') return c;
-        if (kind === 'TD1_L2' || kind === 'TD3_L2') return applyDigitFixes(c, kind);
-        if (kind === 'TD1_L3') return c;
+        if (kind === 'TD1_L2' && /^\d{6}/.test(c)) return applyDigitFixes(c, kind);
+        if (kind === 'TD3_L2' && /^\d/.test(c)) return applyDigitFixes(c, kind);
+        if (kind === 'TD1_L3' && c.includes('<<')) return c;
       }
       return applyDigitFixes(s.substring(0, targetLen), kind);
     }
