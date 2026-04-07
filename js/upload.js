@@ -248,12 +248,12 @@ async function uploadTryRecognize(canvas, acc, ocrWorker, meta) {
     var longest = ocrLines.reduce(function(a, b) { return a.length > b.length ? a : b; }, '');
     attempt.ocrText = text.replace(/\n+/g, ' ').substring(0, 300);
     attempt.ocrLen = longest.length;
-    logStep('[OCR_TEXT] "' + longest.substring(0, 50) + '"');
+    logStep('[OCR_TEXT] text="' + longest.substring(0, 40) + '" len=' + longest.length);
     // OCR quality heuristic
     var qualityLabel = attempt.confidence !== null && attempt.confidence < 40 ? 'low' :
                        attempt.confidence !== null && attempt.confidence < 65 ? 'medium' : 'ok';
     if (longest.length < 20) qualityLabel = 'low';
-    if (qualityLabel !== 'ok') logStep('[OCR_QUALITY] ' + qualityLabel + ' (conf=' + attempt.confidence + ', len=' + longest.length + ')');
+    if (qualityLabel !== 'ok') logStep('[OCR_QUALITY] level=' + qualityLabel + ' conf=' + attempt.confidence + ' len=' + longest.length);
 
     // Parçalı satırları biriktir (her zaman, başarılı/başarısız fark etmez)
     if (acc) collectMRZLines(text, acc);
@@ -268,7 +268,7 @@ async function uploadTryRecognize(canvas, acc, ocrWorker, meta) {
         if (window._debugAttempts) window._debugAttempts.push(attempt);
         return result;
       }
-      logStep('[OCR] checksum_fail: ' + JSON.stringify(v.checksums));
+      logStep('[OCR] status=checksum_fail checksums=' + JSON.stringify(v.checksums));
     }
   } catch(e) { /* devam */ }
   if (window._debugAttempts) window._debugAttempts.push(attempt);
@@ -419,7 +419,7 @@ function rankRotations(img) {
   var isPortrait = imgH > imgW;
 
   if (!isPortrait) {
-    logStep('[ROT] landscape — portrait guard skipped');
+    logStep('[ROT] status=landscape_skip reason=portrait_guard');
   }
 
   var primaryInTop = 0;
@@ -438,7 +438,7 @@ function rankRotations(img) {
     } else {
       top = [s0 || s180];
     }
-    logStep('[ROT] portrait guard: forced 0+180 (90/270 replaced)');
+    logStep('[ROT] status=portrait_guard forced=[0,180]');
   }
 
   logStep('[ROT] selected=[' + top.map(function(r) { return r.deg; }).join(',') + '] scores=[' + top.map(function(r) { return r.score.toFixed(3); }).join(',') + ']');
@@ -543,7 +543,7 @@ function locateMRZRegions(canvas) {
 
   logStep('[REGION] peaks=' + peaks.length + ' thresh=' + peakThreshold.toFixed(3) + ' median=' + median.toFixed(3));
   if (peaks.length < 1) {
-    logStep('[REGION] no peaks — region detection failed');
+    logStep('[REGION] peaks=0 status=none reason=no_peaks');
     return [];
   }
 
@@ -558,8 +558,8 @@ function locateMRZRegions(canvas) {
     var spCropStart = Math.max(0, spStart - spPad);
     var spCropEnd = Math.min(h, spEnd + spPad);
     var spPosRatio = sp.center / h;
-    logStep('[REGION] single-peak fallback: y=' + spCropStart + '-' + spCropEnd + ' (pos=' + (spPosRatio * 100).toFixed(0) + '%)');
-    if (spPosRatio < 0.5) logStep('[REGION] WARNING: peak in upper half — wrong region suspected');
+    logStep('[REGION] status=single_peak_fallback y=' + spCropStart + '-' + spCropEnd + ' pos=' + (spPosRatio * 100).toFixed(0) + '%');
+    if (spPosRatio < 0.5) logStep('[REGION] status=warning reason=upper_half_peak');
     return [{
       y: spCropStart,
       h: spCropEnd - spCropStart,
@@ -598,7 +598,7 @@ function locateMRZRegions(canvas) {
   }
 
   if (clusters.length === 0) {
-    logStep('[REGION] no valid clusters');
+    logStep('[REGION] status=no_valid_clusters');
     return [];
   }
 
@@ -620,7 +620,7 @@ function locateMRZRegions(canvas) {
       rawStart: cl.start,
       rawEnd: cl.end
     });
-    logStep('[REGION] #' + (ci+1) + ': y=' + cropStart + '-' + cropEnd + ' lines=' + cl.lines + ' score=' + cl.score.toFixed(4));
+    logStep('[REGION] candidate=' + (ci+1) + ' y=' + cropStart + '-' + cropEnd + ' lines=' + cl.lines + ' score=' + cl.score.toFixed(4));
   }
   return results;
 }
@@ -706,14 +706,14 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
       var ratio = regions[1].score / regions[0].score;
       if (ratio >= C.REGION2_MIN_RATIO) {
         tryCount = 2;
-        logStep('[REGION] score-close → trying #2 (ratio=' + ratio.toFixed(3) + ')');
+        logStep('[REGION] status=score_close trying=2 ratio=' + ratio.toFixed(3));
       }
     }
 
     // EXPERIMENT: Region budget limiter — peaks<2 → only 1 enhanced attempt per region
     var regionBudgetLimited = (regions.length < 2);
     if (regionBudgetLimited) {
-      logStep('[EXP:RegionBudget] peaks<2 → limiting to 1 attempt per region, then band fallback');
+      logStep('[EXP] name=RegionBudget action=limit_to_1 reason=peaks_lt_2');
     }
 
     for (var rgi = 0; rgi < tryCount; rgi++) {
@@ -721,7 +721,7 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
       var region = regions[rgi];
       ctx.summary.regionsTried++;
       var regLabel = 'reg#' + (rgi+1);
-      logStep('[OCR] rot=' + deg + '° ' + regLabel + ' score=' + region.score.toFixed(3));
+      logStep('[OCR] rot=' + deg + ' region=' + regLabel + ' score=' + region.score.toFixed(3));
 
       var cropped = uploadCropRegion(rotated, region.y, region.h);
 
@@ -729,12 +729,12 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
       var enhanced = uploadPreprocess(cropped);
       ctx.ocrCount++; ctx.summary.totalOCR++;
       var result = await uploadTryRecognize(enhanced, acc, ocrWorker, { rotation: deg, method: regLabel + ' enhanced', region: regLabel, preprocess: 'enhanced' });
-      logStep('[OCR] ' + deg + '° ' + regLabel + ' enhanced → ' + (result ? 'SUCCESS' : 'FAIL'));
+      logStep('[OCR] rot=' + deg + ' region=' + regLabel + ' method=enhanced result=' + (result ? 'SUCCESS' : 'FAIL'));
       if (result) return { result: result, method: 'enhanced', region: rgi + 1, bandIdx: -1 };
 
       // Budget limited: skip remaining region attempts, go to band fallback
       if (regionBudgetLimited) {
-        logStep('[EXP:RegionBudget] skipping raw/wider/hi-contrast for ' + regLabel);
+        logStep('[EXP] name=RegionBudget action=skip region=' + regLabel);
         continue;
       }
 
@@ -742,7 +742,7 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
       if (processingCancelled) return null;
       ctx.ocrCount++; ctx.summary.totalOCR++;
       result = await uploadTryRecognize(cropped, acc, ocrWorker, { rotation: deg, method: regLabel + ' raw', region: regLabel, preprocess: 'raw' });
-      logStep('[OCR] ' + deg + '° ' + regLabel + ' raw → ' + (result ? 'SUCCESS' : 'FAIL'));
+      logStep('[OCR] rot=' + deg + ' region=' + regLabel + ' method=raw result=' + (result ? 'SUCCESS' : 'FAIL'));
       if (result) return { result: result, method: 'raw', region: rgi + 1, bandIdx: -1 };
 
       // Wider
@@ -755,7 +755,7 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
       var widerEnh = uploadPreprocess(wider);
       ctx.ocrCount++; ctx.summary.totalOCR++;
       result = await uploadTryRecognize(widerEnh, acc, ocrWorker, { rotation: deg, method: regLabel + ' wider', region: regLabel, preprocess: 'enhanced' });
-      logStep('[OCR] ' + deg + '° ' + regLabel + ' wider → ' + (result ? 'SUCCESS' : 'FAIL'));
+      logStep('[OCR] rot=' + deg + ' region=' + regLabel + ' method=wider result=' + (result ? 'SUCCESS' : 'FAIL'));
       if (result) return { result: result, method: 'wider', region: rgi + 1, bandIdx: -2 };
 
       // Hi-contrast
@@ -763,7 +763,7 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
       var hiCon = uploadPreprocess(cropped, 'hi');
       ctx.ocrCount++; ctx.summary.totalOCR++;
       result = await uploadTryRecognize(hiCon, acc, ocrWorker, { rotation: deg, method: regLabel + ' hi-contrast', region: regLabel, preprocess: 'hi' });
-      logStep('[OCR] ' + deg + '° ' + regLabel + ' hi-contrast → ' + (result ? 'SUCCESS' : 'FAIL'));
+      logStep('[OCR] rot=' + deg + ' region=' + regLabel + ' method=hi-contrast result=' + (result ? 'SUCCESS' : 'FAIL'));
       if (result) return { result: result, method: 'hi-contrast', region: rgi + 1, bandIdx: -1 };
     }
   } else {
@@ -791,7 +791,7 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
     var bandEnh = uploadPreprocess(bandCrop);
     ctx.ocrCount++; ctx.summary.totalOCR++;
     var result = await uploadTryRecognize(bandEnh, acc, ocrWorker, { rotation: deg, method: 'band ' + bc.label + ' enhanced', region: 'band-' + bc.label, preprocess: 'enhanced' });
-    logStep('[OCR] ' + deg + '° ' + bc.label + ' enhanced → ' + (result ? 'SUCCESS' : 'FAIL'));
+    logStep('[OCR] rot=' + deg + ' band=' + bc.label + ' method=enhanced result=' + (result ? 'SUCCESS' : 'FAIL'));
     if (result) return { result: result, method: 'band-' + bc.label, region: 0, bandIdx: bi };
 
     // Adaptive binarization dene (işaretli bandlar için)
@@ -800,7 +800,7 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
       var bandBin = uploadPreprocess(bandCrop, 'bin');
       ctx.ocrCount++; ctx.summary.totalOCR++;
       result = await uploadTryRecognize(bandBin, acc, ocrWorker, { rotation: deg, method: 'band ' + bc.label + ' bin', region: 'band-' + bc.label, preprocess: 'bin' });
-      logStep('[OCR] ' + deg + '° ' + bc.label + ' bin → ' + (result ? 'SUCCESS' : 'FAIL'));
+      logStep('[OCR] rot=' + deg + ' band=' + bc.label + ' method=bin result=' + (result ? 'SUCCESS' : 'FAIL'));
       if (result) return { result: result, method: 'band-' + bc.label + '-bin', region: 0, bandIdx: bi };
     }
   }
@@ -814,24 +814,28 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
   };
   ctx._lastAssembly = assemblyInfo;
 
-  logStep('[ASSEMBLY] L1=' + assemblyInfo.l1 + ' L2=' + assemblyInfo.l2 + ' L3=' + assemblyInfo.l3 +
-    (assemblyInfo.td3_l1 || assemblyInfo.td3_l2 ? ' | TD3 L1=' + assemblyInfo.td3_l1 + ' L2=' + assemblyInfo.td3_l2 : ''));
+  var asmStatus = 'ok';
+  if (acc.td1_l2.length === 0 && acc.td1_l1.length > 0) asmStatus = 'l2_missing';
+  else if (acc.td1_l1.length === 0 && acc.td1_l3.length > 0) asmStatus = 'l1_missing';
+  else if (accTotal === 0) asmStatus = 'no_candidates';
+
+  logStep('[ASSEMBLY] l1=' + assemblyInfo.l1 + ' l2=' + assemblyInfo.l2 + ' l3=' + assemblyInfo.l3 +
+    (assemblyInfo.td3_l1 || assemblyInfo.td3_l2 ? ' td3_l1=' + assemblyInfo.td3_l1 + ' td3_l2=' + assemblyInfo.td3_l2 : '') +
+    ' status=' + asmStatus);
+
+  if (asmStatus !== 'ok' && asmStatus !== 'no_candidates') {
+    logStep('[DIAGNOSE] type=' + asmStatus);
+    if (asmStatus === 'l2_missing') logStep('[DIAGNOSE] l1_samples="' + acc.td1_l1.slice(0,2).join(' | ').substring(0, 80) + '"');
+  }
 
   if (accTotal >= 2) {
-    if (acc.td1_l2.length === 0 && acc.td1_l1.length > 0) {
-      logStep('[DIAGNOSE] l2_missing');
-      logStep('[ASSEMBLY] L2 eksik — L1 örnekleri: ' + acc.td1_l1.slice(0,2).join(' | '));
-    }
-    if (acc.td1_l1.length === 0 && acc.td1_l3.length > 0) {
-      logStep('[DIAGNOSE] l1_missing');
-    }
     var assembled = tryAssemblyFromAcc(acc);
     if (assembled) {
-      logStep('[ASSEMBLY] ' + deg + '° birleştirme BAŞARILI!');
+      logStep('[ASSEMBLY] rot=' + deg + ' status=success');
       return { result: assembled, method: 'assembly', region: 0, bandIdx: -1 };
     }
   } else if (accTotal === 0) {
-    logStep('[DIAGNOSE] no_candidates');
+    logStep('[DIAGNOSE] type=no_candidates');
   }
 
   // ── EXPERIMENT: L2 Recovery ──
@@ -840,7 +844,7 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
   if (acc.td1_l1.length > 0 && acc.td1_l3.length > 0 && acc.td1_l2.length === 0) {
     ctx.summary.l2RecoveryAttempted = true;
     ctx.summary.l2RecoverySuccess = false;
-    logStep('[EXP:L2Recovery] triggered — L1=' + acc.td1_l1.length + ' L3=' + acc.td1_l3.length + ' L2=0');
+    logStep('[EXP] name=L2Recovery status=triggered l1=' + acc.td1_l1.length + ' l2=0 l3=' + acc.td1_l3.length);
 
     var l2RecoveryResults = [];
     var wr = ocrWorker || worker;
@@ -898,10 +902,10 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
                   assemblySuccess: !!recoveryResult
                 };
                 l2RecoveryResults.push(entry);
-                logStep('[EXP:L2Recovery] ' + lb.label + ' ' + ppType + ' PSM' + psm + ' → L2 FOUND: "' + candidateL2 + '" assembly=' + (recoveryResult ? 'OK' : 'FAIL'));
+                logStep('[EXP] name=L2Recovery band=' + lb.label + ' preprocess=' + ppType + ' psm=' + psm + ' l2_found=true candidate="' + candidateL2 + '" assembly=' + (recoveryResult ? 'ok' : 'fail'));
                 if (recoveryResult) {
                   ctx.summary.l2RecoverySuccess = true;
-                  logStep('[EXP:L2Recovery] ASSEMBLY SUCCESS — could recover MRZ!');
+                  logStep('[EXP] name=L2Recovery status=assembly_success');
                 }
                 break;
               }
@@ -915,7 +919,7 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
                 confidence: conf, l2Found: false, l2Candidate: null,
                 assemblySuccess: false
               });
-              logStep('[EXP:L2Recovery] ' + lb.label + ' ' + ppType + ' PSM' + psm + ' → no L2 (len=' + bestLine.length + ')');
+              logStep('[EXP] name=L2Recovery band=' + lb.label + ' preprocess=' + ppType + ' psm=' + psm + ' l2_found=false len=' + bestLine.length);
             }
           } catch(e) {
             // Restore PSM 6 on error
@@ -940,8 +944,8 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
       });
     }
 
-    logStep('[EXP:L2Recovery] completed — ' + l2RecoveryResults.length + ' attempts, L2 found in ' +
-      l2RecoveryResults.filter(function(r) { return r.l2Found; }).length + ', assembly success: ' + ctx.summary.l2RecoverySuccess);
+    var l2FoundCount = l2RecoveryResults.filter(function(r) { return r.l2Found; }).length;
+    logStep('[EXP] name=L2Recovery status=completed attempts=' + l2RecoveryResults.length + ' l2_found=' + l2FoundCount + ' assembly_success=' + ctx.summary.l2RecoverySuccess);
   }
 
   return null;
