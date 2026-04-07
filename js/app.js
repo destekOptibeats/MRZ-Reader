@@ -137,7 +137,7 @@ function startSerialScan() {
   document.getElementById('serial-avg').textContent = '0.0s';
   document.getElementById('serial-list').innerHTML = '';
   document.getElementById('cam-cancel-btn').style.display = 'none';
-  document.getElementById('tab-bulk').style.display = '';
+  // tab-bulk kaldırıldı
   if (serialTimerInterval) clearInterval(serialTimerInterval);
   serialTimerInterval = setInterval(updateSerialStats, 1000);
   goScreen('s-scan');
@@ -309,7 +309,7 @@ function finishSerialScan() {
   document.getElementById('serial-panel').style.display = 'none';
   document.getElementById('serial-finish-btn').style.display = 'none';
   document.getElementById('cam-cancel-btn').style.display = '';
-  document.getElementById('tab-bulk').style.display = 'none';
+  // tab-bulk kaldırıldı
 
   // Show report (don't go home yet — session data preserved)
   showSerialReport();
@@ -883,7 +883,7 @@ function stopScan() {
   document.getElementById('serial-panel').style.display = 'none';
   document.getElementById('serial-finish-btn').style.display = 'none';
   document.getElementById('cam-cancel-btn').style.display = '';
-  document.getElementById('tab-bulk').style.display = 'none';
+  // tab-bulk kaldırıldı
   renderList();
   goScreen('s-home');
 }
