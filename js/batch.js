@@ -271,6 +271,7 @@ async function fastBatchOCR(resized, timings, ocrWorker, fileName, fileIndex) {
 
   let lastDiag = null;
   let t;
+  let bestScore = -1, bestText = '', bestDeg = 0;
 
   for (let i = 0; i < crops.length; i++) {
     const ratio = crops[i];
@@ -288,7 +289,7 @@ async function fastBatchOCR(resized, timings, ocrWorker, fileName, fileIndex) {
     }
 
     // Try all rotations, collect scores
-    let bestScore = -1, bestText = '', bestDeg = 0;
+    bestScore = -1; bestText = ''; bestDeg = 0;
 
     t = performance.now();
     for (const deg of rotations) {
@@ -359,7 +360,7 @@ async function fastBatchOCR(resized, timings, ocrWorker, fileName, fileIndex) {
   const failChevrons = bestText ? countChevrons(bestText) : 0;
   return { extracted: null, diag: lastDiag, attempts: crops.length,
     longestLine: failLongest, chevronCount: failChevrons,
-    rawOcrText: bestText || '', selectedBand: bestBandIdx >= 0 ? 'crop' + (bestBandIdx+1) : '—' };
+    rawOcrText: bestText || '', selectedBand: '—' };
 }
 
 // Create a dedicated batch Tesseract worker (isolated from global worker)
