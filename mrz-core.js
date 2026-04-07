@@ -22,20 +22,33 @@
     if (!s) return null;
 
     if (s.length > targetLen && s.length - targetLen <= 5) {
+      // TD1_L3: pick position with most trailing '<' (best alignment)
+      if (kind === 'TD1_L3') {
+        let bestL3 = null, bestTrailing = -1;
+        for (let skip = 0; skip <= s.length - targetLen; skip++) {
+          const c = s.substring(skip, skip + targetLen);
+          if (!c.includes('<<')) continue;
+          const clean = /^[A-Z<]+$/.test(c);
+          let trailing = 0;
+          for (let t = c.length - 1; t >= 0 && c[t] === '<'; t--) trailing++;
+          // Prefer clean (no digits), then most trailing '<'
+          if (clean && trailing > bestTrailing) { bestTrailing = trailing; bestL3 = c; }
+        }
+        if (bestL3) return bestL3;
+        // Relaxed: allow digits
+        for (let skip = 0; skip <= s.length - targetLen; skip++) {
+          const c = s.substring(skip, skip + targetLen);
+          if (c.includes('<<')) return c;
+        }
+        return s.substring(0, targetLen);
+      }
+
       for (let skip = 0; skip <= s.length - targetLen; skip++) {
         const c = s.substring(skip, skip + targetLen);
         if (kind === 'TD1_L1' && /^[IAC]/.test(c)) return applyDigitFixes(c, kind);
         if (kind === 'TD3_L1' && c[0] === 'P') return c;
         if (kind === 'TD1_L2' && /^\d{6}/.test(c)) return applyDigitFixes(c, kind);
         if (kind === 'TD3_L2' && /^\d/.test(c)) return applyDigitFixes(c, kind);
-        if (kind === 'TD1_L3' && /^[A-Z<]+$/.test(c) && c.includes('<<')) return c;
-      }
-      // TD1_L3 relaxed fallback: allow digits if no clean version found
-      if (kind === 'TD1_L3') {
-        for (let skip = 0; skip <= s.length - targetLen; skip++) {
-          const c = s.substring(skip, skip + targetLen);
-          if (c.includes('<<')) return c;
-        }
       }
       return applyDigitFixes(s.substring(0, targetLen), kind);
     }
