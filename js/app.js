@@ -1120,7 +1120,9 @@ function generateRunId() {
   return 'run-' + Date.now().toString(36) + '-' + _runIdCounter;
 }
 
-// Confidence level from summary
+// Confidence level: based on how many OCR attempts needed.
+// HIGH=found quickly (<=2), MEDIUM=moderate (<=5), LOW=many attempts.
+// Proxy for image quality, not MRZ accuracy.
 function computeConfidence(s) {
   if (!s.success) return 'FAIL';
   if (s.totalOCR <= 2) return 'HIGH';
