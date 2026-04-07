@@ -124,14 +124,73 @@ function uploadPreprocess(srcCanvas, highContrast) {
   return c;
 }
 
+// Parçalı MRZ satırlarını OCR çıktısından toplayan fonksiyon
+// Her OCR denemesinden sonra potansiyel satırları biriktirir
+function collectMRZLines(text, acc) {
+  if (!text) return;
+  var cleaned = clean(text);
+  var lines = cleaned.split(/\n+/).map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 20; });
+
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+
+    // TD1 satırları (30 karakter)
+    var l1 = fixLine(line, {targetLen: 30, kind: 'TD1_L1'});
+    if (l1 && isL1_TD1(l1) && acc.td1_l1.indexOf(l1) === -1) acc.td1_l1.push(l1);
+
+    var l2 = fixLine(line, {targetLen: 30, kind: 'TD1_L2'});
+    if (l2 && isL2_TD1(l2) && acc.td1_l2.indexOf(l2) === -1) acc.td1_l2.push(l2);
+
+    var l3 = fixLine(line, {targetLen: 30, kind: 'TD1_L3'});
+    if (l3 && isL3_TD1(l3) && acc.td1_l3.indexOf(l3) === -1) acc.td1_l3.push(l3);
+
+    // TD3 satırları (44 karakter)
+    var t1 = fixLine(line, {targetLen: 44, kind: 'TD3_L1'});
+    if (t1 && isL1_TD3(t1) && acc.td3_l1.indexOf(t1) === -1) acc.td3_l1.push(t1);
+
+    var t2 = fixLine(line, {targetLen: 44, kind: 'TD3_L2'});
+    if (t2 && isL2_TD3(t2) && acc.td3_l2.indexOf(t2) === -1) acc.td3_l2.push(t2);
+  }
+}
+
+// Biriktirilen satırlardan geçerli MRZ oluşturmayı dener
+function tryAssemblyFromAcc(acc) {
+  // TD1: L1 + L2 + L3 gerekli
+  for (var a = 0; a < acc.td1_l1.length; a++) {
+    for (var b = 0; b < acc.td1_l2.length; b++) {
+      for (var c = 0; c < acc.td1_l3.length; c++) {
+        var result = { type: 'TD1', lines: [acc.td1_l1[a], acc.td1_l2[b], acc.td1_l3[c]] };
+        var v = validateMRZ(result);
+        if (v.valid) return result;
+      }
+    }
+  }
+
+  // TD3: L1 + L2 gerekli
+  for (var a = 0; a < acc.td3_l1.length; a++) {
+    for (var b = 0; b < acc.td3_l2.length; b++) {
+      var result = { type: 'TD3', lines: [acc.td3_l1[a], acc.td3_l2[b]] };
+      var v = validateMRZ(result);
+      if (v.valid) return result;
+    }
+  }
+
+  return null;
+}
+
 // Upload-only: OCR → parse → checksum denemesi
-async function uploadTryRecognize(canvas) {
+// acc: opsiyonel satır biriktirici — başarısız olsa bile parçalı satırları toplar
+async function uploadTryRecognize(canvas, acc) {
   try {
     const { data: { text } } = await worker.recognize(canvas);
     // Diagnostic: log what Tesseract actually reads
     var ocrLines = text.split('\n').filter(function(l) { return l.trim().length > 5; });
     var longest = ocrLines.reduce(function(a, b) { return a.length > b.length ? a : b; }, '');
     logStep('[OCR-raw] len=' + longest.length + ' "' + longest.substring(0, 44) + '"');
+
+    // Parçalı satırları biriktir (her zaman, başarılı/başarısız fark etmez)
+    if (acc) collectMRZLines(text, acc);
+
     const result = extractMRZ(clean(text));
     if (result) {
       var v = validateMRZ(result);
@@ -544,6 +603,128 @@ function scoreCluster(peakGroup, imgH, C) {
 // PHASE 3: FOCUSED OCR WITH CONDITIONAL BUDGET
 // ═══════════════════════════════════════════════════════════════════════
 
+// Try all OCR methods for a single rotation. Returns result or null.
+async function tryRotation(rotated, deg, ctx) {
+  var C = UPLOAD_CFG;
+
+  // Satır biriktirici — aynı rotasyondaki OCR denemelerinden parçalı satırları toplar
+  var acc = { td1_l1: [], td1_l2: [], td1_l3: [], td3_l1: [], td3_l2: [] };
+
+  // ── Region detection + OCR ──
+  var regions = locateMRZRegions(rotated);
+  ctx.summary.regionsFound = Math.max(ctx.summary.regionsFound, regions.length);
+
+  if (regions.length > 0) {
+    var tryCount = 1;
+    if (regions.length >= 2) {
+      var ratio = regions[1].score / regions[0].score;
+      if (ratio >= C.REGION2_MIN_RATIO) {
+        tryCount = 2;
+        logStep('[Region] score-close → trying #2 (ratio=' + ratio.toFixed(3) + ')');
+      }
+    }
+
+    for (var rgi = 0; rgi < tryCount; rgi++) {
+      if (processingCancelled) return null;
+      var region = regions[rgi];
+      ctx.summary.regionsTried++;
+      logStep('[OCR] rot=' + deg + '° reg#' + (rgi+1) + ' score=' + region.score.toFixed(3));
+
+      var cropped = uploadCropRegion(rotated, region.y, region.h);
+
+      // Enhanced
+      var enhanced = uploadPreprocess(cropped);
+      ctx.ocrCount++; ctx.summary.totalOCR++;
+      var result = await uploadTryRecognize(enhanced, acc);
+      logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' enhanced → ' + (result ? 'SUCCESS' : 'FAIL'));
+      if (result) return { result: result, method: 'enhanced', region: rgi + 1, bandIdx: -1 };
+
+      // Raw
+      if (processingCancelled) return null;
+      ctx.ocrCount++; ctx.summary.totalOCR++;
+      result = await uploadTryRecognize(cropped, acc);
+      logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' raw → ' + (result ? 'SUCCESS' : 'FAIL'));
+      if (result) return { result: result, method: 'raw', region: rgi + 1, bandIdx: -1 };
+
+      // Wider
+      if (processingCancelled) return null;
+      var rawH = region.rawEnd - region.rawStart;
+      var widerPad = Math.round(rawH * (C.WIDER_CROP_MULT - 1) / 2);
+      var widerY = Math.max(0, region.rawStart - widerPad);
+      var widerEnd = Math.min(rotated.height, region.rawEnd + widerPad);
+      var wider = uploadCropRegion(rotated, widerY, widerEnd - widerY);
+      var widerEnh = uploadPreprocess(wider);
+      ctx.ocrCount++; ctx.summary.totalOCR++;
+      result = await uploadTryRecognize(widerEnh, acc);
+      logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' wider → ' + (result ? 'SUCCESS' : 'FAIL'));
+      if (result) return { result: result, method: 'wider', region: rgi + 1, bandIdx: -2 };
+
+      // Hi-contrast
+      if (processingCancelled) return null;
+      var hiCon = uploadPreprocess(cropped, true);
+      ctx.ocrCount++; ctx.summary.totalOCR++;
+      result = await uploadTryRecognize(hiCon, acc);
+      logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' hi-contrast → ' + (result ? 'SUCCESS' : 'FAIL'));
+      if (result) return { result: result, method: 'hi-contrast', region: rgi + 1, bandIdx: -1 };
+    }
+  } else {
+    logStep('[Region] no regions at ' + deg + '°');
+  }
+
+  // ── Band fallback ──
+  ctx.summary.fallbackUsed = true;
+  logStep('[Fallback] band search at ' + deg + '°');
+  var bands = [
+    { cy: 0.85, hr: 0.25, label: 'alt %25' },
+    { cy: 0.75, hr: 0.50, label: 'alt %50' },
+    { cy: 0.15, hr: 0.25, label: 'üst %25' },
+    { cy: 0.50, hr: 1.00, label: 'tam resim' },
+  ];
+
+  for (var bi = 0; bi < bands.length; bi++) {
+    if (processingCancelled) return null;
+    var bc = bands[bi];
+    var bandCrop = bc.hr >= 1.0 ? rotated : uploadCropBand(rotated, bc.cy, bc.hr);
+    var bandEnh = uploadPreprocess(bandCrop);
+    ctx.ocrCount++; ctx.summary.totalOCR++;
+    var result = await uploadTryRecognize(bandEnh, acc);
+    logStep('[OCR] ' + deg + '° ' + bc.label + ' → ' + (result ? 'SUCCESS' : 'FAIL'));
+    if (result) return { result: result, method: 'band-' + bc.label, region: 0, bandIdx: bi };
+  }
+
+  // ── Parçalı satır birleştirme denemesi ──
+  var accTotal = acc.td1_l1.length + acc.td1_l2.length + acc.td1_l3.length + acc.td3_l1.length + acc.td3_l2.length;
+  if (accTotal >= 2) {
+    logStep('[Assembly] ' + deg + '° biriktirilen: L1=' + acc.td1_l1.length + ' L2=' + acc.td1_l2.length + ' L3=' + acc.td1_l3.length);
+    var assembled = tryAssemblyFromAcc(acc);
+    if (assembled) {
+      logStep('[Assembly] ' + deg + '° birleştirme BAŞARILI!');
+      return { result: assembled, method: 'assembly', region: 0, bandIdx: -1 };
+    }
+  }
+
+  return null;
+}
+
+// Handle successful OCR result
+function handleOCRSuccess(hit, deg, ctx) {
+  if (metrics) {
+    metrics.upload.attempts = ctx.ocrCount;
+    metrics.upload.successful++;
+    metrics.upload.successRotation = deg;
+    metrics.upload.successBandIndex = hit.bandIdx;
+  }
+  ctx.summary.success = true;
+  ctx.summary.winner = { rotation: deg, region: hit.region, method: hit.method };
+  ctx.summary.durationMs = Date.now() - ctx.startTime;
+  window._lastSummary = ctx.summary;
+  logStep('[Success] MRZ found in ' + ctx.summary.totalOCR + ' OCR attempts (' + ctx.summary.durationMs + 'ms)');
+  console.log('[MRZ_SUMMARY]', JSON.stringify(ctx.summary));
+  document.getElementById('proc-prog').style.width = '100%';
+  document.getElementById('proc-cancel-btn').style.display = 'none';
+  saveAndShow(hit.result);
+}
+
 async function processImage(img) {
   if (!workerReady) return;
   processingCancelled = false;
@@ -555,308 +736,59 @@ async function processImage(img) {
   procProg.style.width = '5%';
   if (metrics) { metrics.upload.attempts = 0; metrics.upload.successful = 0; }
 
-  var C = UPLOAD_CFG;
-  var uploadOcrCount = 0;
-  var startTime = Date.now();
-  var summary = {
-    mode: 'single-upload', success: false, totalOCR: 0, selectedRotations: [],
-    regionsFound: 0, regionsTried: 0, fallbackUsed: false, winner: null, durationMs: 0
+  var ctx = {
+    ocrCount: 0,
+    startTime: Date.now(),
+    summary: {
+      mode: 'single-upload', success: false, totalOCR: 0, selectedRotations: [],
+      regionsFound: 0, regionsTried: 0, fallbackUsed: false, winner: null, durationMs: 0
+    }
   };
 
-  // ── FAST PATH: Try 0° directly (most photos are upright) ────────────
   clearLiveLog();
   logStep('[Start] processing image ' + img.naturalWidth + '×' + img.naturalHeight);
-  procMsg.textContent = '0° hızlı deneme…';
 
+  // ── 1. Try 0° first (most photos are upright) ──────────────────────
+  procMsg.textContent = '0° deneniyor…';
   var rotated0 = uploadMakeCanvas(img, 0);
-  var regions0 = locateMRZRegions(rotated0);
   procProg.style.width = '10%';
 
-  if (regions0.length > 0 && !processingCancelled) {
-    logStep('[Fast] 0° → ' + regions0.length + ' region(s), trying OCR');
-    var fastRegion = regions0[0];
-    summary.regionsFound = regions0.length;
-    summary.regionsTried = 1;
-
-    // Enhanced crop
-    var fastCropped = uploadCropRegion(rotated0, fastRegion.y, fastRegion.h);
-    var fastEnhanced = uploadPreprocess(fastCropped);
-    uploadOcrCount++; summary.totalOCR++;
-    var fastResult = await uploadTryRecognize(fastEnhanced);
-    logStep('[Fast] 0° enhanced → ' + (fastResult ? 'SUCCESS' : 'FAIL'));
-
-    if (fastResult) {
-      if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = 0; metrics.upload.successBandIndex = -1; }
-      summary.success = true; summary.winner = { rotation: 0, region: 1, method: 'fast-enhanced' };
-      summary.selectedRotations = [0];
-      summary.durationMs = Date.now() - startTime; window._lastSummary = summary;
-      logStep('[Success] MRZ found in ' + summary.totalOCR + ' OCR attempts (' + summary.durationMs + 'ms)');
-      console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
-      procProg.style.width = '100%';
-      document.getElementById('proc-cancel-btn').style.display = 'none';
-      saveAndShow(fastResult);
-      return;
-    }
-
-    // Raw crop
-    if (!processingCancelled) {
-      uploadOcrCount++; summary.totalOCR++;
-      fastResult = await uploadTryRecognize(fastCropped);
-      logStep('[Fast] 0° raw → ' + (fastResult ? 'SUCCESS' : 'FAIL'));
-      if (fastResult) {
-        if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = 0; metrics.upload.successBandIndex = -1; }
-        summary.success = true; summary.winner = { rotation: 0, region: 1, method: 'fast-raw' };
-        summary.selectedRotations = [0];
-        summary.durationMs = Date.now() - startTime; window._lastSummary = summary;
-        logStep('[Success] MRZ found in ' + summary.totalOCR + ' OCR attempts (' + summary.durationMs + 'ms)');
-        console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
-        procProg.style.width = '100%';
-        document.getElementById('proc-cancel-btn').style.display = 'none';
-        saveAndShow(fastResult);
-        return;
-      }
-    }
-
-    // Region OCR failed — still try band fallback before full pipeline
-    logStep('[Fast] 0° region OCR failed, trying band fallback');
-    if (!processingCancelled) {
-      var fastFallBand = uploadCropBand(rotated0, 0.85, 0.25);
-      var fastFallEnh = uploadPreprocess(fastFallBand);
-      uploadOcrCount++; summary.totalOCR++;
-      var fastFallResult = await uploadTryRecognize(fastFallEnh);
-      logStep('[Fast] 0° alt %25 → ' + (fastFallResult ? 'SUCCESS' : 'FAIL'));
-      if (fastFallResult) {
-        if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = 0; metrics.upload.successBandIndex = 0; }
-        summary.success = true; summary.winner = { rotation: 0, region: 0, method: 'fast-band-25' };
-        summary.selectedRotations = [0];
-        summary.durationMs = Date.now() - startTime; window._lastSummary = summary;
-        logStep('[Success] MRZ found in ' + summary.totalOCR + ' OCR attempts (' + summary.durationMs + 'ms)');
-        console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
-        procProg.style.width = '100%';
-        document.getElementById('proc-cancel-btn').style.display = 'none';
-        saveAndShow(fastFallResult);
-        return;
-      }
-    }
-    logStep('[Fast] 0° failed, entering full pipeline');
-  } else {
-    // No regions at 0° — try bottom quarter band directly (MRZ usually at bottom)
-    logStep('[Fast] 0° → no regions, trying alt %25 band');
-    if (!processingCancelled) {
-      var fastBand = uploadCropBand(rotated0, 0.85, 0.25);
-      var fastBandEnh = uploadPreprocess(fastBand);
-      uploadOcrCount++; summary.totalOCR++;
-      var fastBandResult = await uploadTryRecognize(fastBandEnh);
-      logStep('[Fast] 0° alt %25 → ' + (fastBandResult ? 'SUCCESS' : 'FAIL'));
-      if (fastBandResult) {
-        if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = 0; metrics.upload.successBandIndex = 0; }
-        summary.success = true; summary.winner = { rotation: 0, region: 0, method: 'fast-band-25' };
-        summary.selectedRotations = [0];
-        summary.durationMs = Date.now() - startTime; window._lastSummary = summary;
-        logStep('[Success] MRZ found in ' + summary.totalOCR + ' OCR attempts (' + summary.durationMs + 'ms)');
-        console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
-        procProg.style.width = '100%';
-        document.getElementById('proc-cancel-btn').style.display = 'none';
-        saveAndShow(fastBandResult);
-        return;
-      }
-    }
-    // Try alt %50 in fast path too
-    if (!processingCancelled) {
-      var fastBand50 = uploadCropBand(rotated0, 0.75, 0.50);
-      var fastBand50Enh = uploadPreprocess(fastBand50);
-      uploadOcrCount++; summary.totalOCR++;
-      var fastBand50Result = await uploadTryRecognize(fastBand50Enh);
-      logStep('[Fast] 0° alt %50 → ' + (fastBand50Result ? 'SUCCESS' : 'FAIL'));
-      if (fastBand50Result) {
-        if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = 0; metrics.upload.successBandIndex = 1; }
-        summary.success = true; summary.winner = { rotation: 0, region: 0, method: 'fast-band-50' };
-        summary.selectedRotations = [0];
-        summary.durationMs = Date.now() - startTime; window._lastSummary = summary;
-        logStep('[Success] MRZ found in ' + summary.totalOCR + ' OCR attempts (' + summary.durationMs + 'ms)');
-        console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
-        procProg.style.width = '100%';
-        document.getElementById('proc-cancel-btn').style.display = 'none';
-        saveAndShow(fastBand50Result);
-        return;
-      }
-    }
-    logStep('[Fast] 0° failed, entering full pipeline');
+  var hit = await tryRotation(rotated0, 0, ctx);
+  if (hit) {
+    ctx.summary.selectedRotations = [0];
+    handleOCRSuccess(hit, 0, ctx);
+    return;
   }
-
   if (processingCancelled) return;
 
-  // ── FULL PIPELINE: Rotation ranking + region + OCR ─────────────────
-  procMsg.textContent = 'Belge yönü analiz ediliyor…';
+  // ── 2. Rank remaining rotations, skip 0° ───────────────────────────
+  procMsg.textContent = 'Diğer yönler analiz ediliyor…';
   var rankedRotations = rankRotations(img);
-  if (processingCancelled) return;
-  summary.selectedRotations = rankedRotations.map(function(r) { return r.deg; });
-  procProg.style.width = '25%';
+  // Filter out 0° (already fully tried)
+  rankedRotations = rankedRotations.filter(function(r) { return r.deg !== 0; });
+  ctx.summary.selectedRotations = [0].concat(rankedRotations.map(function(r) { return r.deg; }));
+  procProg.style.width = '40%';
 
-  // ── PHASE 2 + 3: For each top rotation, locate regions and OCR ──────
+  // ── 3. Try each remaining rotation ─────────────────────────────────
   for (var ri = 0; ri < rankedRotations.length; ri++) {
     if (processingCancelled) return;
-    var rot = rankedRotations[ri];
-    var deg = rot.deg;
-    var rotScore = rot.score;
+    var deg = rankedRotations[ri].deg;
+    procMsg.textContent = deg + '° deneniyor…';
+    procProg.style.width = (40 + ri * 25) + '%';
 
-    procMsg.textContent = deg + '° MRZ alanı aranıyor…';
     var rotated = uploadMakeCanvas(img, deg);
-    procProg.style.width = (25 + ri * 30) + '%';
-
-    // Phase 2: Locate MRZ regions
-    var regions = locateMRZRegions(rotated);
-
-    summary.regionsFound = Math.max(summary.regionsFound, regions.length);
-
-    if (regions.length > 0) {
-      // Determine how many regions to try
-      var tryCount = 1;
-      if (regions.length >= 2) {
-        var ratio = regions[1].score / regions[0].score;
-        if (ratio >= C.REGION2_MIN_RATIO) {
-          tryCount = 2;
-          logStep('[Region] score-close → trying #2 (ratio=' + ratio.toFixed(3) + ')');
-        }
-      }
-
-      for (var rgi = 0; rgi < tryCount; rgi++) {
-        if (processingCancelled) return;
-        var region = regions[rgi];
-        summary.regionsTried++;
-        procMsg.textContent = deg + '° bölge #' + (rgi+1) + ' okunuyor…';
-
-        // finalCandidateScore for logging
-        var finalScore = C.ROT_SCORE_W * rotScore + C.REG_SCORE_W * region.score;
-        logStep('[OCR] rot=' + deg + '° reg#' + (rgi+1) + ' score=' + region.score.toFixed(3));
-
-        // Try enhanced crop
-        var cropped = uploadCropRegion(rotated, region.y, region.h);
-        var enhanced = uploadPreprocess(cropped);
-        uploadOcrCount++; summary.totalOCR++;
-        var result = await uploadTryRecognize(enhanced);
-        logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' enhanced → ' + (result ? 'SUCCESS' : 'FAIL'));
-        if (result) {
-          if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = -1; }
-          summary.success = true; summary.winner = { rotation: deg, region: rgi + 1, method: 'enhanced' };
-          summary.durationMs = Date.now() - startTime; window._lastSummary = summary;
-          logStep('[Success] MRZ found in ' + summary.totalOCR + ' OCR attempts (' + summary.durationMs + 'ms)');
-          console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
-          procProg.style.width = '100%';
-          document.getElementById('proc-cancel-btn').style.display = 'none';
-          saveAndShow(result);
-          return;
-        }
-
-        // Try raw crop
-        if (processingCancelled) return;
-        uploadOcrCount++; summary.totalOCR++;
-        result = await uploadTryRecognize(cropped);
-        logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' raw → ' + (result ? 'SUCCESS' : 'FAIL'));
-        if (result) {
-          if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = -1; }
-          summary.success = true; summary.winner = { rotation: deg, region: rgi + 1, method: 'raw' };
-          summary.durationMs = Date.now() - startTime; window._lastSummary = summary;
-          logStep('[Success] MRZ found in ' + summary.totalOCR + ' OCR attempts (' + summary.durationMs + 'ms)');
-          console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
-          procProg.style.width = '100%';
-          document.getElementById('proc-cancel-btn').style.display = 'none';
-          saveAndShow(result);
-          return;
-        }
-
-        // Try wider crop (WIDER_CROP_MULT × region height)
-        if (processingCancelled) return;
-        procMsg.textContent = deg + '° geniş alan deneniyor…';
-        var rawH = region.rawEnd - region.rawStart;
-        var widerPad = Math.round(rawH * (C.WIDER_CROP_MULT - 1) / 2);
-        var widerY = Math.max(0, region.rawStart - widerPad);
-        var widerEnd = Math.min(rotated.height, region.rawEnd + widerPad);
-        var widerH = widerEnd - widerY;
-        var wider = uploadCropRegion(rotated, widerY, widerH);
-        var widerEnhanced = uploadPreprocess(wider);
-        uploadOcrCount++; summary.totalOCR++;
-        result = await uploadTryRecognize(widerEnhanced);
-        logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' wider → ' + (result ? 'SUCCESS' : 'FAIL'));
-        if (result) {
-          if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = -2; }
-          summary.success = true; summary.winner = { rotation: deg, region: rgi + 1, method: 'wider' };
-          summary.durationMs = Date.now() - startTime; window._lastSummary = summary;
-          logStep('[Success] MRZ found in ' + summary.totalOCR + ' OCR attempts (' + summary.durationMs + 'ms)');
-          console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
-          procProg.style.width = '100%';
-          document.getElementById('proc-cancel-btn').style.display = 'none';
-          saveAndShow(result);
-          return;
-        }
-
-        // Try high-contrast enhanced (for faded/light MRZ text)
-        if (processingCancelled) return;
-        var hiContrast = uploadPreprocess(cropped, true);
-        uploadOcrCount++; summary.totalOCR++;
-        result = await uploadTryRecognize(hiContrast);
-        logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' hi-contrast → ' + (result ? 'SUCCESS' : 'FAIL'));
-        if (result) {
-          if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = -1; }
-          summary.success = true; summary.winner = { rotation: deg, region: rgi + 1, method: 'hi-contrast' };
-          summary.durationMs = Date.now() - startTime; window._lastSummary = summary;
-          logStep('[Success] MRZ found in ' + summary.totalOCR + ' OCR attempts (' + summary.durationMs + 'ms)');
-          console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
-          procProg.style.width = '100%';
-          document.getElementById('proc-cancel-btn').style.display = 'none';
-          saveAndShow(result);
-          return;
-        }
-      }
-    } else {
-      logStep('[Region] no regions at ' + deg + '°');
-    }
-
-    // Fallback: band search on primary rotations (0°/180°) and first rotation
-    var isPrimary = (deg === 0 || deg === 180);
-    if (ri === 0 || isPrimary) {
-      summary.fallbackUsed = true;
-      logStep('[Fallback] entering band search at ' + deg + '°');
-      if (processingCancelled) return;
-      procMsg.textContent = deg + '° band taraması…';
-      var bandConfigs = [
-        { cy: 0.85, hr: 0.25, label: 'alt %25' },
-        { cy: 0.75, hr: 0.50, label: 'alt %50' },
-        { cy: 0.15, hr: 0.25, label: 'üst %25' },
-        { cy: 0.50, hr: 1.00, label: 'tam resim' },
-      ];
-
-      for (var bi = 0; bi < bandConfigs.length; bi++) {
-        if (processingCancelled) return;
-        var bc = bandConfigs[bi];
-        procMsg.textContent = deg + '° ' + bc.label + ' taranıyor…';
-        procProg.style.width = (60 + bi * 15) + '%';
-
-        var bandCrop = bc.hr >= 1.0 ? rotated : uploadCropBand(rotated, bc.cy, bc.hr);
-        var bandEnhanced = uploadPreprocess(bandCrop);
-        uploadOcrCount++; summary.totalOCR++;
-        var result = await uploadTryRecognize(bandEnhanced);
-        logStep('[OCR] ' + deg + '° fallback ' + bc.label + ' → ' + (result ? 'SUCCESS' : 'FAIL'));
-        if (result) {
-          if (metrics) { metrics.upload.attempts = uploadOcrCount; metrics.upload.successful++; metrics.upload.successRotation = deg; metrics.upload.successBandIndex = bi; }
-          summary.success = true; summary.winner = { rotation: deg, region: 0, method: 'fallback-' + bc.label };
-          summary.durationMs = Date.now() - startTime; window._lastSummary = summary;
-          logStep('[Success] MRZ found in ' + summary.totalOCR + ' OCR attempts (' + summary.durationMs + 'ms)');
-          console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
-          procProg.style.width = '100%';
-          document.getElementById('proc-cancel-btn').style.display = 'none';
-          saveAndShow(result);
-          return;
-        }
-      }
+    hit = await tryRotation(rotated, deg, ctx);
+    if (hit) {
+      handleOCRSuccess(hit, deg, ctx);
+      return;
     }
   }
 
   // ── FAIL ───────────────────────────────────────────────────────────
-  if (metrics) metrics.upload.attempts = uploadOcrCount;
-  logStep('[FAIL] no MRZ found after ' + uploadOcrCount + ' OCR attempts');
-  summary.durationMs = Date.now() - startTime; window._lastSummary = summary;
-  console.log('[MRZ_SUMMARY]', JSON.stringify(summary));
+  if (metrics) metrics.upload.attempts = ctx.ocrCount;
+  logStep('[FAIL] no MRZ found after ' + ctx.ocrCount + ' OCR attempts');
+  ctx.summary.durationMs = Date.now() - ctx.startTime; window._lastSummary = ctx.summary;
+  console.log('[MRZ_SUMMARY]', JSON.stringify(ctx.summary));
   document.getElementById('proc-cancel-btn').style.display = 'none';
   showError('MRZ tespit edilemedi. Kimliğin arka yüzünü yükleyin.');
 }
