@@ -681,14 +681,6 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
       result = await uploadTryRecognize(hiCon, acc, ocrWorker);
       logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' hi-contrast → ' + (result ? 'SUCCESS' : 'FAIL'));
       if (result) return { result: result, method: 'hi-contrast', region: rgi + 1, bandIdx: -1 };
-
-      // Sharp (aggressive sharpening for blurry images)
-      if (processingCancelled) return null;
-      var sharp = uploadPreprocess(cropped, 'sharp');
-      ctx.ocrCount++; ctx.summary.totalOCR++;
-      result = await uploadTryRecognize(sharp, acc, ocrWorker);
-      logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' sharp → ' + (result ? 'SUCCESS' : 'FAIL'));
-      if (result) return { result: result, method: 'sharp', region: rgi + 1, bandIdx: -1 };
     }
   } else {
     logStep('[Region] no regions at ' + deg + '°');
@@ -717,8 +709,8 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
     logStep('[OCR] ' + deg + '° ' + bc.label + ' → ' + (result ? 'SUCCESS' : 'FAIL'));
     if (result) return { result: result, method: 'band-' + bc.label, region: 0, bandIdx: bi };
 
-    // İlk 2 band için sharp mode dene (bulanık fotoğraflar için)
-    if (bi < 2) {
+    // İlk band için sharp mode dene (bulanık fotoğraflar için)
+    if (bi === 0) {
       if (processingCancelled) return null;
       var bandSharp = uploadPreprocess(bandCrop, 'sharp');
       ctx.ocrCount++; ctx.summary.totalOCR++;
