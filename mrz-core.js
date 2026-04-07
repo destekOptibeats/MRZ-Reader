@@ -28,7 +28,14 @@
         if (kind === 'TD3_L1' && c[0] === 'P') return c;
         if (kind === 'TD1_L2' && /^\d{6}/.test(c)) return applyDigitFixes(c, kind);
         if (kind === 'TD3_L2' && /^\d/.test(c)) return applyDigitFixes(c, kind);
-        if (kind === 'TD1_L3' && c.includes('<<')) return c;
+        if (kind === 'TD1_L3' && /^[A-Z<]+$/.test(c) && c.includes('<<')) return c;
+      }
+      // TD1_L3 relaxed fallback: allow digits if no clean version found
+      if (kind === 'TD1_L3') {
+        for (let skip = 0; skip <= s.length - targetLen; skip++) {
+          const c = s.substring(skip, skip + targetLen);
+          if (c.includes('<<')) return c;
+        }
       }
       return applyDigitFixes(s.substring(0, targetLen), kind);
     }
