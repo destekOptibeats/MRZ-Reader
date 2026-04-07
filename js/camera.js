@@ -319,14 +319,19 @@ async function scanLoop() {
             `OCR: ${metrics ? metrics.attemptedOCR : '?'} | blur: ${metrics ? metrics.blurSkips : '?'} | motion: ${metrics ? metrics.motionSkips : '?'}`,
             metrics && metrics.firstLockMs ? `firstLock: ${metrics.firstLockMs}ms` : ''
           ].filter(Boolean), null, validation.checksums, diag);
-          window._lastSummary = {
+          var camSummary = {
             mode: 'single-camera', success: true,
             totalOCR: metrics ? metrics.attemptedOCR : 0,
             selectedRotations: [], regionsFound: 0, regionsTried: 0,
             fallbackUsed: false,
             winner: { rotation: 0, region: 0, method: 'camera-band-' + (BAND_NAMES[bi] || bi) },
-            durationMs: metrics && metrics.firstLockMs ? metrics.firstLockMs : 0
+            durationMs: metrics && metrics.firstLockMs ? metrics.firstLockMs : 0,
+            failureReason: null, assembly: null, experiment: { psm: 6, lang: 'mrz', preprocessWinner: 'camera' },
+            l2RecoveryAttempted: false, l2RecoverySuccess: false
           };
+          if (typeof setDocType === 'function') setDocType(camSummary, result);
+          if (typeof enrichRunSummary === 'function') enrichRunSummary(camSummary);
+          window._lastSummary = camSummary;
           if (serialMode) { addSerialResult(result, { ocrText: text, bandIdx: bi, ocrAttempts: bi + 1 }); setTimeout(scanLoop, 500); return; }
           setTimeout(() => { stopCamera(); saveAndShow(result); }, 250);
           return;
