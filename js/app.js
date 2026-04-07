@@ -773,7 +773,7 @@ function deleteCurrent() {
 
 // ── TABS ────────────────────────────────────────────────────────────────
 function setTab(t) {
-  ['cam','img','bulk'].forEach(x => {
+  ['cam','img'].forEach(x => {
     const tab = document.getElementById('tab-'+x);
     const content = document.getElementById('tab-'+x+'-content');
     if (tab) tab.classList.toggle('active', x===t);
@@ -902,7 +902,17 @@ function resetImageUpload() {
 }
 
 function onFile(e) {
-  const file = e.target.files[0]; if (!file) return;
+  const files = e.target.files; if (!files || !files.length) return;
+
+  // Çoklu dosya seçildi → seri tarama modunda toplu işle
+  if (files.length > 1) {
+    stopCamera();
+    startBulkSerialFromPhotos(files);
+    return;
+  }
+
+  // Tek dosya → mevcut flow
+  const file = files[0];
   stopCamera();
   const reader = new FileReader();
   reader.onload = ev => {

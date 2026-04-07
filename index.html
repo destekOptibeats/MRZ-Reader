@@ -451,7 +451,7 @@ input[type="text"] {
   <div class="tabs">
     <button class="tab active" id="tab-cam" onclick="setTab('cam')">📷 Kamera</button>
     <button class="tab" id="tab-img" onclick="setTab('img')">🖼️ Fotoğraf</button>
-    <button class="tab" id="tab-bulk" onclick="setTab('bulk')" style="display:none">📁 Toplu</button>
+    <!-- Toplu tab kaldırıldı — Fotoğraf tab'ı çoklu seçimi destekliyor -->
   </div>
 
   <!-- Camera tab -->
@@ -483,7 +483,7 @@ input[type="text"] {
       <div class="upload-zone" id="drop-zone" onclick="document.getElementById('file-in').click()">
         <div style="font-size:2.4rem;margin-bottom:10px">🖼️</div>
         <h3 style="font-size:1rem;margin-bottom:5px">Pasaport / Kimlik Fotoğrafı Seç</h3>
-        <p style="color:var(--muted);font-size:0.82rem">MRZ satırlarının olduğu arka yüzü seçin</p>
+        <p style="color:var(--muted);font-size:0.82rem">Tek veya birden fazla fotoğraf seçin</p>
       </div>
     </div>
     <div id="img-preview-wrap" style="display:none;flex-direction:column;gap:10px;">
@@ -497,18 +497,7 @@ input[type="text"] {
         <button class="btn ghost" style="flex:1" onclick="resetImageUpload()">↩ Değiştir</button>
       </div>
     </div>
-    <input type="file" id="file-in" accept="image/*" style="display:none" onchange="onFile(event)">
-    <button class="btn ghost" onclick="stopScan()">✕ İptal</button>
-  </div>
-
-  <!-- Bulk upload tab (serial mode only) -->
-  <div id="tab-bulk-content" style="display:none;width:100%;max-width:460px;flex-direction:column;gap:12px;align-items:center;">
-    <div class="upload-zone" onclick="document.getElementById('bulk-file-in').click()">
-      <div style="font-size:2.4rem;margin-bottom:10px">📁</div>
-      <h3 style="font-size:1rem;margin-bottom:5px">Toplu Fotoğraf Seç</h3>
-      <p style="color:var(--muted);font-size:0.82rem">Birden fazla belge fotoğrafı seçin</p>
-    </div>
-    <input type="file" id="bulk-file-in" accept="image/*" multiple style="display:none" onchange="startBulkSerialScan(this.files)">
+    <input type="file" id="file-in" accept="image/*" multiple style="display:none" onchange="onFile(event)">
     <div id="bulk-progress" style="display:none;width:100%;">
       <div class="prog-wrap"><div class="prog" id="bulk-prog" style="width:0%"></div></div>
       <div class="sub" id="bulk-status" style="margin-top:6px;"></div>
@@ -641,13 +630,13 @@ input[type="text"] {
 <canvas id="main-canvas" style="display:none"></canvas>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-<script src="mrz-core.js?v=270"></script>
-<script src="js/telemetry.js?v=270"></script>
-<script src="js/app.js?v=270"></script>
-<script src="js/batch.js?v=270"></script>
-<script src="js/overlay.js?v=270"></script>
-<script src="js/camera.js?v=270"></script>
-<script src="js/upload.js?v=270"></script>
+<script src="mrz-core.js?v=271"></script>
+<script src="js/telemetry.js?v=271"></script>
+<script src="js/app.js?v=271"></script>
+<script src="js/batch.js?v=271"></script>
+<script src="js/overlay.js?v=271"></script>
+<script src="js/camera.js?v=271"></script>
+<script src="js/upload.js?v=271"></script>
 <script>init();</script>
 
 <!-- ── DEBUG LOG PANEL ── -->

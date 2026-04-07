@@ -5,12 +5,11 @@
 // These functions must NOT be used by camera path.
 // ═══════════════════════════════════════════════════════════════════════
 
-async function startBulkSerialScan(files) {
+async function startBulkSerialFromPhotos(files) {
   if (!files || !files.length || !workerReady) return;
   if (!serialMode) startSerialScan();
   await new Promise(r => setTimeout(r, 200));
   stopCamera();
-  setTab('bulk');
 
   const prog = document.getElementById('bulk-prog');
   const status = document.getElementById('bulk-status');
@@ -24,20 +23,20 @@ async function startBulkSerialScan(files) {
     try { imgData = await loadImageFast(files[i]); }
     catch(e) { continue; }
 
-    const resized = resizeForOCR(imgData.img, 1400);
+    // Upload pipeline ile işle (aynı karar ağacı)
+    const ocrResult = await batchProcessImage(imgData.img, null);
     imgData.cleanup();
 
-    const timings = {};
-    const ocrResult = await fastBatchOCR(resized, timings, null, files[i].name, i);
-    if (ocrResult.extracted) {
-      addSerialResult(ocrResult.extracted);
+    if (ocrResult.result) {
+      addSerialResult(ocrResult.result);
     }
-    await new Promise(r => setTimeout(r, 300));
+    await new Promise(r => setTimeout(r, 100));
   }
 
   prog.style.width = '100%';
   status.textContent = '✅ ' + files.length + ' fotoğraf işlendi';
-  document.getElementById('bulk-file-in').value = '';
+  document.getElementById('file-in').value = '';
+  document.getElementById('bulk-progress').style.display = 'none';
 }
 
 // ── BATCH HELPERS ──────────────────────────────────────────────────────
