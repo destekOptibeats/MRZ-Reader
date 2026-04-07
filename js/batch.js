@@ -7,52 +7,89 @@
 
 async function startBulkSerialFromPhotos(files) {
   if (!files || !files.length || !workerReady) return;
-
-  // Seri veri yapılarını başlat (kamera açmadan, ekran değiştirmeden)
-  serialMode = true;
-  serialCount = 0;
-  serialScannedIds = [];
-  serialEntries = [];
-  serialTotalShots = 0;
-  serialStartTime = Date.now();
-  serialCooldown = false;
-  window._serialSummaries = [];
   stopCamera();
 
-  const prog = document.getElementById('bulk-prog');
-  const status = document.getElementById('bulk-status');
-  document.getElementById('bulk-progress').style.display = 'block';
+  // Batch ekranını kullan (batch test ile aynı format)
+  goScreen('s-batch');
+  const prog = document.getElementById('batch-prog');
+  const status = document.getElementById('batch-status');
+  const results = document.getElementById('batch-results');
+  document.getElementById('batch-progress').style.display = 'block';
+  results.innerHTML = '';
+
+  const batchT0 = performance.now();
+  const rows = [];
+  let successCount = 0;
+  let totalTime = 0;
 
   try {
     for (let i = 0; i < files.length; i++) {
       prog.style.width = ((i / files.length) * 100) + '%';
       status.textContent = (i+1) + '/' + files.length + ': ' + files[i].name;
 
+      const t0 = performance.now();
       let imgData = null;
       try { imgData = await loadImageFast(files[i]); }
-      catch(e) { console.warn('[Bulk] image load failed:', files[i].name, e); continue; }
+      catch(e) {
+        rows.push({ name: files[i].name, ok: false, docType: '—', cs: '—', durationMs: 0, selectedBand: '—', ocrAttempts: 0, batchLog: [], parsedFields: null, comment: e.message });
+        continue;
+      }
 
-      // Upload pipeline ile işle (aynı karar ağacı)
       const ocrResult = await batchProcessImage(imgData.img, null);
       imgData.cleanup();
 
+      const elapsed = Math.round(performance.now() - t0);
+      totalTime += elapsed;
+      const sm = ocrResult.summary;
+
       if (ocrResult.result) {
-        try { addSerialResult(ocrResult.result); }
-        catch(e) { console.warn('[Bulk] addSerialResult error:', e); }
+        successCount++;
+        const v = validateMRZ(ocrResult.result);
+        const parsed = parseResult(ocrResult.result);
+        const batchMrzName = MRZCore.parseMRZName(ocrResult.result);
+        parsed.surname = batchMrzName.surname;
+        parsed.given   = batchMrzName.given;
+        const csStr = ['Pass','DOB','EXP'].map(function(k, idx) {
+          return k + (v.checksums[['passOk','dobOk','expOk'][idx]] ? '✓' : '✗');
+        }).join(' ');
+        const winner = sm.winner || {};
+        rows.push({
+          name: files[i].name, ok: true, docType: ocrResult.result.type, cs: csStr,
+          durationMs: elapsed, selectedBand: winner.method || '—', ocrAttempts: sm.totalOCR,
+          batchLog: ocrResult.log,
+          parsedFields: {
+            documentNumber: (parsed.passNo || '').replace(/</g,'') || null,
+            birthDate: parsed.dob || null,
+            surname: parsed.surname || null,
+            givenNames: parsed.given || null,
+            nationalId: parsed.nationalId || null,
+            nationalIdValid: parsed.nationalIdValid || false,
+          },
+          comment: getResultComment('SUCCESS')
+        });
+      } else {
+        rows.push({
+          name: files[i].name, ok: false, docType: '—', cs: '—',
+          durationMs: elapsed, selectedBand: '—', ocrAttempts: sm.totalOCR,
+          batchLog: ocrResult.log, parsedFields: null,
+          comment: 'Tüm yöntemler başarısız'
+        });
       }
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise(function(r) { setTimeout(r, 100); });
     }
   } catch(e) {
     console.error('[Bulk] processing error:', e);
   }
 
+  const batchTotal = Math.round(performance.now() - batchT0);
   prog.style.width = '100%';
-  status.textContent = '✅ ' + files.length + ' fotoğraf işlendi';
+  status.textContent = 'Tamamlandı';
   document.getElementById('file-in').value = '';
-  document.getElementById('bulk-progress').style.display = 'none';
 
-  // Raporu göster — her durumda çağır
-  finishSerialScan();
+  const avg = files.length > 0 ? Math.round(totalTime / files.length) : 0;
+  const summaryText = successCount + '/' + files.length + ' başarılı, ort ' + avg + 'ms/dosya · Toplam: ' + batchTotal + 'ms';
+  window.batchReportData = rows;
+  results.innerHTML = renderBatchTable(rows, summaryText);
 }
 
 // ── BATCH HELPERS ──────────────────────────────────────────────────────
@@ -415,6 +452,39 @@ async function createBatchWorker() {
   return bw;
 }
 
+// ── Ortak batch tablo render ──────────────────────────────────────────
+function renderBatchTable(rows, summaryText) {
+  return '<table class="batch-table"><thead><tr>' +
+    '<th>Dosya</th><th>Sonuç</th><th>Tip</th><th>CS</th><th>Yöntem</th><th>OCR</th><th>DocNo</th><th>TC Kimlik No</th><th>DOB</th><th>Soyad</th><th>Ad</th><th>Süre</th><th></th>' +
+    '</tr></thead><tbody>' +
+    rows.map(function(r, idx) {
+      var pf = r.parsedFields || {};
+      var nid = pf.nationalId ? (pf.nationalId + (pf.nationalIdValid ? ' ✓' : ' ⚠')) : '';
+      var logBtn = r.batchLog && r.batchLog.length ? '<button onclick="copyToClipboard(batchReportData[' + idx + '].batchLog.join(\'\\n\'))" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--muted);cursor:pointer;font-size:.7rem" title="Log kopyala">📋</button>' : '';
+      return '<tr>' +
+      '<td>' + r.name + '</td>' +
+      '<td class="' + (r.ok ? 'bt-ok' : 'bt-fail') + '">' + (r.ok ? '✅' : '❌') + '</td>' +
+      '<td>' + (r.docType || '—') + '</td>' +
+      '<td style="font-size:.7rem">' + (r.cs || '—') + '</td>' +
+      '<td style="font-size:.7rem">' + (r.selectedBand || '—') + '</td>' +
+      '<td>' + (r.ocrAttempts || 0) + '</td>' +
+      '<td style="font-family:monospace;font-size:.72rem">' + (pf.documentNumber || '—') + '</td>' +
+      '<td style="font-family:monospace;font-size:.72rem">' + nid + '</td>' +
+      '<td style="font-size:.72rem">' + (pf.birthDate || '—') + '</td>' +
+      '<td style="font-size:.72rem">' + (pf.surname || '—') + '</td>' +
+      '<td style="font-size:.72rem">' + (pf.givenNames || '—') + '</td>' +
+      '<td>' + (r.durationMs || 0) + 'ms</td>' +
+      '<td>' + logBtn + '</td>' +
+      '</tr>';
+    }).join('') +
+    '</tbody></table>' +
+    '<div class="batch-summary">' + summaryText + '</div>' +
+    '<div style="text-align:center;margin-top:10px">' +
+    '<button class="btn ghost btn-sm" onclick="copyToClipboard(formatAllResultsForCopy(batchReportData,\'' + summaryText.replace(/'/g,'') + '\'))">📋 Tüm Sonuçları Kopyala</button> ' +
+    '<button class="btn ghost btn-sm" onclick="copyAllBatchLogs()">📋 Tüm Logları Kopyala</button>' +
+    '</div>';
+}
+
 // ── BATCH TEST ─────────────────────────────────────────────────────────
 async function startBatchTest(files) {
   if (!files || !files.length) return;
@@ -543,35 +613,7 @@ async function startBatchTest(files) {
   window.batchReportData = rows;
   const batchSummaryText = successCount + '/' + files.length + ' başarılı, ort ' + avg + 'ms/dosya · Worker init: ' + workerInitTime + 'ms · Toplam: ' + batchTotal + 'ms';
 
-  results.innerHTML = '<table class="batch-table"><thead><tr>' +
-    '<th>Dosya</th><th>Sonuç</th><th>Tip</th><th>CS</th><th>Yöntem</th><th>OCR</th><th>DocNo</th><th>TC Kimlik No</th><th>DOB</th><th>Soyad</th><th>Ad</th><th>Süre</th><th></th>' +
-    '</tr></thead><tbody>' +
-    rows.map((r, idx) => {
-      const pf = r.parsedFields || {};
-      const nid = pf.nationalId ? (pf.nationalId + (pf.nationalIdValid ? ' ✓' : ' ⚠')) : '';
-      const logBtn = r.batchLog && r.batchLog.length ? '<button onclick="copyToClipboard(batchReportData[' + idx + '].batchLog.join(\'\\n\'))" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--muted);cursor:pointer;font-size:.7rem" title="Log kopyala">📋</button>' : '';
-      return '<tr>' +
-      '<td>' + r.name + '</td>' +
-      '<td class="' + (r.ok ? 'bt-ok' : 'bt-fail') + '">' + (r.ok ? '✅' : '❌') + '</td>' +
-      '<td>' + (r.docType || '—') + '</td>' +
-      '<td style="font-size:.7rem">' + (r.cs || '—') + '</td>' +
-      '<td style="font-size:.7rem">' + (r.selectedBand || '—') + '</td>' +
-      '<td>' + (r.ocrAttempts || 0) + '</td>' +
-      '<td style="font-family:monospace;font-size:.72rem">' + (pf.documentNumber || '—') + '</td>' +
-      '<td style="font-family:monospace;font-size:.72rem">' + nid + '</td>' +
-      '<td style="font-size:.72rem">' + (pf.birthDate || '—') + '</td>' +
-      '<td style="font-size:.72rem">' + (pf.surname || '—') + '</td>' +
-      '<td style="font-size:.72rem">' + (pf.givenNames || '—') + '</td>' +
-      '<td>' + (r.durationMs || 0) + 'ms</td>' +
-      '<td>' + logBtn + '</td>' +
-      '</tr>';
-    }).join('') +
-    '</tbody></table>' +
-    '<div class="batch-summary">' + batchSummaryText + '</div>' +
-    '<div style="text-align:center;margin-top:10px">' +
-    '<button class="btn ghost btn-sm" onclick="copyToClipboard(formatAllResultsForCopy(batchReportData,\'' + batchSummaryText.replace(/'/g,'') + '\'))">📋 Tüm Sonuçları Kopyala</button> ' +
-    '<button class="btn ghost btn-sm" onclick="copyAllBatchLogs()">📋 Tüm Logları Kopyala</button>' +
-    '</div>';
+  results.innerHTML = renderBatchTable(rows, batchSummaryText);
 
   document.getElementById('batch-file-in').value = '';
 }
