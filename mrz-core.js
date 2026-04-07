@@ -194,7 +194,10 @@
 
   function cleanSurname(raw) {
     let s = raw;
-    while (s.length > 0 && /^[0-9BJL]/.test(s)) s = s.substring(1);
+    // Strip leading OCR garbage: everything up to and including last leading digit
+    // e.g. "E2ALMALEH" → "ALMALEH", "2SMITH" → "SMITH"
+    s = s.replace(/^[A-Z0-9]*\d/, '');
+    while (s.length > 0 && /^[BJL]/.test(s)) s = s.substring(1);
     if (/^C[A-Z]{5,}/.test(s)) s = s.substring(1);
     return s.replace(/</g,' ').trim();
   }
