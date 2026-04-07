@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MRZ Analiz Raporu</title>
+<style>
+body{font-family:system-ui,-apple-system,sans-serif;max-width:900px;margin:0 auto;padding:20px;background:#1a1a2e;color:#e0e0e0;line-height:1.7}
+h1,h2,h3{color:#fff}
+h2{border-bottom:1px solid #333;padding-bottom:8px;margin-top:32px}
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:.85rem}
+th,td{border:1px solid #333;padding:6px 10px;text-align:left}
+th{background:#2a2a4a;color:#fff}
+tr:nth-child(even){background:#1e1e3a}
+code{background:#2a2a4a;padding:2px 6px;border-radius:4px;font-size:.85em}
+pre{background:#2a2a4a;padding:14px;border-radius:8px;overflow-x:auto;font-size:.82rem}
+.copy-btn{position:fixed;top:16px;right:16px;background:#4caf50;color:#fff;border:none;padding:14px 28px;border-radius:10px;font-size:1rem;font-weight:700;cursor:pointer;z-index:999;box-shadow:0 4px 12px rgba(0,0,0,.4)}
+.copy-btn:active{background:#388e3c}
+.copy-btn.done{background:#2196f3}
+#report{white-space:pre-wrap}
+</style>
+</head>
+<body>
+<button class="copy-btn" onclick="copyReport()">📋 Tümünü Kopyala</button>
+
+<div id="report">## A. Mevcut Durum Özeti
+
+Sistem 6 test fotoğrafı üzerinde **4/6 (%67) başarı oranına** sahip. Başarılı fotoğraflarda ortalama süre ~2.8 saniye, başarısız fotoğraflarda tüm denemeler tükendikten sonra ~15-19 saniye harcanıyor. Region detection 6 fotoğrafın **hiçbirinde** doğru çalışmıyor — sistem her zaman band fallback'e düşüyor. Başarılı sonuçların tamamı band fallback yoluyla elde ediliyor.
+
+---
+
+## B. Denenen Senaryolar ve Sonuçlar
+
+### Fotoğraf Bazlı Detaylı Analiz
+
+| # | Dosya | Boyut | Kart | Sonuç | Deneme | Süre | Bulan Yöntem | Region Durumu | Assembly Durumu |
+|---|-------|-------|------|-------|--------|------|-------------|---------------|-----------------|
+| 1 | IMG_1913 | 3024×4032 | GUCEL (Kimlik 1) | SUCCESS | 3 | 1018ms | band alt %50 enhanced | peaks=0, thresh=0.654 | kullanılmadı |
+| 2 | IMG_1914 | 3024×4032 | GUCEL (Kimlik 1) | SUCCESS | 3 | 1179ms | band alt %50 enhanced | peaks=0, thresh=0.758 | kullanılmadı |
+| 3 | IMG_1923 | 3024×4032 | ALMALEH (Kimlik 2) | SUCCESS | 2 | 704ms | band alt %25 bin | peaks=0, thresh=0.728 | kullanılmadı |
+| 4 | IMG_1924 | 3024×4032 | ALMALEH (Kimlik 2) | FAIL | 16 | 18.8s | — | peaks=2 → no valid clusters | L1=3, L2=0, L3=4 |
+| 5 | IMG_1925 | 3024×4032 | ALMALEH (Kimlik 2) | SUCCESS | 7 | 8501ms | band alt %50 enhanced | peaks=1 → single-peak fallback | kullanılmadı |
+| 6 | IMG_1926 | 1284×2778 | ALMALEH (Kimlik 2) | FAIL | 24 | ~15s | — | peaks=1 → single-peak fallback | L1=1, L2=0, L3=2 |
+
+### Her Fotoğrafta Ne Oldu — Adım Adım
+
+**IMG_1913 (SUCCESS, 1018ms)**
+- Region detection: peaks=0, threshold=0.654 — MRZ satırları arka plandan ayrıştırılamadı
+- Band fallback: alt %25 → boş çıktı, alt %25 bin → boş çıktı, alt %50 → L2 satırı okundu → extractMRZ 3 satırı buldu → checksum geçti
+- OCR çıktısı: "8001070M3411067TUR&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;BE" (32 karakter, hedef 30 → fixLine skip=2 ile düzeltti)
+
+**IMG_1914 (SUCCESS ama soyad yanlış, 1179ms)**
+- Aynı akış: peaks=0, band fallback, alt %50'de başarılı
+- OCR çıktısı: "I&lt;TURA48P241286&lt;52000135084&lt;&lt;&lt;1B" (L1 satırı)
+- L3 satırında Tesseract GUCEL yerine BUCEL okudu — G harfi B olarak algılandı
+- Checksum geçti çünkü L3 (isim satırı) checksum'a dahil değil
+- applyNameFixes bu hatayı düzeltemez — B ve G ikisi de geçerli harf
+
+**IMG_1923 (SUCCESS, 704ms — en hızlı)**
+- Region detection: peaks=0
+- Band fallback: alt %25 enhanced → FAIL (L2 okundu ama L1/L3 eksik), alt %25 bin → SUCCESS
+- Adaptive binarization fark yarattı — normal enhanced modda başarısız, bin modda başarılı
+- OCR çıktısı: "5 ALMALEH&lt;&lt;ALPER&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt; IE&lt;" — fixLine fazla karakterleri kırptı
+
+**IMG_1924 (FAIL, 18.8s)**
+- Region detection: peaks=2 bulundu ama "no valid clusters" — peak'ler MRZ satırlarına değil arka plan dokusuna ait
+- 0° tüm bandlar başarısız, 180° tüm bandlar başarısız = toplam 16 OCR denemesi
+- Assembly sonucu: L1=3 aday, L2=0 aday, L3=4 aday — L2 satırı hiçbir OCR denemesinde okunamadı
+- En yakın L2 adayı yok — OCR çıktıları tamamen bozuk ("EEEEEEE EE MJMJJM77MTTT&lt; &lt;" gibi)
+- Log: [Assembly] L2 eksik — L1 örnekleri: ALMALEH&lt;&lt;ALPER&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt; | CZN1JTCICISLER1BAKANLIGIEBE&lt;EE
+
+**IMG_1925 (SUCCESS ama yavaş, 8501ms)**
+- Region detection: peaks=1 → single-peak fallback (y=0-603) — yanlış bölge (üst kısım)
+- 4 region OCR denemesi boşa harcandı (enhanced, raw, wider, hi-contrast hepsi FAIL)
+- Band fallback: alt %25 → FAIL, alt %25 bin → FAIL, alt %50 → SUCCESS
+- Yavaşlığın sebebi: 4 boşa giden region denemesi + 3 band denemesi = 7 toplam
+
+**IMG_1926 (FAIL, ~15s)**
+- 1284×2778 boyutunda (diğerlerinden küçük — muhtemelen ekran görüntüsü veya kırpılmış)
+- Portrait guard doğru çalıştı (imgH > imgW → portrait → 90°/270° engellendi)
+- 0° tam resim'de L3 okundu: "E&lt;&lt;&lt;&lt;ALMALEH&lt;&lt;ALPER&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt; PF&lt;&lt;&lt;" — ama L1 ve L2 eksik
+- Assembly: L1=1, L2=0, L3=2 — yine L2 yok
+- 24 OCR denemesi yapıldı (2 rotasyon × ~12 deneme) — hiçbirinde L2 satırı okunamadı
+
+---
+
+## C. Sorun Sınıfları
+
+### Sınıf 1: Region Detection Sistematik Başarısızlığı
+Etkilenen: 6/6 fotoğrafın tamamı
+Durum: Region detection hiçbir fotoğrafta doğru MRZ bölgesini bulamıyor. Tahta zemin dokusu tüm satırlarda yüksek projection/variance/gradient skoru üretiyor. Adaptive threshold (median × 1.5) çok yüksek çıkıyor, MRZ satırları peak olarak seçilemiyor.
+Sonuç: Sistem her zaman band fallback'e düşüyor — doğrudan başarısızlık değil ama hız kaybı (gereksiz region OCR denemeleri) ve güvenilirlik kaybı (sabit band pozisyonlarına bağımlılık).
+
+### Sınıf 2: OCR Düzeyinde L2 Satırı Okunamama
+Etkilenen: 2/6 fotoğraf (IMG_1924, IMG_1926) — her ikisi de FAIL
+Durum: Tesseract, MRZ'nin 2. satırını (DOB/expiry/cinsiyet) hiçbir preprocessing modunda okumuyor. Çıktı ya boş ya tamamen bozuk ("EEEEEEE", "L000000000000"). L1 ve L3 satırları assembly tarafından bulunabiliyor ama L2=0 olduğunda assembly çalışamıyor — orta döngü (for b in td1_l2) hiç çalışmıyor, doğrudan null dönüyor.
+Sonuç: L2 olmadan TD1 sonuç üretilemez. Kısmi okuma (L1+L3) tamamen kayboluyor.
+
+### Sınıf 3: Karakter Düzeyinde OCR Hatası
+Etkilenen: 1/6 fotoğraf (IMG_1914) — SUCCESS ama yanlış soyad
+Durum: Tesseract G harfini B olarak okuyor → GUCEL yerine BUCEL. Her iki harf de whitelist'te geçerli, digit fix / name fix tabloları bu durumu kapsamıyor. L3 (isim satırı) checksum kontrolüne tabi değil — yanlış okuma doğrulama aşamasında yakalanamıyor.
+Sonuç: Kullanıcıya yanlış isim gösteriliyor, sistem bunu "başarılı" olarak raporluyor.
+
+### Sınıf 4: Yanlış Region → Boşa Harcanan OCR Denemesi
+Etkilenen: 2/6 fotoğraf (IMG_1925, IMG_1926)
+Durum: Region detection peaks=1 buluyor ama yanlış bölge (single-peak fallback → fotoğrafın üst kısmı). 4 OCR denemesi (enhanced, raw, wider, hi-contrast) bu yanlış bölgede boşa harcanıyor. Sonra band fallback'e düşülüyor.
+Sonuç: 4 gereksiz OCR denemesi × ~1.5s = ~6s ek süre. IMG_1925'in 8.5 saniyelik süresinin ~%70'i bu boşa giden denemelerden.
+
+---
+
+## D. En Muhtemel Ana Problem
+
+Region detection, test edilen fotoğraf tipinde (kimlik kartı + dokulu arka plan) sistematik olarak başarısız oluyor ve bu durum hem hız kaybına (gereksiz region OCR denemeleri) hem güvenilirlik kaybına (sabit band pozisyonlarına bağımlılık) neden oluyor. FAIL olan 2 fotoğrafta ise sorun daha derinde: Tesseract belirli kalite eşiğinin altındaki görüntülerde L2 satırını hiç okuyamıyor ve mevcut pipeline'da L2 olmadan sonuç üretmenin hiçbir yolu yok.
+
+Kısaca:
+1. Birincil sorun: OCR motoru (Tesseract) düşük kalite görüntülerde belirli satırları okuyamıyor
+2. İkincil sorun: Region detection dokulu arka planlarda çalışmıyor → her zaman fallback → yavaşlık
+3. Üçüncül sorun: Harf düzeyinde OCR hataları (G→B) yakalanıp düzeltilemiyor
+
+---
+
+## E. Bir Sonraki Analiz Aşaması İçin Eksik Veriler
+
+1. **FAIL fotoğrafların piksel kalitesi:** IMG_1924 ve IMG_1926'nın MRZ bölgesinin gerçekten ne kadar bulanık/bozuk olduğu. Kullanıcı görselleri paylaştı — MRZ satırları insan gözüyle okunabilir düzeyde görünüyor, Tesseract'ın okuması beklenir.
+
+2. **Preprocessed görüntü çıktısı:** Her preprocessing modu sonrası oluşan canvas'ın piksel düzeyinde çıktısı. Şu an sadece OCR text çıktısını görüyoruz, binarization/contrast sonrası MRZ'nin ne kadar net olduğunu bilmiyoruz.
+
+3. **MRZ traineddata durumu:** Özel mrz traineddata yükleniyor mu yoksa eng fallback mı kullanılıyor? Log'da bu bilgi yok. MRZ-optimize model ile standart İngilizce model arasındaki fark büyük olabilir.
+
+4. **Farklı arka plan testi:** Tüm fotoğraflar tahta zemin üzerinde. Beyaz/düz zemin üzerinde çekilmiş fotoğraflarla region detection test edilmemiş.
+
+5. **PSM alternatifleri:** PSM=6 (tek blok) kullanılıyor. PSM=7 (tek satır) veya PSM=13 (raw line) ile band crop'larında daha iyi sonuç alınıp alınmayacağı test edilmemiş.
+
+6. **DPI ve karakter yüksekliği:** Tesseract'a DPI bilgisi verilmiyor. 1600px genişliğe ölçeklenmiş görüntüde MRZ karakterlerinin piksel yüksekliği ne? Tesseract'ın minimum okunabilir karakter yüksekliği (~20px) karşılanıyor mu?
+
+---
+
+## Teknik Altyapı Detayları
+
+### Mevcut Pipeline (Adım Adım)
+
+**1. Rotasyon Sıralaması (OCR-free)**
+- Görüntü 600px'e küçültülüp 0°, 180°, 90°, 270° döndürülür
+- Her rotasyon pixel bazlı skorlanır (projection density %40, row variance %30, horizontal gradient %30)
+- En iyi 2 rotasyon seçilir
+- Portrait guard: dikey fotoğraflarda 90°/270° baskın çıkarsa 0°/180° zorlanır
+
+**2. Region Detection (Bölge Tespiti)**
+- Her satır için koyu piksel yoğunluğu, varyans ve yatay gradient hesaplanır
+- Smoothing (kernel = h × 0.003) sonrası adaptive threshold (median × 1.5, min 0.03) ile peak'ler bulunur
+- Peak yükseklik aralığı: h × 0.01 — h × 0.08
+- Peak'ler max gap h × 0.04 ile 2-3'lü gruplara kümelenir
+- Küme skoru: ortalama yoğunluk (%30), band uyumu (%15), satır sayısı (%10), genişlik tutarlılığı (%25), alt-bias (%20)
+
+**3. Odaklı OCR (Region bulunduysa)**
+Her region için 4 preprocessing denenir:
+- Enhanced: grayscale + contrast(1.6) + unsharp mask(amount=0.6, threshold=4)
+- Raw: işlenmemiş crop
+- Wider: %100 padding ile genişletilmiş region
+- Hi-contrast: grayscale + contrast(2.2) + unsharp mask
+
+**4. Band Fallback (Region bulunamazsa)**
+6 band sırasıyla denenir:
+1. Alt %25 (cy=0.85) + adaptive binarization denemesi
+2. Alt %50 (cy=0.75) + adaptive binarization denemesi
+3. Alt %35 (cy=0.80)
+4. Orta-alt %35 (cy=0.65)
+5. Üst %25 (cy=0.15)
+6. Tam resim
+
+Adaptive binarization: integral image tabanlı lokal eşikleme (radius = max(8px, min_dim × %2), bias=-8)
+
+**5. Assembly (Parçalı Birleştirme)**
+- Her OCR denemesinden potansiyel MRZ satırları toplanır (min uzunluk > 15 karakter)
+- TD1: L1×L2×L3 tüm kombinasyonlar denenir + checksum
+- TD3: L1×L2 tüm kombinasyonlar denenir + checksum
+- L2=0 ise assembly doğrudan null döner (workaround yok)
+
+**6. Satır Düzeltme (fixLine)**
+- Uzun satırlarda (hedef+5'e kadar) kayan pencere ile en iyi hizalama
+- TD1_L2: applyDigitFixes ÖNCE (B→8, O→0, S→5, G→6, I→1, L→1, Z→2, Q→0, U→0, D→0), sonra ^\d{6} kontrolü
+- TD1_L3: rakam içermeyen + en fazla trailing &lt; olan pozisyon tercih edilir, sonra applyNameFixes (0→O, 8→B, 5→S, 6→G, 1→I, 2→Z, 3→B, 4→A, 9→P)
+- TD3_L1: pozisyon 5+'te name fix
+
+**7. Doğrulama**
+- Checksum: [7,3,1] ağırlıklı mod-10
+- Geçerlilik: passChecksum VEYA (dobChecksum VE expiryChecksum)
+- TC Kimlik No: 11 haneli Türk algoritması
+
+### Tesseract Konfigürasyonu
+- Motor: Tesseract.js v5, LSTM SIMD WASM
+- Dil: Önce özel mrz traineddata, yoksa eng fallback
+- PSM: 6 (tek blok metin varsayımı)
+- Whitelist: ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789&lt;
+- preserve_interword_spaces: 0
+- tessedit_do_invert: 0
+- textord_min_linesize: 2.5
+- Görüntü ölçekleme: 1600px max genişlik
+
+### Kısıtlar
+- Tamamen client-side (tarayıcı içi), sunucu yok
+- Mobil cihazlarda çalışmalı (iPhone Safari, Android Chrome)
+- Ek npm paketi yok, CDN üzerinden yüklenebilen kütüphaneler tercih edilir
+- Mevcut Tesseract.js altyapısı korunmalı</div>
+
+<script>
+function copyReport(){
+  var el = document.getElementById('report');
+  var text = el.textContent || el.innerText;
+  navigator.clipboard.writeText(text).then(function(){
+    var btn = document.querySelector('.copy-btn');
+    btn.textContent = '✅ Kopyalandı!';
+    btn.classList.add('done');
+    setTimeout(function(){ btn.textContent = '📋 Tümünü Kopyala'; btn.classList.remove('done'); }, 2000);
+  });
+}
+</script>
+</body>
+</html>
