@@ -727,13 +727,14 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
   // ── Band fallback ──
   ctx.summary.fallbackUsed = true;
   logStep('[Fallback] band search at ' + deg + '°');
+  // Band sırası: alt %50 öne alındı — çoğu fotoğrafta MRZ buraya düşer
   var bands = [
-    { cy: 0.85, hr: 0.25, label: 'alt %25' },
-    { cy: 0.80, hr: 0.35, label: 'alt %35' },
-    { cy: 0.75, hr: 0.50, label: 'alt %50' },
-    { cy: 0.65, hr: 0.35, label: 'orta-alt %35' },
-    { cy: 0.15, hr: 0.25, label: 'üst %25' },
-    { cy: 0.50, hr: 1.00, label: 'tam resim' },
+    { cy: 0.85, hr: 0.25, label: 'alt %25', tryBin: true },
+    { cy: 0.75, hr: 0.50, label: 'alt %50', tryBin: true },
+    { cy: 0.80, hr: 0.35, label: 'alt %35', tryBin: false },
+    { cy: 0.65, hr: 0.35, label: 'orta-alt %35', tryBin: false },
+    { cy: 0.15, hr: 0.25, label: 'üst %25', tryBin: false },
+    { cy: 0.50, hr: 1.00, label: 'tam resim', tryBin: false },
   ];
 
   for (var bi = 0; bi < bands.length; bi++) {
@@ -747,8 +748,8 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
     logStep('[OCR] ' + deg + '° ' + bc.label + ' → ' + (result ? 'SUCCESS' : 'FAIL'));
     if (result) return { result: result, method: 'band-' + bc.label, region: 0, bandIdx: bi };
 
-    // İlk band için adaptive binarization dene (düşük kalite fotoğraflar için)
-    if (bi === 0) {
+    // Adaptive binarization dene (işaretli bandlar için)
+    if (bc.tryBin) {
       if (processingCancelled) return null;
       var bandBin = uploadPreprocess(bandCrop, 'bin');
       ctx.ocrCount++; ctx.summary.totalOCR++;
