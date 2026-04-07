@@ -541,11 +541,11 @@ function locateMRZRegions(canvas) {
     }
   }
 
-  logStep('[REGION] peaks=' + peaks.length + ' thresh=' + peakThreshold.toFixed(3) + ' median=' + median.toFixed(3));
   if (peaks.length < 1) {
-    logStep('[REGION] peaks=0 status=none reason=no_peaks');
+    logStep('[REGION] peaks=0 thresh=' + peakThreshold.toFixed(3) + ' median=' + median.toFixed(3) + ' status=none reason=no_peaks');
     return [];
   }
+  logStep('[REGION] peaks=' + peaks.length + ' thresh=' + peakThreshold.toFixed(3) + ' median=' + median.toFixed(3));
 
   // Single peak: create expanded region around it (MRZ lines likely nearby but below threshold)
   if (peaks.length === 1) {
@@ -558,8 +558,7 @@ function locateMRZRegions(canvas) {
     var spCropStart = Math.max(0, spStart - spPad);
     var spCropEnd = Math.min(h, spEnd + spPad);
     var spPosRatio = sp.center / h;
-    logStep('[REGION] status=single_peak_fallback y=' + spCropStart + '-' + spCropEnd + ' pos=' + (spPosRatio * 100).toFixed(0) + '%');
-    if (spPosRatio < 0.5) logStep('[REGION] status=warning reason=upper_half_peak');
+    logStep('[REGION] status=single_peak_fallback y=' + spCropStart + '-' + spCropEnd + ' pos=' + (spPosRatio * 100).toFixed(0) + '%' + (spPosRatio < 0.5 ? ' warning=upper_half_peak' : ''));
     return [{
       y: spCropStart,
       h: spCropEnd - spCropStart,
@@ -720,7 +719,7 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
       if (processingCancelled) return null;
       var region = regions[rgi];
       ctx.summary.regionsTried++;
-      var regLabel = 'reg#' + (rgi+1);
+      var regLabel = 'region-' + (rgi+1);
       logStep('[OCR] rot=' + deg + ' region=' + regLabel + ' score=' + region.score.toFixed(3));
 
       var cropped = uploadCropRegion(rotated, region.y, region.h);
@@ -767,20 +766,20 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
       if (result) return { result: result, method: 'hi-contrast', region: rgi + 1, bandIdx: -1 };
     }
   } else {
-    logStep('[REGION] deg=' + deg + ' status=none');
+    logStep('[REGION] deg=' + deg + ' regions=0 status=none');
   }
 
   // ── Band fallback ──
   ctx.summary.fallbackUsed = true;
-  logStep('[REGION] deg=' + deg + ' status=fallback');
+  if (regions.length > 0) logStep('[REGION] deg=' + deg + ' status=fallback reason=region_ocr_failed');
   // Band sırası: alt %50 öne alındı — çoğu fotoğrafta MRZ buraya düşer
   var bands = [
-    { cy: 0.85, hr: 0.25, label: 'alt %25', tryBin: true },
-    { cy: 0.75, hr: 0.50, label: 'alt %50', tryBin: true },
-    { cy: 0.80, hr: 0.35, label: 'alt %35', tryBin: false },
-    { cy: 0.65, hr: 0.35, label: 'orta-alt %35', tryBin: false },
-    { cy: 0.15, hr: 0.25, label: 'üst %25', tryBin: false },
-    { cy: 0.50, hr: 1.00, label: 'tam resim', tryBin: false },
+    { cy: 0.85, hr: 0.25, label: 'alt-25', tryBin: true },
+    { cy: 0.75, hr: 0.50, label: 'alt-50', tryBin: true },
+    { cy: 0.80, hr: 0.35, label: 'alt-35', tryBin: false },
+    { cy: 0.65, hr: 0.35, label: 'midlow-35', tryBin: false },
+    { cy: 0.15, hr: 0.25, label: 'top-25', tryBin: false },
+    { cy: 0.50, hr: 1.00, label: 'full', tryBin: false },
   ];
 
   for (var bi = 0; bi < bands.length; bi++) {
@@ -792,7 +791,7 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
     ctx.ocrCount++; ctx.summary.totalOCR++;
     var result = await uploadTryRecognize(bandEnh, acc, ocrWorker, { rotation: deg, method: 'band ' + bc.label + ' enhanced', region: 'band-' + bc.label, preprocess: 'enhanced' });
     logStep('[OCR] rot=' + deg + ' band=' + bc.label + ' method=enhanced result=' + (result ? 'SUCCESS' : 'FAIL'));
-    if (result) return { result: result, method: 'band-' + bc.label, region: 0, bandIdx: bi };
+    if (result) return { result: result, method: 'band-' + bc.label, region: null, bandIdx: bi };
 
     // Adaptive binarization dene (işaretli bandlar için)
     if (bc.tryBin) {
@@ -801,7 +800,7 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
       ctx.ocrCount++; ctx.summary.totalOCR++;
       result = await uploadTryRecognize(bandBin, acc, ocrWorker, { rotation: deg, method: 'band ' + bc.label + ' bin', region: 'band-' + bc.label, preprocess: 'bin' });
       logStep('[OCR] rot=' + deg + ' band=' + bc.label + ' method=bin result=' + (result ? 'SUCCESS' : 'FAIL'));
-      if (result) return { result: result, method: 'band-' + bc.label + '-bin', region: 0, bandIdx: bi };
+      if (result) return { result: result, method: 'band-' + bc.label + '-bin', region: null, bandIdx: bi };
     }
   }
 
@@ -851,9 +850,9 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
 
     // Strategy: try band crops focused on MRZ middle area with different preprocessing and PSM
     var l2Bands = [
-      { cy: 0.87, hr: 0.15, label: 'narrow-alt-15%' },
-      { cy: 0.82, hr: 0.20, label: 'narrow-alt-20%' },
-      { cy: 0.78, hr: 0.15, label: 'narrow-midlow-15%' },
+      { cy: 0.87, hr: 0.15, label: 'narrow-alt-15' },
+      { cy: 0.82, hr: 0.20, label: 'narrow-alt-20' },
+      { cy: 0.78, hr: 0.15, label: 'narrow-midlow-15' },
     ];
     var l2Preprocesses = ['enhanced', 'bin', 'hi'];
     var l2PSMs = ['6', '7'];
