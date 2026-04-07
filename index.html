@@ -400,7 +400,18 @@ input[type="text"] {
 </style>
 </head>
 <body>
-<div class="version-tag" id="version-tag">v2.6.14 · 07 Nis 09:29</div>
+<div class="version-tag" id="version-tag"></div>
+<script>
+// Versiyon ve güncelleme zamanı — auto-bump tarafından güncellenir
+window.APP_VERSION = 'v2.6.13';
+window.APP_BUILD = '2026-04-07T09:29';
+(function(){
+  var d = new Date(window.APP_BUILD);
+  var aylar = ['Oca','Şub','Mar','Nis','May','Haz','Tem','Ağu','Eyl','Eki','Kas','Ara'];
+  var s = d.getDate() + ' ' + aylar[d.getMonth()] + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+  document.getElementById('version-tag').textContent = window.APP_VERSION + ' · ' + s;
+})();
+</script>
 
 <!-- cache status pill -->
 <div id="cache-pill"><div class="pill-dot"></div><span id="pill-txt">Yükleniyor…</span></div>
