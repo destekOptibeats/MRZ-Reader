@@ -676,7 +676,9 @@ async function tryRotation(rotated, deg, ctx) {
   logStep('[Fallback] band search at ' + deg + '°');
   var bands = [
     { cy: 0.85, hr: 0.25, label: 'alt %25' },
+    { cy: 0.80, hr: 0.35, label: 'alt %35' },
     { cy: 0.75, hr: 0.50, label: 'alt %50' },
+    { cy: 0.65, hr: 0.35, label: 'orta-alt %35' },
     { cy: 0.15, hr: 0.25, label: 'üst %25' },
     { cy: 0.50, hr: 1.00, label: 'tam resim' },
   ];
@@ -685,11 +687,21 @@ async function tryRotation(rotated, deg, ctx) {
     if (processingCancelled) return null;
     var bc = bands[bi];
     var bandCrop = bc.hr >= 1.0 ? rotated : uploadCropBand(rotated, bc.cy, bc.hr);
+
+    // Normal contrast
     var bandEnh = uploadPreprocess(bandCrop);
     ctx.ocrCount++; ctx.summary.totalOCR++;
     var result = await uploadTryRecognize(bandEnh, acc);
     logStep('[OCR] ' + deg + '° ' + bc.label + ' → ' + (result ? 'SUCCESS' : 'FAIL'));
     if (result) return { result: result, method: 'band-' + bc.label, region: 0, bandIdx: bi };
+
+    // Hi-contrast variant
+    if (processingCancelled) return null;
+    var bandHi = uploadPreprocess(bandCrop, true);
+    ctx.ocrCount++; ctx.summary.totalOCR++;
+    result = await uploadTryRecognize(bandHi, acc);
+    logStep('[OCR] ' + deg + '° ' + bc.label + ' hi → ' + (result ? 'SUCCESS' : 'FAIL'));
+    if (result) return { result: result, method: 'band-' + bc.label + '-hi', region: 0, bandIdx: bi };
   }
 
   // ── Parçalı satır birleştirme denemesi ──
