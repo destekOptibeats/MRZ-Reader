@@ -131,7 +131,7 @@ function uploadPreprocess(srcCanvas, highContrast) {
 function collectMRZLines(text, acc) {
   if (!text) return;
   var cleaned = clean(text);
-  var lines = cleaned.split(/\n+/).map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 20; });
+  var lines = cleaned.split(/\n+/).map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 15; });
 
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i];
@@ -701,7 +701,11 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
   // ── Parçalı satır birleştirme denemesi ──
   var accTotal = acc.td1_l1.length + acc.td1_l2.length + acc.td1_l3.length + acc.td3_l1.length + acc.td3_l2.length;
   if (accTotal >= 2) {
-    logStep('[Assembly] ' + deg + '° biriktirilen: L1=' + acc.td1_l1.length + ' L2=' + acc.td1_l2.length + ' L3=' + acc.td1_l3.length);
+    logStep('[Assembly] ' + deg + '° biriktirilen: L1=' + acc.td1_l1.length + ' L2=' + acc.td1_l2.length + ' L3=' + acc.td1_l3.length +
+      (acc.td3_l1.length || acc.td3_l2.length ? ' | TD3 L1=' + acc.td3_l1.length + ' L2=' + acc.td3_l2.length : ''));
+    if (acc.td1_l2.length === 0 && acc.td1_l1.length > 0) {
+      logStep('[Assembly] L2 eksik — L1 örnekleri: ' + acc.td1_l1.slice(0,2).join(' | '));
+    }
     var assembled = tryAssemblyFromAcc(acc);
     if (assembled) {
       logStep('[Assembly] ' + deg + '° birleştirme BAŞARILI!');

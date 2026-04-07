@@ -47,8 +47,15 @@
         const c = s.substring(skip, skip + targetLen);
         if (kind === 'TD1_L1' && /^[IAC]/.test(c)) return applyDigitFixes(c, kind);
         if (kind === 'TD3_L1' && c[0] === 'P') return c;
-        if (kind === 'TD1_L2' && /^\d{6}/.test(c)) return applyDigitFixes(c, kind);
-        if (kind === 'TD3_L2' && /^\d/.test(c)) return applyDigitFixes(c, kind);
+        // L2: digit fix ÖNCE uygula, sonra validate (OCR S→5, O→0 gibi düzeltmeler)
+        if (kind === 'TD1_L2') {
+          const fixed = applyDigitFixes(c, kind);
+          if (/^\d{6}/.test(fixed)) return fixed;
+        }
+        if (kind === 'TD3_L2') {
+          const fixed = applyDigitFixes(c, kind);
+          if (/^\d/.test(fixed)) return fixed;
+        }
       }
       return applyDigitFixes(s.substring(0, targetLen), kind);
     }
