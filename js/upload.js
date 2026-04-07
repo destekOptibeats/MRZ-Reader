@@ -863,6 +863,7 @@ async function batchProcessImage(img, ocrWorker) {
       ctx.summary.success = true;
       ctx.summary.winner = { rotation: 0, region: hit.region, method: hit.method };
       ctx.summary.durationMs = Date.now() - ctx.startTime;
+      window._lastSummary = ctx.summary;
       logStep('[Success] MRZ found in ' + ctx.summary.totalOCR + ' OCR attempts (' + ctx.summary.durationMs + 'ms)');
       return { result: hit.result, method: hit.method, summary: ctx.summary, log: batchLog };
     }
@@ -881,6 +882,7 @@ async function batchProcessImage(img, ocrWorker) {
         ctx.summary.success = true;
         ctx.summary.winner = { rotation: deg, region: hit.region, method: hit.method };
         ctx.summary.durationMs = Date.now() - ctx.startTime;
+        window._lastSummary = ctx.summary;
         logStep('[Success] MRZ found in ' + ctx.summary.totalOCR + ' OCR attempts (' + ctx.summary.durationMs + 'ms)');
         return { result: hit.result, method: hit.method, summary: ctx.summary, log: batchLog };
       }
@@ -888,6 +890,7 @@ async function batchProcessImage(img, ocrWorker) {
 
     // FAIL
     ctx.summary.durationMs = Date.now() - ctx.startTime;
+    window._lastSummary = ctx.summary;
     logStep('[FAIL] no MRZ found after ' + ctx.ocrCount + ' OCR attempts');
     return { result: null, method: null, summary: ctx.summary, log: batchLog };
 

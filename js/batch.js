@@ -37,6 +37,9 @@ async function startBulkSerialFromPhotos(files) {
   status.textContent = '✅ ' + files.length + ' fotoğraf işlendi';
   document.getElementById('file-in').value = '';
   document.getElementById('bulk-progress').style.display = 'none';
+
+  // Raporu göster
+  finishSerialScan();
 }
 
 // ── BATCH HELPERS ──────────────────────────────────────────────────────
