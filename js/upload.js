@@ -688,20 +688,11 @@ async function tryRotation(rotated, deg, ctx) {
     var bc = bands[bi];
     var bandCrop = bc.hr >= 1.0 ? rotated : uploadCropBand(rotated, bc.cy, bc.hr);
 
-    // Normal contrast
     var bandEnh = uploadPreprocess(bandCrop);
     ctx.ocrCount++; ctx.summary.totalOCR++;
     var result = await uploadTryRecognize(bandEnh, acc);
     logStep('[OCR] ' + deg + '° ' + bc.label + ' → ' + (result ? 'SUCCESS' : 'FAIL'));
     if (result) return { result: result, method: 'band-' + bc.label, region: 0, bandIdx: bi };
-
-    // Hi-contrast variant
-    if (processingCancelled) return null;
-    var bandHi = uploadPreprocess(bandCrop, true);
-    ctx.ocrCount++; ctx.summary.totalOCR++;
-    result = await uploadTryRecognize(bandHi, acc);
-    logStep('[OCR] ' + deg + '° ' + bc.label + ' hi → ' + (result ? 'SUCCESS' : 'FAIL'));
-    if (result) return { result: result, method: 'band-' + bc.label + '-hi', region: 0, bandIdx: bi };
   }
 
   // ── Parçalı satır birleştirme denemesi ──
