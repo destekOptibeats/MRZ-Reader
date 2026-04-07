@@ -710,6 +710,12 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
       }
     }
 
+    // EXPERIMENT: Region budget limiter — peaks<2 → only 1 enhanced attempt per region
+    var regionBudgetLimited = (regions.length < 2);
+    if (regionBudgetLimited) {
+      logStep('[EXP:RegionBudget] peaks<2 → limiting to 1 attempt per region, then band fallback');
+    }
+
     for (var rgi = 0; rgi < tryCount; rgi++) {
       if (processingCancelled) return null;
       var region = regions[rgi];
@@ -725,6 +731,12 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
       var result = await uploadTryRecognize(enhanced, acc, ocrWorker, { rotation: deg, method: regLabel + ' enhanced', region: regLabel, preprocess: 'enhanced' });
       logStep('[OCR] ' + deg + '° ' + regLabel + ' enhanced → ' + (result ? 'SUCCESS' : 'FAIL'));
       if (result) return { result: result, method: 'enhanced', region: rgi + 1, bandIdx: -1 };
+
+      // Budget limited: skip remaining region attempts, go to band fallback
+      if (regionBudgetLimited) {
+        logStep('[EXP:RegionBudget] skipping raw/wider/hi-contrast for ' + regLabel);
+        continue;
+      }
 
       // Raw
       if (processingCancelled) return null;
@@ -822,6 +834,116 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
     logStep('[DIAGNOSE] no_candidates');
   }
 
+  // ── EXPERIMENT: L2 Recovery ──
+  // When L1>0 && L3>0 && L2==0 → try targeted L2 recovery
+  // Does NOT affect main pipeline result — only logs and adds to debug export
+  if (acc.td1_l1.length > 0 && acc.td1_l3.length > 0 && acc.td1_l2.length === 0) {
+    ctx.summary.l2RecoveryAttempted = true;
+    ctx.summary.l2RecoverySuccess = false;
+    logStep('[EXP:L2Recovery] triggered — L1=' + acc.td1_l1.length + ' L3=' + acc.td1_l3.length + ' L2=0');
+
+    var l2RecoveryResults = [];
+    var wr = ocrWorker || worker;
+
+    // Strategy: try band crops focused on MRZ middle area with different preprocessing and PSM
+    var l2Bands = [
+      { cy: 0.87, hr: 0.15, label: 'narrow-alt-15%' },
+      { cy: 0.82, hr: 0.20, label: 'narrow-alt-20%' },
+      { cy: 0.78, hr: 0.15, label: 'narrow-midlow-15%' },
+    ];
+    var l2Preprocesses = ['enhanced', 'bin', 'hi'];
+    var l2PSMs = ['6', '7'];
+
+    for (var li = 0; li < l2Bands.length && !processingCancelled; li++) {
+      var lb = l2Bands[li];
+      var l2Crop = uploadCropBand(rotated, lb.cy, lb.hr);
+
+      for (var pi = 0; pi < l2Preprocesses.length && !processingCancelled; pi++) {
+        var ppType = l2Preprocesses[pi];
+        var ppCanvas;
+        if (ppType === 'bin') ppCanvas = uploadPreprocess(l2Crop, 'bin');
+        else if (ppType === 'hi') ppCanvas = uploadPreprocess(l2Crop, 'hi');
+        else ppCanvas = uploadPreprocess(l2Crop);
+
+        for (var si = 0; si < l2PSMs.length && !processingCancelled; si++) {
+          var psm = l2PSMs[si];
+          try {
+            // Temporarily change PSM
+            await wr.setParameters({ tessedit_pageseg_mode: psm });
+            var ocrResult = await wr.recognize(ppCanvas);
+            // Restore PSM 6
+            await wr.setParameters({ tessedit_pageseg_mode: '6' });
+
+            var rawText = ocrResult.data.text;
+            var conf = typeof ocrResult.data.confidence === 'number' ? Math.round(ocrResult.data.confidence) : null;
+            var cleanedText = clean(rawText);
+            var foundL2 = false;
+
+            // Check if any line matches L2 pattern
+            var l2lines = cleanedText.split(/\n+/).map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 15; });
+            for (var lx = 0; lx < l2lines.length; lx++) {
+              var candidateL2 = fixLine(l2lines[lx], {targetLen: 30, kind: 'TD1_L2'});
+              if (candidateL2 && isL2_TD1(candidateL2)) {
+                foundL2 = true;
+                // Try assembly with recovered L2
+                var recoveryAcc = {
+                  td1_l1: acc.td1_l1.slice(), td1_l2: [candidateL2], td1_l3: acc.td1_l3.slice(),
+                  td3_l1: [], td3_l2: []
+                };
+                var recoveryResult = tryAssemblyFromAcc(recoveryAcc);
+                var entry = {
+                  band: lb.label, preprocess: ppType, psm: psm,
+                  ocrText: rawText.replace(/\n+/g, ' ').substring(0, 200),
+                  confidence: conf, l2Found: true, l2Candidate: candidateL2,
+                  assemblySuccess: !!recoveryResult
+                };
+                l2RecoveryResults.push(entry);
+                logStep('[EXP:L2Recovery] ' + lb.label + ' ' + ppType + ' PSM' + psm + ' → L2 FOUND: "' + candidateL2 + '" assembly=' + (recoveryResult ? 'OK' : 'FAIL'));
+                if (recoveryResult) {
+                  ctx.summary.l2RecoverySuccess = true;
+                  logStep('[EXP:L2Recovery] ASSEMBLY SUCCESS — could recover MRZ!');
+                }
+                break;
+              }
+            }
+
+            if (!foundL2) {
+              var bestLine = l2lines.reduce(function(a, b) { return a.length > b.length ? a : b; }, '');
+              l2RecoveryResults.push({
+                band: lb.label, preprocess: ppType, psm: psm,
+                ocrText: bestLine.substring(0, 100),
+                confidence: conf, l2Found: false, l2Candidate: null,
+                assemblySuccess: false
+              });
+              logStep('[EXP:L2Recovery] ' + lb.label + ' ' + ppType + ' PSM' + psm + ' → no L2 (len=' + bestLine.length + ')');
+            }
+          } catch(e) {
+            // Restore PSM 6 on error
+            try { await wr.setParameters({ tessedit_pageseg_mode: '6' }); } catch(e2) {}
+            l2RecoveryResults.push({
+              band: lb.label, preprocess: ppType, psm: psm,
+              ocrText: '', confidence: null, l2Found: false,
+              l2Candidate: null, assemblySuccess: false, error: e.message
+            });
+          }
+        }
+      }
+    }
+
+    // Store in debug export
+    if (window._debugAttempts) {
+      window._debugAttempts.push({
+        rotation: deg, method: 'L2-recovery-experiment', region: 'experiment',
+        preprocess: 'mixed', ocrText: '', ocrLen: 0, mrzFound: false,
+        checksumOk: false, success: false, confidence: null,
+        l2Recovery: l2RecoveryResults
+      });
+    }
+
+    logStep('[EXP:L2Recovery] completed — ' + l2RecoveryResults.length + ' attempts, L2 found in ' +
+      l2RecoveryResults.filter(function(r) { return r.l2Found; }).length + ', assembly success: ' + ctx.summary.l2RecoverySuccess);
+  }
+
   return null;
 }
 
@@ -888,7 +1010,8 @@ async function processImage(img) {
     summary: {
       mode: 'single-upload', success: false, totalOCR: 0, selectedRotations: [],
       regionsFound: 0, regionsTried: 0, fallbackUsed: false, winner: null, durationMs: 0,
-      failureReason: null, assembly: null, experiment: null, attemptCount: 0
+      failureReason: null, assembly: null, experiment: null, attemptCount: 0,
+      l2RecoveryAttempted: false, l2RecoverySuccess: false
     }
   };
 
@@ -955,7 +1078,8 @@ async function batchProcessImage(img, ocrWorker) {
     summary: {
       mode: 'batch', success: false, totalOCR: 0, selectedRotations: [],
       regionsFound: 0, regionsTried: 0, fallbackUsed: false, winner: null, durationMs: 0,
-      failureReason: null, assembly: null, experiment: null, attemptCount: 0
+      failureReason: null, assembly: null, experiment: null, attemptCount: 0,
+      l2RecoveryAttempted: false, l2RecoverySuccess: false
     }
   };
 

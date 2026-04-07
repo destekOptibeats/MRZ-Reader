@@ -1150,6 +1150,11 @@ function renderPipelineSummary(panelId, bodyId, actionsId) {
     rows.push('<div class="row"><div class="rl">Assembly</div><div class="rv">L1=' + a.l1 + ' L2=' + a.l2 + ' L3=' + a.l3 +
       (a.td3_l1 || a.td3_l2 ? ' | TD3 L1=' + a.td3_l1 + ' L2=' + a.td3_l2 : '') + '</div></div>');
   }
+  if (s.l2RecoveryAttempted) {
+    rows.push('<div class="row"><div class="rl">L2 Recovery</div><div class="rv">' +
+      (s.l2RecoverySuccess ? '<span class="ok">L2 bulundu!</span>' : '<span class="fail">L2 bulunamadı</span>') +
+      '</div></div>');
+  }
   body.innerHTML = rows.join('');
   panel.style.display = 'block';
   if (actions) actions.style.display = 'block';
