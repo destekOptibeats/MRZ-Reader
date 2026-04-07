@@ -268,7 +268,7 @@ async function uploadTryRecognize(canvas, acc, ocrWorker, meta) {
         if (window._debugAttempts) window._debugAttempts.push(attempt);
         return result;
       }
-      logStep('[OCR-raw] parsed but checksum fail: ' + JSON.stringify(v.checksums));
+      logStep('[OCR] checksum_fail: ' + JSON.stringify(v.checksums));
     }
   } catch(e) { /* devam */ }
   if (window._debugAttempts) window._debugAttempts.push(attempt);
@@ -406,7 +406,7 @@ function rankRotations(img) {
     var thumb = uploadMakeCanvas(img, deg, C.ROTATION_THUMB_SIZE);
     var score = scoreRotation(thumb);
     scored.push({ deg: deg, score: score });
-    logStep('[Rot] ' + deg + '° → ' + score.toFixed(4));
+    logStep('[ROT] deg=' + deg + ' score=' + score.toFixed(4));
   }
 
   scored.sort(function(a, b) { return b.score - a.score; });
@@ -419,7 +419,7 @@ function rankRotations(img) {
   var isPortrait = imgH > imgW;
 
   if (!isPortrait) {
-    logStep('[Rot] landscape image — portrait guard atlandı');
+    logStep('[ROT] landscape — portrait guard skipped');
   }
 
   var primaryInTop = 0;
@@ -438,10 +438,10 @@ function rankRotations(img) {
     } else {
       top = [s0 || s180];
     }
-    logStep('[Rot] portrait guard: forced 0° + 180° (both 90/270 replaced)');
+    logStep('[ROT] portrait guard: forced 0+180 (90/270 replaced)');
   }
 
-  logStep('[Rot] top: ' + top.map(function(r) { return r.deg + '°(' + r.score.toFixed(3) + ')'; }).join(', '));
+  logStep('[ROT] selected=[' + top.map(function(r) { return r.deg; }).join(',') + '] scores=[' + top.map(function(r) { return r.score.toFixed(3); }).join(',') + ']');
   return top;
 }
 
@@ -541,9 +541,9 @@ function locateMRZRegions(canvas) {
     }
   }
 
-  logStep('[Region] peaks=' + peaks.length + ' thresh=' + peakThreshold.toFixed(3) + ' median=' + median.toFixed(3));
+  logStep('[REGION] peaks=' + peaks.length + ' thresh=' + peakThreshold.toFixed(3) + ' median=' + median.toFixed(3));
   if (peaks.length < 1) {
-    logStep('[Region] no peaks — region detection failed');
+    logStep('[REGION] no peaks — region detection failed');
     return [];
   }
 
@@ -558,8 +558,8 @@ function locateMRZRegions(canvas) {
     var spCropStart = Math.max(0, spStart - spPad);
     var spCropEnd = Math.min(h, spEnd + spPad);
     var spPosRatio = sp.center / h;
-    logStep('[Region] single-peak fallback: y=' + spCropStart + '-' + spCropEnd + ' (pos=' + (spPosRatio * 100).toFixed(0) + '%)');
-    if (spPosRatio < 0.5) logStep('[Region] WARNING: peak in upper half — wrong region suspected');
+    logStep('[REGION] single-peak fallback: y=' + spCropStart + '-' + spCropEnd + ' (pos=' + (spPosRatio * 100).toFixed(0) + '%)');
+    if (spPosRatio < 0.5) logStep('[REGION] WARNING: peak in upper half — wrong region suspected');
     return [{
       y: spCropStart,
       h: spCropEnd - spCropStart,
@@ -598,7 +598,7 @@ function locateMRZRegions(canvas) {
   }
 
   if (clusters.length === 0) {
-    logStep('[Region] no valid clusters');
+    logStep('[REGION] no valid clusters');
     return [];
   }
 
@@ -620,7 +620,7 @@ function locateMRZRegions(canvas) {
       rawStart: cl.start,
       rawEnd: cl.end
     });
-    logStep('[Region] #' + (ci+1) + ': y=' + cropStart + '-' + cropEnd + ' lines=' + cl.lines + ' score=' + cl.score.toFixed(4));
+    logStep('[REGION] #' + (ci+1) + ': y=' + cropStart + '-' + cropEnd + ' lines=' + cl.lines + ' score=' + cl.score.toFixed(4));
   }
   return results;
 }
@@ -706,7 +706,7 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
       var ratio = regions[1].score / regions[0].score;
       if (ratio >= C.REGION2_MIN_RATIO) {
         tryCount = 2;
-        logStep('[Region] score-close → trying #2 (ratio=' + ratio.toFixed(3) + ')');
+        logStep('[REGION] score-close → trying #2 (ratio=' + ratio.toFixed(3) + ')');
       }
     }
 
@@ -767,12 +767,12 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
       if (result) return { result: result, method: 'hi-contrast', region: rgi + 1, bandIdx: -1 };
     }
   } else {
-    logStep('[Region] no regions at ' + deg + '°');
+    logStep('[REGION] deg=' + deg + ' status=none');
   }
 
   // ── Band fallback ──
   ctx.summary.fallbackUsed = true;
-  logStep('[Fallback] band search at ' + deg + '°');
+  logStep('[REGION] deg=' + deg + ' status=fallback');
   // Band sırası: alt %50 öne alındı — çoğu fotoğrafta MRZ buraya düşer
   var bands = [
     { cy: 0.85, hr: 0.25, label: 'alt %25', tryBin: true },
@@ -820,14 +820,14 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
   if (accTotal >= 2) {
     if (acc.td1_l2.length === 0 && acc.td1_l1.length > 0) {
       logStep('[DIAGNOSE] l2_missing');
-      logStep('[Assembly] L2 eksik — L1 örnekleri: ' + acc.td1_l1.slice(0,2).join(' | '));
+      logStep('[ASSEMBLY] L2 eksik — L1 örnekleri: ' + acc.td1_l1.slice(0,2).join(' | '));
     }
     if (acc.td1_l1.length === 0 && acc.td1_l3.length > 0) {
       logStep('[DIAGNOSE] l1_missing');
     }
     var assembled = tryAssemblyFromAcc(acc);
     if (assembled) {
-      logStep('[Assembly] ' + deg + '° birleştirme BAŞARILI!');
+      logStep('[ASSEMBLY] ' + deg + '° birleştirme BAŞARILI!');
       return { result: assembled, method: 'assembly', region: 0, bandIdx: -1 };
     }
   } else if (accTotal === 0) {
@@ -957,8 +957,8 @@ function computeFailureReason(ctx) {
   return 'checksum_fail';
 }
 
-// Enrich summary with assembly, experiment, failureReason
-function enrichSummary(ctx, isSuccess) {
+// Enrich summary with assembly, experiment, failureReason + RunSummary fields
+function enrichSummary(ctx, isSuccess, result) {
   if (ctx._lastAssembly) {
     ctx.summary.assembly = ctx._lastAssembly;
   }
@@ -970,6 +970,9 @@ function enrichSummary(ctx, isSuccess) {
   } else {
     ctx.summary.failureReason = null;
   }
+  // Unified RunSummary enrichment
+  if (typeof setDocType === 'function') setDocType(ctx.summary, result || null);
+  if (typeof enrichRunSummary === 'function') enrichRunSummary(ctx.summary);
 }
 
 // Handle successful OCR result
@@ -983,10 +986,11 @@ function handleOCRSuccess(hit, deg, ctx) {
   ctx.summary.success = true;
   ctx.summary.winner = { rotation: deg, region: hit.region, method: hit.method };
   ctx.summary.durationMs = Date.now() - ctx.startTime;
-  enrichSummary(ctx, true);
+  enrichSummary(ctx, true, hit.result);
   window._lastSummary = ctx.summary;
   window._lastDebugExport = { summary: ctx.summary, attempts: (window._debugAttempts || []).slice() };
-  logStep('[Success] MRZ found in ' + ctx.summary.totalOCR + ' OCR attempts (' + ctx.summary.durationMs + 'ms)');
+  logStep('[SUCCESS] attempts=' + ctx.summary.totalOCR + ' duration=' + ctx.summary.durationMs + 'ms');
+  logStep('[SUMMARY] runId=' + ctx.summary.runId + ' success=true mode=' + ctx.summary.mode);
   console.log('[MRZ_SUMMARY]', JSON.stringify(ctx.summary));
   document.getElementById('proc-prog').style.width = '100%';
   document.getElementById('proc-cancel-btn').style.display = 'none';
@@ -1017,7 +1021,7 @@ async function processImage(img) {
 
   window._debugAttempts = [];
   clearLiveLog();
-  logStep('[Start] processing image ' + img.naturalWidth + '×' + img.naturalHeight);
+  logStep('[START] mode=single-upload size=' + img.naturalWidth + 'x' + img.naturalHeight);
 
   // ── 1. Try 0° first (most photos are upright) ──────────────────────
   procMsg.textContent = '0° deneniyor…';
@@ -1057,9 +1061,10 @@ async function processImage(img) {
 
   // ── FAIL ───────────────────────────────────────────────────────────
   if (metrics) metrics.upload.attempts = ctx.ocrCount;
-  logStep('[FAIL] no MRZ found after ' + ctx.ocrCount + ' OCR attempts');
   ctx.summary.durationMs = Date.now() - ctx.startTime;
-  enrichSummary(ctx, false);
+  enrichSummary(ctx, false, null);
+  logStep('[FAIL] attempts=' + ctx.summary.totalOCR + ' duration=' + ctx.summary.durationMs + 'ms reason=' + (ctx.summary.failureReason || 'unknown'));
+  logStep('[SUMMARY] runId=' + ctx.summary.runId + ' success=false mode=' + ctx.summary.mode);
   window._lastSummary = ctx.summary;
   window._lastDebugExport = { summary: ctx.summary, attempts: (window._debugAttempts || []).slice() };
   console.log('[MRZ_SUMMARY]', JSON.stringify(ctx.summary));
@@ -1090,7 +1095,7 @@ async function batchProcessImage(img, ocrWorker) {
   window._batchLogFn = function(msg) { batchLog.push(msg); };
 
   try {
-    logStep('[Start] batch processing ' + (img.naturalWidth || img.width) + '×' + (img.naturalHeight || img.height));
+    logStep('[START] mode=batch size=' + (img.naturalWidth || img.width) + 'x' + (img.naturalHeight || img.height));
 
     // 1. Try 0° first
     var rotated0 = uploadMakeCanvas(img, 0);
@@ -1100,10 +1105,10 @@ async function batchProcessImage(img, ocrWorker) {
       ctx.summary.success = true;
       ctx.summary.winner = { rotation: 0, region: hit.region, method: hit.method };
       ctx.summary.durationMs = Date.now() - ctx.startTime;
-      enrichSummary(ctx, true);
+      enrichSummary(ctx, true, hit.result);
       window._lastSummary = ctx.summary;
       window._lastDebugExport = { summary: ctx.summary, attempts: (window._debugAttempts || []).slice() };
-      logStep('[Success] MRZ found in ' + ctx.summary.totalOCR + ' OCR attempts (' + ctx.summary.durationMs + 'ms)');
+      logStep('[SUCCESS] attempts=' + ctx.summary.totalOCR + ' duration=' + ctx.summary.durationMs + 'ms');
       return { result: hit.result, method: hit.method, summary: ctx.summary, log: batchLog };
     }
 
@@ -1121,20 +1126,20 @@ async function batchProcessImage(img, ocrWorker) {
         ctx.summary.success = true;
         ctx.summary.winner = { rotation: deg, region: hit.region, method: hit.method };
         ctx.summary.durationMs = Date.now() - ctx.startTime;
-        enrichSummary(ctx, true);
+        enrichSummary(ctx, true, hit.result);
         window._lastSummary = ctx.summary;
         window._lastDebugExport = { summary: ctx.summary, attempts: (window._debugAttempts || []).slice() };
-        logStep('[Success] MRZ found in ' + ctx.summary.totalOCR + ' OCR attempts (' + ctx.summary.durationMs + 'ms)');
+        logStep('[SUCCESS] attempts=' + ctx.summary.totalOCR + ' duration=' + ctx.summary.durationMs + 'ms');
         return { result: hit.result, method: hit.method, summary: ctx.summary, log: batchLog };
       }
     }
 
     // FAIL
     ctx.summary.durationMs = Date.now() - ctx.startTime;
-    enrichSummary(ctx, false);
+    enrichSummary(ctx, false, null);
     window._lastSummary = ctx.summary;
     window._lastDebugExport = { summary: ctx.summary, attempts: (window._debugAttempts || []).slice() };
-    logStep('[FAIL] no MRZ found after ' + ctx.ocrCount + ' OCR attempts');
+    logStep('[FAIL] attempts=' + ctx.summary.totalOCR + ' duration=' + ctx.summary.durationMs + 'ms reason=' + (ctx.summary.failureReason || 'unknown'));
     return { result: null, method: null, summary: ctx.summary, log: batchLog };
 
   } finally {

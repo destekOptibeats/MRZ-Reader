@@ -479,9 +479,10 @@ function renderBatchTable(rows, summaryText) {
     }).join('') +
     '</tbody></table>' +
     '<div class="batch-summary">' + summaryText + '</div>' +
-    '<div style="text-align:center;margin-top:10px">' +
-    '<button class="btn ghost btn-sm" onclick="copyToClipboard(formatAllResultsForCopy(batchReportData,\'' + summaryText.replace(/'/g,'') + '\'))">📋 Tüm Sonuçları Kopyala</button> ' +
-    '<button class="btn ghost btn-sm" onclick="copyAllBatchLogs()">📋 Tüm Logları Kopyala</button>' +
+    '<div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:10px">' +
+    '<button class="btn green btn-sm" style="font-weight:700" onclick="copyBatchUnifiedReport()">Unified Copy</button>' +
+    '<button class="btn ghost btn-sm" onclick="copyToClipboard(formatAllResultsForCopy(batchReportData,\'' + summaryText.replace(/'/g,'') + '\'))">Tablo</button>' +
+    '<button class="btn ghost btn-sm" onclick="copyAllBatchLogs()">Loglar</button>' +
     '</div>';
 }
 
@@ -626,4 +627,39 @@ function copyAllBatchLogs() {
     return header + '\n' + log;
   }).join('\n\n');
   copyToClipboard(text);
+}
+
+function copyBatchUnifiedReport() {
+  if (!window.batchReportData) return;
+  // Build summaries from batch rows (each row has a summary via batchProcessImage)
+  var rows = window.batchReportData;
+  var summaries = [];
+  for (var i = 0; i < rows.length; i++) {
+    summaries.push({
+      success: rows[i].ok, totalOCR: rows[i].ocrAttempts || 0,
+      durationMs: rows[i].durationMs || 0, fallbackUsed: true,
+      winner: rows[i].ok ? { method: rows[i].selectedBand } : null,
+      failureReason: rows[i].ok ? null : 'pipeline_fail',
+      mode: 'batch', name: rows[i].name
+    });
+  }
+  var agg = typeof generateAggregate === 'function' ? generateAggregate(summaries) : {};
+  var sections = ['=== MRZ BATCH UNIFIED REPORT ===', ''];
+  sections.push('## AGGREGATE');
+  sections.push(JSON.stringify(agg, null, 2));
+  sections.push('');
+  sections.push('## RESULTS');
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    sections.push('--- ' + (i+1) + '. ' + r.name + ' (' + (r.ok ? 'SUCCESS' : 'FAIL') + ') ---');
+    if (r.parsedFields) sections.push(JSON.stringify(r.parsedFields));
+    sections.push('OCR=' + (r.ocrAttempts || 0) + ' method=' + (r.selectedBand || '—') + ' duration=' + (r.durationMs || 0) + 'ms');
+  }
+  sections.push('');
+  sections.push('## LOGS');
+  for (var i = 0; i < rows.length; i++) {
+    sections.push('=== ' + (i+1) + '. ' + rows[i].name + ' ===');
+    sections.push((rows[i].batchLog || []).join('\n'));
+  }
+  copyToClipboard(sections.join('\n'));
 }

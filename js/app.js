@@ -485,9 +485,10 @@ function showSerialReport() {
 
   // ── Export buttons ──
   html += '<div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:10px">' +
-    '<button class="btn ghost btn-sm" onclick="copySerialJSON()">{ } JSON</button>' +
-    '<button class="btn ghost btn-sm" onclick="copySerialAISummary()">AI Summary</button>' +
-    '<button class="btn ghost btn-sm" onclick="copyToClipboard(formatAllResultsForCopy(serialReportData))">📋 Tablo Kopyala</button>' +
+    '<button class="btn green btn-sm" style="font-weight:700" onclick="copySerialUnifiedReport()">Unified Copy</button>' +
+    '<button class="btn ghost btn-sm" onclick="copySerialJSON()">JSON</button>' +
+    '<button class="btn ghost btn-sm" onclick="copySerialAISummary()">AI Prompt</button>' +
+    '<button class="btn ghost btn-sm" onclick="copyToClipboard(formatAllResultsForCopy(serialReportData))">Tablo</button>' +
     '<button class="btn ghost btn-sm" onclick="addSerialToAnalysis()">+ Analiz</button>' +
     '</div>';
 
@@ -497,30 +498,27 @@ function showSerialReport() {
 }
 
 function copySerialJSON() {
-  copyToClipboard(JSON.stringify(window._serialSummaries || [], null, 2));
+  var data = {
+    summaries: window._serialSummaries || [],
+    aggregate: generateAggregate(window._serialSummaries || [])
+  };
+  copyToClipboard(JSON.stringify(data, null, 2));
 }
 
 function copySerialAISummary() {
   var s = window._serialSummaries || [];
-  var total = s.length;
-  var success = s.filter(function(x) { return x.success !== false; }).length;
-  var rate = total > 0 ? Math.round(success / total * 100) : 0;
-  var ocrSum = 0, durSum = 0, fbCount = 0;
-  for (var i = 0; i < s.length; i++) {
-    ocrSum += (s[i].totalOCR || 0);
-    durSum += (s[i].durationMs || 0);
-    if (s[i].fallbackUsed) fbCount++;
-  }
-  var avgOcr = total > 0 ? (ocrSum / total).toFixed(1) : '0';
-  var avgDur = total > 0 ? Math.round(durSum / total) : 0;
+  var agg = generateAggregate(s);
 
   var lines = [
     'MRZ Serial Analysis',
-    'Total: ' + total,
-    'Success: ' + success + ' (' + rate + '%)',
-    'Avg OCR: ' + avgOcr,
-    'Avg Duration: ' + avgDur + 'ms',
-    'Fallback: ' + fbCount + '/' + total,
+    '',
+    'Total: ' + agg.totalRuns,
+    'Success: ' + Math.round(agg.successRate * 100) + '%',
+    'Avg OCR: ' + agg.avgOCR,
+    'Avg Duration: ' + agg.avgDurationMs + 'ms',
+    'Fallback: ' + Math.round(agg.fallbackRate * 100) + '%',
+    'Methods: ' + JSON.stringify(agg.methodDistribution),
+    'Failures: ' + JSON.stringify(agg.failureDistribution),
     ''
   ];
   for (var i = 0; i < s.length; i++) {
@@ -532,9 +530,28 @@ function copySerialAISummary() {
       ' ' + (w.method || '—') +
       ' ' + (x.durationMs || 0) + 'ms' +
       (x.name ? ' ' + x.name : '') +
-      (x.isDuplicate ? ' [dup]' : ''));
+      (x.isDuplicate ? ' [dup]' : '') +
+      (x.failureReason ? ' [' + x.failureReason + ']' : ''));
   }
   copyToClipboard(lines.join('\n'));
+}
+
+function copySerialUnifiedReport() {
+  var s = window._serialSummaries || [];
+  var agg = generateAggregate(s);
+  var sections = ['=== MRZ SERIAL UNIFIED REPORT ===', ''];
+  sections.push('## AGGREGATE');
+  sections.push(JSON.stringify(agg, null, 2));
+  sections.push('');
+  sections.push('## AI_PROMPT');
+  // Use serial AI summary as prompt
+  var promptLines = ['MRZ Serial Analysis', '', 'Total: ' + agg.totalRuns, 'Success: ' + Math.round(agg.successRate * 100) + '%',
+    'Avg OCR: ' + agg.avgOCR, 'Avg Duration: ' + agg.avgDurationMs + 'ms', 'Fallback: ' + Math.round(agg.fallbackRate * 100) + '%'];
+  sections.push(promptLines.join('\n'));
+  sections.push('');
+  sections.push('## SUMMARIES');
+  sections.push(JSON.stringify(s, null, 2));
+  copyToClipboard(sections.join('\n'));
 }
 
 function leaveSerialReport() {
@@ -1092,6 +1109,125 @@ function showError(msg) {
   goScreen('s-error');
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// UNIFIED LOG/REPORT CONTRACT
+// All flows produce: RunSummary, AI Prompt, Live Log, Debug Export
+// ═══════════════════════════════════════════════════════════════════════
+
+var _runIdCounter = 0;
+function generateRunId() {
+  _runIdCounter++;
+  return 'run-' + Date.now().toString(36) + '-' + _runIdCounter;
+}
+
+// Confidence level from summary
+function computeConfidence(s) {
+  if (!s.success) return 'FAIL';
+  if (s.totalOCR <= 2) return 'HIGH';
+  if (s.totalOCR <= 5) return 'MEDIUM';
+  return 'LOW';
+}
+
+// Build a complete RunSummary from ctx.summary (enriches in-place)
+function enrichRunSummary(s) {
+  if (!s.runId) s.runId = generateRunId();
+  if (!s.sourceType) s.sourceType = (s.mode || '').indexOf('camera') >= 0 ? 'camera' : 'upload';
+  if (!s.documentType) s.documentType = 'unknown';
+  if (!s.confidenceLevel) s.confidenceLevel = computeConfidence(s);
+  if (s.docIndex === undefined) s.docIndex = 1;
+  if (s.docId === undefined) s.docId = null;
+  if (s.name === undefined) s.name = null;
+  if (s.isDuplicate === undefined) s.isDuplicate = false;
+  if (s.l2RecoveryAttempted === undefined) s.l2RecoveryAttempted = false;
+  if (s.l2RecoverySuccess === undefined) s.l2RecoverySuccess = false;
+  return s;
+}
+
+// Set document type from MRZ result
+function setDocType(s, result) {
+  if (!result) { s.documentType = 'unknown'; return; }
+  if (result.type === 'TD1') s.documentType = 'td1-id';
+  else if (result.type === 'TD3') s.documentType = 'td3-passport';
+  else s.documentType = 'unknown';
+}
+
+// Generate AI Prompt text from a RunSummary
+function generateAIPrompt(s) {
+  var w = s.winner || {};
+  var a = s.assembly || {};
+  var e = s.experiment || {};
+  var lines = [
+    'MRZ Run Analysis',
+    '',
+    'Mode: ' + (s.mode || 'unknown'),
+    'Source: ' + (s.sourceType || 'unknown'),
+    'Document: ' + (s.documentType || 'unknown'),
+    'Success: ' + s.success,
+    'Confidence: ' + (s.confidenceLevel || 'unknown'),
+    'FailureReason: ' + (s.failureReason || 'none'),
+    'Duration: ' + (s.durationMs || 0) + 'ms',
+    'Total OCR: ' + (s.totalOCR || 0),
+    'Fallback: ' + (s.fallbackUsed ? 'yes' : 'no'),
+    'Rotations: [' + (s.selectedRotations || []).join(', ') + ']',
+    'Regions: found=' + (s.regionsFound || 0) + ' tried=' + (s.regionsTried || 0),
+    'Winner: ' + (s.winner ? 'rotation=' + w.rotation + ' method=' + (w.method || '—') : 'none'),
+    'Assembly: L1=' + (a.l1 || 0) + ' L2=' + (a.l2 || 0) + ' L3=' + (a.l3 || 0),
+    'Experiment: psm=' + (e.psm || 6) + ' lang=' + (e.lang || 'mrz') + ' preprocess=' + (e.preprocessWinner || '—'),
+  ];
+  if (s.l2RecoveryAttempted) {
+    lines.push('L2Recovery: attempted=' + s.l2RecoveryAttempted + ' success=' + s.l2RecoverySuccess);
+  }
+  return lines.join('\n');
+}
+
+// Generate aggregate stats from array of RunSummaries
+function generateAggregate(summaries) {
+  var n = summaries.length;
+  if (n === 0) return { totalRuns: 0, successRate: 0, avgOCR: 0, avgDurationMs: 0, fallbackRate: 0, methodDistribution: {}, failureDistribution: {} };
+  var success = 0, ocrSum = 0, durSum = 0, fbCount = 0;
+  var methods = {}, failures = {};
+  for (var i = 0; i < n; i++) {
+    var s = summaries[i];
+    if (s.success) success++;
+    ocrSum += (s.totalOCR || 0);
+    durSum += (s.durationMs || 0);
+    if (s.fallbackUsed) fbCount++;
+    var m = s.winner ? s.winner.method : 'none';
+    methods[m] = (methods[m] || 0) + 1;
+    if (!s.success && s.failureReason) {
+      failures[s.failureReason] = (failures[s.failureReason] || 0) + 1;
+    }
+  }
+  return {
+    totalRuns: n,
+    successRate: +(success / n).toFixed(3),
+    avgOCR: +(ocrSum / n).toFixed(1),
+    avgDurationMs: Math.round(durSum / n),
+    fallbackRate: +(fbCount / n).toFixed(3),
+    methodDistribution: methods,
+    failureDistribution: failures
+  };
+}
+
+// Generate Unified Report (all 4 layers in one string)
+function generateUnifiedReport(summary, logLines, debugExport) {
+  var sections = [];
+  sections.push('=== MRZ UNIFIED REPORT ===');
+  sections.push('');
+  sections.push('## SUMMARY');
+  sections.push(JSON.stringify(summary, null, 2));
+  sections.push('');
+  sections.push('## AI_PROMPT');
+  sections.push(generateAIPrompt(summary));
+  sections.push('');
+  sections.push('## LIVE_LOG');
+  sections.push((logLines || []).join('\n'));
+  sections.push('');
+  sections.push('## DEBUG_EXPORT');
+  sections.push(JSON.stringify(debugExport || {}, null, 2));
+  return sections.join('\n');
+}
+
 // ── Live Log ───────────────────────────────────────────────────────────
 var _liveLogLines = [];
 
@@ -1164,25 +1300,14 @@ function copySummaryJSON() {
   var s = window._lastSummary;
   if (!s) return;
   navigator.clipboard.writeText(JSON.stringify(s, null, 2)).then(function() {
-    flashCopyFeedback('JSON kopyalandı');
+    flashCopyFeedback('Summary JSON kopyalandı');
   });
 }
 
 function copyAIPrompt() {
   var s = window._lastSummary;
   if (!s) return;
-  var lines = [
-    'MRZ Pipeline Result:',
-    '- Mode: ' + (s.mode || 'unknown'),
-    '- Success: ' + s.success,
-    '- Total OCR: ' + s.totalOCR,
-    '- Rotations: ' + s.selectedRotations.map(function(d){return d+'°';}).join(', '),
-    '- Regions found: ' + s.regionsFound + ', tried: ' + s.regionsTried,
-    '- Fallback: ' + (s.fallbackUsed ? 'yes' : 'no'),
-    '- Winner: ' + (s.winner ? s.winner.rotation + '° region#' + s.winner.region + ' ' + s.winner.method : 'none'),
-    '- Duration: ' + (s.durationMs ? s.durationMs + 'ms' : 'unknown'),
-  ];
-  navigator.clipboard.writeText(lines.join('\n')).then(function() {
+  navigator.clipboard.writeText(generateAIPrompt(s)).then(function() {
     flashCopyFeedback('AI Prompt kopyalandı');
   });
 }
@@ -1190,7 +1315,7 @@ function copyAIPrompt() {
 function copyPipelineLog() {
   var lines = _liveLogLines.slice();
   var s = window._lastSummary;
-  if (s) lines.push('[MRZ_SUMMARY] ' + JSON.stringify(s));
+  if (s) lines.push('[SUMMARY] ' + JSON.stringify(s));
   if (lines.length === 0) return;
   navigator.clipboard.writeText(lines.join('\n')).then(function() {
     flashCopyFeedback('Log kopyalandı (' + lines.length + ' satır)');
@@ -1203,6 +1328,17 @@ function copyDebugExport() {
   var text = JSON.stringify(exp, null, 2);
   navigator.clipboard.writeText(text).then(function() {
     flashCopyFeedback('Debug Export kopyalandı (' + (exp.attempts ? exp.attempts.length : 0) + ' attempt)');
+  });
+}
+
+function copyUnifiedReport() {
+  var s = window._lastSummary;
+  if (!s) { flashCopyFeedback('Veri yok'); return; }
+  var logLines = _liveLogLines.slice();
+  var debug = window._lastDebugExport || { summary: s, attempts: [] };
+  var report = generateUnifiedReport(s, logLines, debug);
+  navigator.clipboard.writeText(report).then(function() {
+    flashCopyFeedback('Unified Report kopyalandı');
   });
 }
 
