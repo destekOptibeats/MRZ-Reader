@@ -90,7 +90,7 @@ function uploadCropRegion(srcCanvas, sy, cropH) {
 }
 
 // Upload-only: grayscale + contrast + unsharp mask
-// mode: undefined=normal, 'hi'=high contrast, 'sharp'=strong sharpen for blur
+// mode: undefined=normal, 'hi'=high contrast, 'bin'=adaptive binarization
 function uploadPreprocess(srcCanvas, mode) {
   const w = srcCanvas.width, h = srcCanvas.height;
   const c = document.createElement('canvas');
@@ -100,17 +100,55 @@ function uploadPreprocess(srcCanvas, mode) {
   // Legacy boolean support: true → 'hi'
   if (mode === true) mode = 'hi';
 
-  var contrastVal = mode === 'hi' ? 2.2 : mode === 'sharp' ? 1.8 : 1.6;
+  // Adaptive binarization: local mean threshold → pure black/white
+  if (mode === 'bin') {
+    ctx.filter = 'grayscale(1)';
+    ctx.drawImage(srcCanvas, 0, 0);
+    ctx.filter = 'none';
+    const imgData = ctx.getImageData(0, 0, w, h);
+    const d = imgData.data;
+    // Build grayscale array
+    const gray = new Uint8Array(w * h);
+    for (let i = 0; i < gray.length; i++) gray[i] = d[i * 4];
+    // Integral image for fast local mean
+    const integral = new Float64Array((w + 1) * (h + 1));
+    for (let y = 0; y < h; y++) {
+      let rowSum = 0;
+      for (let x = 0; x < w; x++) {
+        rowSum += gray[y * w + x];
+        integral[(y + 1) * (w + 1) + (x + 1)] = rowSum + integral[y * (w + 1) + (x + 1)];
+      }
+    }
+    // Adaptive threshold with local window
+    const radius = Math.max(8, Math.round(Math.min(w, h) * 0.02));
+    const bias = -8; // slight bias toward keeping dark pixels (text)
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const x0 = Math.max(0, x - radius), y0 = Math.max(0, y - radius);
+        const x1 = Math.min(w, x + radius + 1), y1 = Math.min(h, y + radius + 1);
+        const area = (x1 - x0) * (y1 - y0);
+        const sum = integral[y1 * (w + 1) + x1] - integral[y0 * (w + 1) + x1]
+                  - integral[y1 * (w + 1) + x0] + integral[y0 * (w + 1) + x0];
+        const mean = sum / area;
+        const val = gray[y * w + x] < (mean + bias) ? 0 : 255;
+        const i = (y * w + x) * 4;
+        d[i] = d[i + 1] = d[i + 2] = val;
+      }
+    }
+    ctx.putImageData(imgData, 0, 0);
+    return c;
+  }
+
+  var contrastVal = mode === 'hi' ? 2.2 : 1.6;
   ctx.filter = 'grayscale(1) contrast(' + contrastVal + ')';
   ctx.drawImage(srcCanvas, 0, 0);
   ctx.filter = 'none';
 
-  // Unsharp mask (sharpen) — stronger for 'sharp' mode
+  // Unsharp mask (sharpen)
   const imgData = ctx.getImageData(0, 0, w, h);
   const d = imgData.data;
   const orig = new Uint8ClampedArray(d);
-  const amount = mode === 'sharp' ? 1.2 : 0.6;
-  const threshold = mode === 'sharp' ? 2 : 4;
+  const amount = 0.6, threshold = 4;
   for (let y = 1; y < h - 1; y++) {
     for (let x = 1; x < w - 1; x++) {
       const i = (y * w + x) * 4;
@@ -709,14 +747,14 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
     logStep('[OCR] ' + deg + '° ' + bc.label + ' → ' + (result ? 'SUCCESS' : 'FAIL'));
     if (result) return { result: result, method: 'band-' + bc.label, region: 0, bandIdx: bi };
 
-    // İlk band için sharp mode dene (bulanık fotoğraflar için)
+    // İlk band için adaptive binarization dene (düşük kalite fotoğraflar için)
     if (bi === 0) {
       if (processingCancelled) return null;
-      var bandSharp = uploadPreprocess(bandCrop, 'sharp');
+      var bandBin = uploadPreprocess(bandCrop, 'bin');
       ctx.ocrCount++; ctx.summary.totalOCR++;
-      result = await uploadTryRecognize(bandSharp, acc, ocrWorker);
-      logStep('[OCR] ' + deg + '° ' + bc.label + ' sharp → ' + (result ? 'SUCCESS' : 'FAIL'));
-      if (result) return { result: result, method: 'band-' + bc.label + '-sharp', region: 0, bandIdx: bi };
+      result = await uploadTryRecognize(bandBin, acc, ocrWorker);
+      logStep('[OCR] ' + deg + '° ' + bc.label + ' bin → ' + (result ? 'SUCCESS' : 'FAIL'));
+      if (result) return { result: result, method: 'band-' + bc.label + '-bin', region: 0, bandIdx: bi };
     }
   }
 

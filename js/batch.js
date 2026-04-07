@@ -7,30 +7,43 @@
 
 async function startBulkSerialFromPhotos(files) {
   if (!files || !files.length || !workerReady) return;
-  if (!serialMode) startSerialScan();
-  await new Promise(r => setTimeout(r, 200));
+
+  // Seri veri yapılarını başlat (kamera açmadan, ekran değiştirmeden)
+  serialMode = true;
+  serialCount = 0;
+  serialScannedIds = [];
+  serialEntries = [];
+  serialTotalShots = 0;
+  serialStartTime = Date.now();
+  serialCooldown = false;
+  window._serialSummaries = [];
   stopCamera();
 
   const prog = document.getElementById('bulk-prog');
   const status = document.getElementById('bulk-status');
   document.getElementById('bulk-progress').style.display = 'block';
 
-  for (let i = 0; i < files.length; i++) {
-    prog.style.width = ((i / files.length) * 100) + '%';
-    status.textContent = (i+1) + '/' + files.length + ': ' + files[i].name;
+  try {
+    for (let i = 0; i < files.length; i++) {
+      prog.style.width = ((i / files.length) * 100) + '%';
+      status.textContent = (i+1) + '/' + files.length + ': ' + files[i].name;
 
-    let imgData = null;
-    try { imgData = await loadImageFast(files[i]); }
-    catch(e) { continue; }
+      let imgData = null;
+      try { imgData = await loadImageFast(files[i]); }
+      catch(e) { console.warn('[Bulk] image load failed:', files[i].name, e); continue; }
 
-    // Upload pipeline ile işle (aynı karar ağacı)
-    const ocrResult = await batchProcessImage(imgData.img, null);
-    imgData.cleanup();
+      // Upload pipeline ile işle (aynı karar ağacı)
+      const ocrResult = await batchProcessImage(imgData.img, null);
+      imgData.cleanup();
 
-    if (ocrResult.result) {
-      addSerialResult(ocrResult.result);
+      if (ocrResult.result) {
+        try { addSerialResult(ocrResult.result); }
+        catch(e) { console.warn('[Bulk] addSerialResult error:', e); }
+      }
+      await new Promise(r => setTimeout(r, 100));
     }
-    await new Promise(r => setTimeout(r, 100));
+  } catch(e) {
+    console.error('[Bulk] processing error:', e);
   }
 
   prog.style.width = '100%';
@@ -38,7 +51,7 @@ async function startBulkSerialFromPhotos(files) {
   document.getElementById('file-in').value = '';
   document.getElementById('bulk-progress').style.display = 'none';
 
-  // Raporu göster
+  // Raporu göster — her durumda çağır
   finishSerialScan();
 }
 
