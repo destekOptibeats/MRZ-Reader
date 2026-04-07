@@ -1132,7 +1132,7 @@ function renderPipelineSummary(panelId, bodyId, actionsId) {
     ? s.winner.rotation + '° reg#' + s.winner.region + ' ' + s.winner.method
     : '—';
   var dur = s.durationMs ? (s.durationMs / 1000).toFixed(1) + 's' : '—';
-  body.innerHTML = [
+  var rows = [
     '<div class="row"><div class="rl">Durum</div><div class="rv">' + icon + '</div></div>',
     '<div class="row"><div class="rl">Total OCR</div><div class="rv">' + s.totalOCR + '</div></div>',
     '<div class="row"><div class="rl">Rotations</div><div class="rv">' + s.selectedRotations.map(function(d){return d+'°';}).join(', ') + '</div></div>',
@@ -1140,7 +1140,22 @@ function renderPipelineSummary(panelId, bodyId, actionsId) {
     '<div class="row"><div class="rl">Fallback</div><div class="rv">' + (s.fallbackUsed ? 'Evet' : 'Hayır') + '</div></div>',
     '<div class="row"><div class="rl">Winner</div><div class="rv">' + winnerTxt + '</div></div>',
     '<div class="row"><div class="rl">Sure</div><div class="rv">' + dur + '</div></div>',
-  ].join('');
+  ];
+  // New fields from enriched summary
+  if (s.failureReason) {
+    rows.push('<div class="row"><div class="rl">Fail Reason</div><div class="rv"><span class="fail">' + s.failureReason + '</span></div></div>');
+  }
+  if (s.assembly) {
+    var a = s.assembly;
+    rows.push('<div class="row"><div class="rl">Assembly</div><div class="rv">L1=' + a.l1 + ' L2=' + a.l2 + ' L3=' + a.l3 +
+      (a.td3_l1 || a.td3_l2 ? ' | TD3 L1=' + a.td3_l1 + ' L2=' + a.td3_l2 : '') + '</div></div>');
+  }
+  if (s.l2RecoveryAttempted) {
+    rows.push('<div class="row"><div class="rl">L2 Recovery</div><div class="rv">' +
+      (s.l2RecoverySuccess ? '<span class="ok">L2 bulundu!</span>' : '<span class="fail">L2 bulunamadı</span>') +
+      '</div></div>');
+  }
+  body.innerHTML = rows.join('');
   panel.style.display = 'block';
   if (actions) actions.style.display = 'block';
 }
@@ -1180,6 +1195,31 @@ function copyPipelineLog() {
   navigator.clipboard.writeText(lines.join('\n')).then(function() {
     flashCopyFeedback('Log kopyalandı (' + lines.length + ' satır)');
   });
+}
+
+function copyDebugExport() {
+  var exp = window._lastDebugExport;
+  if (!exp) { flashCopyFeedback('Debug verisi yok'); return; }
+  var text = JSON.stringify(exp, null, 2);
+  navigator.clipboard.writeText(text).then(function() {
+    flashCopyFeedback('Debug Export kopyalandı (' + (exp.attempts ? exp.attempts.length : 0) + ' attempt)');
+  });
+}
+
+function downloadDebugExport() {
+  var exp = window._lastDebugExport;
+  if (!exp) { flashCopyFeedback('Debug verisi yok'); return; }
+  var text = JSON.stringify(exp, null, 2);
+  var blob = new Blob([text], { type: 'application/json' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'mrz-debug-' + new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19) + '.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  flashCopyFeedback('Debug JSON indirildi');
 }
 
 function flashCopyFeedback(msg) {

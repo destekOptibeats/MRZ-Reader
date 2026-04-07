@@ -225,25 +225,53 @@ function tryAssemblyFromAcc(acc) {
 
 // Upload-only: OCR → parse → checksum denemesi
 // acc: opsiyonel satır biriktirici — başarısız olsa bile parçalı satırları toplar
-async function uploadTryRecognize(canvas, acc, ocrWorker) {
+// meta: { rotation, method, region, preprocess } — debug export için
+async function uploadTryRecognize(canvas, acc, ocrWorker, meta) {
+  var attempt = {
+    rotation: meta ? meta.rotation : null,
+    method: meta ? meta.method : '',
+    region: meta ? meta.region : '',
+    preprocess: meta ? meta.preprocess : '',
+    ocrText: '',
+    ocrLen: 0,
+    mrzFound: false,
+    checksumOk: false,
+    success: false,
+    confidence: null
+  };
   try {
     const wr = ocrWorker || worker;
-    const { data: { text } } = await wr.recognize(canvas);
+    const { data: { text, confidence } } = await wr.recognize(canvas);
+    attempt.confidence = typeof confidence === 'number' ? Math.round(confidence) : null;
     // Diagnostic: log what Tesseract actually reads
     var ocrLines = text.split('\n').filter(function(l) { return l.trim().length > 5; });
     var longest = ocrLines.reduce(function(a, b) { return a.length > b.length ? a : b; }, '');
-    logStep('[OCR-raw] len=' + longest.length + ' "' + longest.substring(0, 44) + '"');
+    attempt.ocrText = text.replace(/\n+/g, ' ').substring(0, 300);
+    attempt.ocrLen = longest.length;
+    logStep('[OCR_TEXT] "' + longest.substring(0, 50) + '"');
+    // OCR quality heuristic
+    var qualityLabel = attempt.confidence !== null && attempt.confidence < 40 ? 'low' :
+                       attempt.confidence !== null && attempt.confidence < 65 ? 'medium' : 'ok';
+    if (longest.length < 20) qualityLabel = 'low';
+    if (qualityLabel !== 'ok') logStep('[OCR_QUALITY] ' + qualityLabel + ' (conf=' + attempt.confidence + ', len=' + longest.length + ')');
 
     // Parçalı satırları biriktir (her zaman, başarılı/başarısız fark etmez)
     if (acc) collectMRZLines(text, acc);
 
     const result = extractMRZ(clean(text));
     if (result) {
+      attempt.mrzFound = true;
       var v = validateMRZ(result);
-      if (v.valid) return result;
+      if (v.valid) {
+        attempt.checksumOk = true;
+        attempt.success = true;
+        if (window._debugAttempts) window._debugAttempts.push(attempt);
+        return result;
+      }
       logStep('[OCR-raw] parsed but checksum fail: ' + JSON.stringify(v.checksums));
     }
   } catch(e) { /* devam */ }
+  if (window._debugAttempts) window._debugAttempts.push(attempt);
   return null;
 }
 
@@ -513,8 +541,11 @@ function locateMRZRegions(canvas) {
     }
   }
 
-  logStep('[Region] peaks: ' + peaks.length + ' thresh: ' + peakThreshold.toFixed(3));
-  if (peaks.length < 1) return [];
+  logStep('[Region] peaks=' + peaks.length + ' thresh=' + peakThreshold.toFixed(3) + ' median=' + median.toFixed(3));
+  if (peaks.length < 1) {
+    logStep('[Region] no peaks — region detection failed');
+    return [];
+  }
 
   // Single peak: create expanded region around it (MRZ lines likely nearby but below threshold)
   if (peaks.length === 1) {
@@ -526,7 +557,9 @@ function locateMRZRegions(canvas) {
     var spPad = Math.round((spEnd - spStart) * 0.3);
     var spCropStart = Math.max(0, spStart - spPad);
     var spCropEnd = Math.min(h, spEnd + spPad);
-    logStep('[Region] single-peak fallback: y=' + spCropStart + '-' + spCropEnd);
+    var spPosRatio = sp.center / h;
+    logStep('[Region] single-peak fallback: y=' + spCropStart + '-' + spCropEnd + ' (pos=' + (spPosRatio * 100).toFixed(0) + '%)');
+    if (spPosRatio < 0.5) logStep('[Region] WARNING: peak in upper half — wrong region suspected');
     return [{
       y: spCropStart,
       h: spCropEnd - spCropStart,
@@ -677,26 +710,39 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
       }
     }
 
+    // EXPERIMENT: Region budget limiter — peaks<2 → only 1 enhanced attempt per region
+    var regionBudgetLimited = (regions.length < 2);
+    if (regionBudgetLimited) {
+      logStep('[EXP:RegionBudget] peaks<2 → limiting to 1 attempt per region, then band fallback');
+    }
+
     for (var rgi = 0; rgi < tryCount; rgi++) {
       if (processingCancelled) return null;
       var region = regions[rgi];
       ctx.summary.regionsTried++;
-      logStep('[OCR] rot=' + deg + '° reg#' + (rgi+1) + ' score=' + region.score.toFixed(3));
+      var regLabel = 'reg#' + (rgi+1);
+      logStep('[OCR] rot=' + deg + '° ' + regLabel + ' score=' + region.score.toFixed(3));
 
       var cropped = uploadCropRegion(rotated, region.y, region.h);
 
       // Enhanced
       var enhanced = uploadPreprocess(cropped);
       ctx.ocrCount++; ctx.summary.totalOCR++;
-      var result = await uploadTryRecognize(enhanced, acc, ocrWorker);
-      logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' enhanced → ' + (result ? 'SUCCESS' : 'FAIL'));
+      var result = await uploadTryRecognize(enhanced, acc, ocrWorker, { rotation: deg, method: regLabel + ' enhanced', region: regLabel, preprocess: 'enhanced' });
+      logStep('[OCR] ' + deg + '° ' + regLabel + ' enhanced → ' + (result ? 'SUCCESS' : 'FAIL'));
       if (result) return { result: result, method: 'enhanced', region: rgi + 1, bandIdx: -1 };
+
+      // Budget limited: skip remaining region attempts, go to band fallback
+      if (regionBudgetLimited) {
+        logStep('[EXP:RegionBudget] skipping raw/wider/hi-contrast for ' + regLabel);
+        continue;
+      }
 
       // Raw
       if (processingCancelled) return null;
       ctx.ocrCount++; ctx.summary.totalOCR++;
-      result = await uploadTryRecognize(cropped, acc, ocrWorker);
-      logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' raw → ' + (result ? 'SUCCESS' : 'FAIL'));
+      result = await uploadTryRecognize(cropped, acc, ocrWorker, { rotation: deg, method: regLabel + ' raw', region: regLabel, preprocess: 'raw' });
+      logStep('[OCR] ' + deg + '° ' + regLabel + ' raw → ' + (result ? 'SUCCESS' : 'FAIL'));
       if (result) return { result: result, method: 'raw', region: rgi + 1, bandIdx: -1 };
 
       // Wider
@@ -708,16 +754,16 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
       var wider = uploadCropRegion(rotated, widerY, widerEnd - widerY);
       var widerEnh = uploadPreprocess(wider);
       ctx.ocrCount++; ctx.summary.totalOCR++;
-      result = await uploadTryRecognize(widerEnh, acc, ocrWorker);
-      logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' wider → ' + (result ? 'SUCCESS' : 'FAIL'));
+      result = await uploadTryRecognize(widerEnh, acc, ocrWorker, { rotation: deg, method: regLabel + ' wider', region: regLabel, preprocess: 'enhanced' });
+      logStep('[OCR] ' + deg + '° ' + regLabel + ' wider → ' + (result ? 'SUCCESS' : 'FAIL'));
       if (result) return { result: result, method: 'wider', region: rgi + 1, bandIdx: -2 };
 
       // Hi-contrast
       if (processingCancelled) return null;
       var hiCon = uploadPreprocess(cropped, 'hi');
       ctx.ocrCount++; ctx.summary.totalOCR++;
-      result = await uploadTryRecognize(hiCon, acc, ocrWorker);
-      logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' hi-contrast → ' + (result ? 'SUCCESS' : 'FAIL'));
+      result = await uploadTryRecognize(hiCon, acc, ocrWorker, { rotation: deg, method: regLabel + ' hi-contrast', region: regLabel, preprocess: 'hi' });
+      logStep('[OCR] ' + deg + '° ' + regLabel + ' hi-contrast → ' + (result ? 'SUCCESS' : 'FAIL'));
       if (result) return { result: result, method: 'hi-contrast', region: rgi + 1, bandIdx: -1 };
     }
   } else {
@@ -744,8 +790,8 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
 
     var bandEnh = uploadPreprocess(bandCrop);
     ctx.ocrCount++; ctx.summary.totalOCR++;
-    var result = await uploadTryRecognize(bandEnh, acc, ocrWorker);
-    logStep('[OCR] ' + deg + '° ' + bc.label + ' → ' + (result ? 'SUCCESS' : 'FAIL'));
+    var result = await uploadTryRecognize(bandEnh, acc, ocrWorker, { rotation: deg, method: 'band ' + bc.label + ' enhanced', region: 'band-' + bc.label, preprocess: 'enhanced' });
+    logStep('[OCR] ' + deg + '° ' + bc.label + ' enhanced → ' + (result ? 'SUCCESS' : 'FAIL'));
     if (result) return { result: result, method: 'band-' + bc.label, region: 0, bandIdx: bi };
 
     // Adaptive binarization dene (işaretli bandlar için)
@@ -753,7 +799,7 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
       if (processingCancelled) return null;
       var bandBin = uploadPreprocess(bandCrop, 'bin');
       ctx.ocrCount++; ctx.summary.totalOCR++;
-      result = await uploadTryRecognize(bandBin, acc, ocrWorker);
+      result = await uploadTryRecognize(bandBin, acc, ocrWorker, { rotation: deg, method: 'band ' + bc.label + ' bin', region: 'band-' + bc.label, preprocess: 'bin' });
       logStep('[OCR] ' + deg + '° ' + bc.label + ' bin → ' + (result ? 'SUCCESS' : 'FAIL'));
       if (result) return { result: result, method: 'band-' + bc.label + '-bin', region: 0, bandIdx: bi };
     }
@@ -761,20 +807,169 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
 
   // ── Parçalı satır birleştirme denemesi ──
   var accTotal = acc.td1_l1.length + acc.td1_l2.length + acc.td1_l3.length + acc.td3_l1.length + acc.td3_l2.length;
+  // Assembly bilgisini her zaman kaydet (summary'ye eklenecek)
+  var assemblyInfo = {
+    l1: acc.td1_l1.length, l2: acc.td1_l2.length, l3: acc.td1_l3.length,
+    td3_l1: acc.td3_l1.length, td3_l2: acc.td3_l2.length
+  };
+  ctx._lastAssembly = assemblyInfo;
+
+  logStep('[ASSEMBLY] L1=' + assemblyInfo.l1 + ' L2=' + assemblyInfo.l2 + ' L3=' + assemblyInfo.l3 +
+    (assemblyInfo.td3_l1 || assemblyInfo.td3_l2 ? ' | TD3 L1=' + assemblyInfo.td3_l1 + ' L2=' + assemblyInfo.td3_l2 : ''));
+
   if (accTotal >= 2) {
-    logStep('[Assembly] ' + deg + '° biriktirilen: L1=' + acc.td1_l1.length + ' L2=' + acc.td1_l2.length + ' L3=' + acc.td1_l3.length +
-      (acc.td3_l1.length || acc.td3_l2.length ? ' | TD3 L1=' + acc.td3_l1.length + ' L2=' + acc.td3_l2.length : ''));
     if (acc.td1_l2.length === 0 && acc.td1_l1.length > 0) {
+      logStep('[DIAGNOSE] l2_missing');
       logStep('[Assembly] L2 eksik — L1 örnekleri: ' + acc.td1_l1.slice(0,2).join(' | '));
+    }
+    if (acc.td1_l1.length === 0 && acc.td1_l3.length > 0) {
+      logStep('[DIAGNOSE] l1_missing');
     }
     var assembled = tryAssemblyFromAcc(acc);
     if (assembled) {
       logStep('[Assembly] ' + deg + '° birleştirme BAŞARILI!');
       return { result: assembled, method: 'assembly', region: 0, bandIdx: -1 };
     }
+  } else if (accTotal === 0) {
+    logStep('[DIAGNOSE] no_candidates');
+  }
+
+  // ── EXPERIMENT: L2 Recovery ──
+  // When L1>0 && L3>0 && L2==0 → try targeted L2 recovery
+  // Does NOT affect main pipeline result — only logs and adds to debug export
+  if (acc.td1_l1.length > 0 && acc.td1_l3.length > 0 && acc.td1_l2.length === 0) {
+    ctx.summary.l2RecoveryAttempted = true;
+    ctx.summary.l2RecoverySuccess = false;
+    logStep('[EXP:L2Recovery] triggered — L1=' + acc.td1_l1.length + ' L3=' + acc.td1_l3.length + ' L2=0');
+
+    var l2RecoveryResults = [];
+    var wr = ocrWorker || worker;
+
+    // Strategy: try band crops focused on MRZ middle area with different preprocessing and PSM
+    var l2Bands = [
+      { cy: 0.87, hr: 0.15, label: 'narrow-alt-15%' },
+      { cy: 0.82, hr: 0.20, label: 'narrow-alt-20%' },
+      { cy: 0.78, hr: 0.15, label: 'narrow-midlow-15%' },
+    ];
+    var l2Preprocesses = ['enhanced', 'bin', 'hi'];
+    var l2PSMs = ['6', '7'];
+
+    for (var li = 0; li < l2Bands.length && !processingCancelled; li++) {
+      var lb = l2Bands[li];
+      var l2Crop = uploadCropBand(rotated, lb.cy, lb.hr);
+
+      for (var pi = 0; pi < l2Preprocesses.length && !processingCancelled; pi++) {
+        var ppType = l2Preprocesses[pi];
+        var ppCanvas;
+        if (ppType === 'bin') ppCanvas = uploadPreprocess(l2Crop, 'bin');
+        else if (ppType === 'hi') ppCanvas = uploadPreprocess(l2Crop, 'hi');
+        else ppCanvas = uploadPreprocess(l2Crop);
+
+        for (var si = 0; si < l2PSMs.length && !processingCancelled; si++) {
+          var psm = l2PSMs[si];
+          try {
+            // Temporarily change PSM
+            await wr.setParameters({ tessedit_pageseg_mode: psm });
+            var ocrResult = await wr.recognize(ppCanvas);
+            // Restore PSM 6
+            await wr.setParameters({ tessedit_pageseg_mode: '6' });
+
+            var rawText = ocrResult.data.text;
+            var conf = typeof ocrResult.data.confidence === 'number' ? Math.round(ocrResult.data.confidence) : null;
+            var cleanedText = clean(rawText);
+            var foundL2 = false;
+
+            // Check if any line matches L2 pattern
+            var l2lines = cleanedText.split(/\n+/).map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 15; });
+            for (var lx = 0; lx < l2lines.length; lx++) {
+              var candidateL2 = fixLine(l2lines[lx], {targetLen: 30, kind: 'TD1_L2'});
+              if (candidateL2 && isL2_TD1(candidateL2)) {
+                foundL2 = true;
+                // Try assembly with recovered L2
+                var recoveryAcc = {
+                  td1_l1: acc.td1_l1.slice(), td1_l2: [candidateL2], td1_l3: acc.td1_l3.slice(),
+                  td3_l1: [], td3_l2: []
+                };
+                var recoveryResult = tryAssemblyFromAcc(recoveryAcc);
+                var entry = {
+                  band: lb.label, preprocess: ppType, psm: psm,
+                  ocrText: rawText.replace(/\n+/g, ' ').substring(0, 200),
+                  confidence: conf, l2Found: true, l2Candidate: candidateL2,
+                  assemblySuccess: !!recoveryResult
+                };
+                l2RecoveryResults.push(entry);
+                logStep('[EXP:L2Recovery] ' + lb.label + ' ' + ppType + ' PSM' + psm + ' → L2 FOUND: "' + candidateL2 + '" assembly=' + (recoveryResult ? 'OK' : 'FAIL'));
+                if (recoveryResult) {
+                  ctx.summary.l2RecoverySuccess = true;
+                  logStep('[EXP:L2Recovery] ASSEMBLY SUCCESS — could recover MRZ!');
+                }
+                break;
+              }
+            }
+
+            if (!foundL2) {
+              var bestLine = l2lines.reduce(function(a, b) { return a.length > b.length ? a : b; }, '');
+              l2RecoveryResults.push({
+                band: lb.label, preprocess: ppType, psm: psm,
+                ocrText: bestLine.substring(0, 100),
+                confidence: conf, l2Found: false, l2Candidate: null,
+                assemblySuccess: false
+              });
+              logStep('[EXP:L2Recovery] ' + lb.label + ' ' + ppType + ' PSM' + psm + ' → no L2 (len=' + bestLine.length + ')');
+            }
+          } catch(e) {
+            // Restore PSM 6 on error
+            try { await wr.setParameters({ tessedit_pageseg_mode: '6' }); } catch(e2) {}
+            l2RecoveryResults.push({
+              band: lb.label, preprocess: ppType, psm: psm,
+              ocrText: '', confidence: null, l2Found: false,
+              l2Candidate: null, assemblySuccess: false, error: e.message
+            });
+          }
+        }
+      }
+    }
+
+    // Store in debug export
+    if (window._debugAttempts) {
+      window._debugAttempts.push({
+        rotation: deg, method: 'L2-recovery-experiment', region: 'experiment',
+        preprocess: 'mixed', ocrText: '', ocrLen: 0, mrzFound: false,
+        checksumOk: false, success: false, confidence: null,
+        l2Recovery: l2RecoveryResults
+      });
+    }
+
+    logStep('[EXP:L2Recovery] completed — ' + l2RecoveryResults.length + ' attempts, L2 found in ' +
+      l2RecoveryResults.filter(function(r) { return r.l2Found; }).length + ', assembly success: ' + ctx.summary.l2RecoverySuccess);
   }
 
   return null;
+}
+
+// Compute failureReason from context
+function computeFailureReason(ctx) {
+  var a = ctx._lastAssembly;
+  if (!a) return 'ocr_empty';
+  if (a.l1 === 0 && a.l3 === 0 && a.td3_l1 === 0) return 'no_mrz_pattern';
+  if (a.l2 === 0 && a.td3_l2 === 0) return 'l2_missing';
+  if (a.l1 === 0 && a.td3_l1 === 0) return 'l1_missing';
+  return 'checksum_fail';
+}
+
+// Enrich summary with assembly, experiment, failureReason
+function enrichSummary(ctx, isSuccess) {
+  if (ctx._lastAssembly) {
+    ctx.summary.assembly = ctx._lastAssembly;
+  }
+  ctx.summary.experiment = { psm: 6, lang: 'mrz', preprocessWinner: isSuccess && ctx.summary.winner ? ctx.summary.winner.method : null };
+  ctx.summary.attemptCount = ctx.summary.totalOCR;
+  if (!isSuccess) {
+    ctx.summary.failureReason = computeFailureReason(ctx);
+    logStep('[DIAGNOSE] failureReason=' + ctx.summary.failureReason);
+  } else {
+    ctx.summary.failureReason = null;
+  }
 }
 
 // Handle successful OCR result
@@ -788,7 +983,9 @@ function handleOCRSuccess(hit, deg, ctx) {
   ctx.summary.success = true;
   ctx.summary.winner = { rotation: deg, region: hit.region, method: hit.method };
   ctx.summary.durationMs = Date.now() - ctx.startTime;
+  enrichSummary(ctx, true);
   window._lastSummary = ctx.summary;
+  window._lastDebugExport = { summary: ctx.summary, attempts: (window._debugAttempts || []).slice() };
   logStep('[Success] MRZ found in ' + ctx.summary.totalOCR + ' OCR attempts (' + ctx.summary.durationMs + 'ms)');
   console.log('[MRZ_SUMMARY]', JSON.stringify(ctx.summary));
   document.getElementById('proc-prog').style.width = '100%';
@@ -812,10 +1009,13 @@ async function processImage(img) {
     startTime: Date.now(),
     summary: {
       mode: 'single-upload', success: false, totalOCR: 0, selectedRotations: [],
-      regionsFound: 0, regionsTried: 0, fallbackUsed: false, winner: null, durationMs: 0
+      regionsFound: 0, regionsTried: 0, fallbackUsed: false, winner: null, durationMs: 0,
+      failureReason: null, assembly: null, experiment: null, attemptCount: 0,
+      l2RecoveryAttempted: false, l2RecoverySuccess: false
     }
   };
 
+  window._debugAttempts = [];
   clearLiveLog();
   logStep('[Start] processing image ' + img.naturalWidth + '×' + img.naturalHeight);
 
@@ -858,7 +1058,10 @@ async function processImage(img) {
   // ── FAIL ───────────────────────────────────────────────────────────
   if (metrics) metrics.upload.attempts = ctx.ocrCount;
   logStep('[FAIL] no MRZ found after ' + ctx.ocrCount + ' OCR attempts');
-  ctx.summary.durationMs = Date.now() - ctx.startTime; window._lastSummary = ctx.summary;
+  ctx.summary.durationMs = Date.now() - ctx.startTime;
+  enrichSummary(ctx, false);
+  window._lastSummary = ctx.summary;
+  window._lastDebugExport = { summary: ctx.summary, attempts: (window._debugAttempts || []).slice() };
   console.log('[MRZ_SUMMARY]', JSON.stringify(ctx.summary));
   document.getElementById('proc-cancel-btn').style.display = 'none';
   showError('MRZ tespit edilemedi. Kimliğin arka yüzünü yükleyin.');
@@ -874,10 +1077,13 @@ async function batchProcessImage(img, ocrWorker) {
     startTime: Date.now(),
     summary: {
       mode: 'batch', success: false, totalOCR: 0, selectedRotations: [],
-      regionsFound: 0, regionsTried: 0, fallbackUsed: false, winner: null, durationMs: 0
+      regionsFound: 0, regionsTried: 0, fallbackUsed: false, winner: null, durationMs: 0,
+      failureReason: null, assembly: null, experiment: null, attemptCount: 0,
+      l2RecoveryAttempted: false, l2RecoverySuccess: false
     }
   };
 
+  window._debugAttempts = [];
   var batchLog = [];
   var origLogStep = window._batchLogFn;
   // Batch sırasında logStep çıktısını yakala
@@ -894,7 +1100,9 @@ async function batchProcessImage(img, ocrWorker) {
       ctx.summary.success = true;
       ctx.summary.winner = { rotation: 0, region: hit.region, method: hit.method };
       ctx.summary.durationMs = Date.now() - ctx.startTime;
+      enrichSummary(ctx, true);
       window._lastSummary = ctx.summary;
+      window._lastDebugExport = { summary: ctx.summary, attempts: (window._debugAttempts || []).slice() };
       logStep('[Success] MRZ found in ' + ctx.summary.totalOCR + ' OCR attempts (' + ctx.summary.durationMs + 'ms)');
       return { result: hit.result, method: hit.method, summary: ctx.summary, log: batchLog };
     }
@@ -913,7 +1121,9 @@ async function batchProcessImage(img, ocrWorker) {
         ctx.summary.success = true;
         ctx.summary.winner = { rotation: deg, region: hit.region, method: hit.method };
         ctx.summary.durationMs = Date.now() - ctx.startTime;
+        enrichSummary(ctx, true);
         window._lastSummary = ctx.summary;
+        window._lastDebugExport = { summary: ctx.summary, attempts: (window._debugAttempts || []).slice() };
         logStep('[Success] MRZ found in ' + ctx.summary.totalOCR + ' OCR attempts (' + ctx.summary.durationMs + 'ms)');
         return { result: hit.result, method: hit.method, summary: ctx.summary, log: batchLog };
       }
@@ -921,7 +1131,9 @@ async function batchProcessImage(img, ocrWorker) {
 
     // FAIL
     ctx.summary.durationMs = Date.now() - ctx.startTime;
+    enrichSummary(ctx, false);
     window._lastSummary = ctx.summary;
+    window._lastDebugExport = { summary: ctx.summary, attempts: (window._debugAttempts || []).slice() };
     logStep('[FAIL] no MRZ found after ' + ctx.ocrCount + ' OCR attempts');
     return { result: null, method: null, summary: ctx.summary, log: batchLog };
 

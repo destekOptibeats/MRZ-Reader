@@ -403,8 +403,8 @@ input[type="text"] {
 <div class="version-tag" id="version-tag"></div>
 <script>
 // Versiyon ve güncelleme zamanı — auto-bump tarafından güncellenir
-window.APP_VERSION = 'v2.6.14';
-window.APP_BUILD = '2026-04-07T09:29';
+window.APP_VERSION = 'v2.7.0';
+window.APP_BUILD = '2026-04-07T14:30';
 (function(){
   var d = new Date(window.APP_BUILD);
   var aylar = ['Oca','Şub','Mar','Nis','May','Haz','Tem','Ağu','Eyl','Eki','Kas','Ara'];
@@ -565,10 +565,12 @@ window.APP_BUILD = '2026-04-07T09:29';
   </div>
   <!-- Developer Actions -->
   <div id="dev-actions" style="display:none;width:100%;max-width:460px;">
-    <div style="display:flex;gap:8px;">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
       <button class="btn ghost btn-sm" style="flex:1;font-size:0.76rem" onclick="copySummaryJSON()">JSON</button>
       <button class="btn ghost btn-sm" style="flex:1;font-size:0.76rem" onclick="copyAIPrompt()">AI Prompt</button>
       <button class="btn ghost btn-sm" style="flex:1;font-size:0.76rem" onclick="copyPipelineLog()">Log</button>
+      <button class="btn ghost btn-sm" style="flex:1;font-size:0.76rem" onclick="copyDebugExport()">Debug Copy</button>
+      <button class="btn ghost btn-sm" style="flex:1;font-size:0.76rem" onclick="downloadDebugExport()">Debug DL</button>
       <button class="btn ghost btn-sm" style="flex:1;font-size:0.76rem" onclick="addCurrentToAnalysis()">+ Analiz</button>
     </div>
   </div>
@@ -595,10 +597,12 @@ window.APP_BUILD = '2026-04-07T09:29';
     <div id="err-pipeline-summary-body" style="font-size:0.82rem;line-height:1.7"></div>
   </div>
   <div id="err-dev-actions" style="display:none;width:100%;max-width:460px;">
-    <div style="display:flex;gap:8px;">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
       <button class="btn ghost btn-sm" style="flex:1;font-size:0.76rem" onclick="copySummaryJSON()">JSON</button>
       <button class="btn ghost btn-sm" style="flex:1;font-size:0.76rem" onclick="copyAIPrompt()">AI Prompt</button>
       <button class="btn ghost btn-sm" style="flex:1;font-size:0.76rem" onclick="copyPipelineLog()">Log</button>
+      <button class="btn ghost btn-sm" style="flex:1;font-size:0.76rem" onclick="copyDebugExport()">Debug Copy</button>
+      <button class="btn ghost btn-sm" style="flex:1;font-size:0.76rem" onclick="downloadDebugExport()">Debug DL</button>
       <button class="btn ghost btn-sm" style="flex:1;font-size:0.76rem" onclick="addCurrentToAnalysis()">+ Analiz</button>
     </div>
   </div>
