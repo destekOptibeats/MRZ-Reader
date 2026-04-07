@@ -22,7 +22,9 @@ jobs:
           patch=$(echo "$current" | cut -d. -f3)
           new="v${major}.${minor}.$((patch + 1))"
           sed -i "s/$current/$new/" index.html
-          echo "Bumped $current -> $new"
+          build_time=$(TZ=Europe/Istanbul date '+%Y-%m-%dT%H:%M')
+          sed -i "s/window.APP_BUILD = '.*'/window.APP_BUILD = '${build_time}'/" index.html
+          echo "Bumped $current -> $new, build=$build_time"
 
       - name: Commit and push
         run: |
