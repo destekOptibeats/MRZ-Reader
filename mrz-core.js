@@ -34,19 +34,19 @@
           // Prefer clean (no digits), then most trailing '<'
           if (clean && trailing > bestTrailing) { bestTrailing = trailing; bestL3 = c; }
         }
-        if (bestL3) return bestL3;
-        // Relaxed: allow digits
+        if (bestL3) return applyNameFixes(bestL3, kind);
+        // Relaxed: allow digits → convert to letters
         for (let skip = 0; skip <= s.length - targetLen; skip++) {
           const c = s.substring(skip, skip + targetLen);
-          if (c.includes('<<')) return c;
+          if (c.includes('<<')) return applyNameFixes(c, kind);
         }
-        return s.substring(0, targetLen);
+        return applyNameFixes(s.substring(0, targetLen), kind);
       }
 
       for (let skip = 0; skip <= s.length - targetLen; skip++) {
         const c = s.substring(skip, skip + targetLen);
         if (kind === 'TD1_L1' && /^[IAC]/.test(c)) return applyDigitFixes(c, kind);
-        if (kind === 'TD3_L1' && c[0] === 'P') return c;
+        if (kind === 'TD3_L1' && c[0] === 'P') return applyNameFixes(c, kind);
         // L2: digit fix ÖNCE uygula, sonra validate (OCR S→5, O→0 gibi düzeltmeler)
         if (kind === 'TD1_L2') {
           const fixed = applyDigitFixes(c, kind);
@@ -65,9 +65,22 @@
     return null;
   }
 
+  // İsim satırlarında rakam→harf düzeltme (bulanık OCR'da 0→O, 8→B gibi)
+  const nameCharMap = {'0':'O','8':'B','5':'S','6':'G','1':'I','2':'Z','3':'B','4':'A','9':'P'};
+  function applyNameFixes(s, kind) {
+    const a = s.split('');
+    // TD3_L1: skip positions 0-4 (P + type + issuer), fix only name part (5+)
+    // TD1_L3: entire line is name, fix all positions
+    const startPos = kind === 'TD3_L1' ? 5 : 0;
+    for (let i = startPos; i < a.length; i++) {
+      if (a[i] !== '<' && nameCharMap[a[i]]) a[i] = nameCharMap[a[i]];
+    }
+    return a.join('');
+  }
+
   function applyDigitFixes(s, kind) {
-    // İsim satırlarında digit fix YOK
-    if (kind === 'TD3_L1' || kind === 'TD1_L3') return s;
+    // İsim satırlarında rakam→harf düzeltme uygula
+    if (kind === 'TD3_L1' || kind === 'TD1_L3') return applyNameFixes(s, kind);
 
     const map = {'B':'8','O':'0','D':'0','S':'5','G':'6',
                  'Z':'2','I':'1','L':'1','Q':'0','U':'0'};

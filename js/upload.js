@@ -90,22 +90,27 @@ function uploadCropRegion(srcCanvas, sy, cropH) {
 }
 
 // Upload-only: grayscale + contrast + unsharp mask
-function uploadPreprocess(srcCanvas, highContrast) {
+// mode: undefined=normal, 'hi'=high contrast, 'sharp'=strong sharpen for blur
+function uploadPreprocess(srcCanvas, mode) {
   const w = srcCanvas.width, h = srcCanvas.height;
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
   const ctx = c.getContext('2d');
 
-  var contrastVal = highContrast ? 2.2 : 1.6;
+  // Legacy boolean support: true → 'hi'
+  if (mode === true) mode = 'hi';
+
+  var contrastVal = mode === 'hi' ? 2.2 : mode === 'sharp' ? 1.8 : 1.6;
   ctx.filter = 'grayscale(1) contrast(' + contrastVal + ')';
   ctx.drawImage(srcCanvas, 0, 0);
   ctx.filter = 'none';
 
-  // Unsharp mask (sharpen)
+  // Unsharp mask (sharpen) — stronger for 'sharp' mode
   const imgData = ctx.getImageData(0, 0, w, h);
   const d = imgData.data;
   const orig = new Uint8ClampedArray(d);
-  const amount = 0.6, threshold = 4;
+  const amount = mode === 'sharp' ? 1.2 : 0.6;
+  const threshold = mode === 'sharp' ? 2 : 4;
   for (let y = 1; y < h - 1; y++) {
     for (let x = 1; x < w - 1; x++) {
       const i = (y * w + x) * 4;
@@ -671,11 +676,19 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
 
       // Hi-contrast
       if (processingCancelled) return null;
-      var hiCon = uploadPreprocess(cropped, true);
+      var hiCon = uploadPreprocess(cropped, 'hi');
       ctx.ocrCount++; ctx.summary.totalOCR++;
       result = await uploadTryRecognize(hiCon, acc, ocrWorker);
       logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' hi-contrast → ' + (result ? 'SUCCESS' : 'FAIL'));
       if (result) return { result: result, method: 'hi-contrast', region: rgi + 1, bandIdx: -1 };
+
+      // Sharp (aggressive sharpening for blurry images)
+      if (processingCancelled) return null;
+      var sharp = uploadPreprocess(cropped, 'sharp');
+      ctx.ocrCount++; ctx.summary.totalOCR++;
+      result = await uploadTryRecognize(sharp, acc, ocrWorker);
+      logStep('[OCR] ' + deg + '° reg#' + (rgi+1) + ' sharp → ' + (result ? 'SUCCESS' : 'FAIL'));
+      if (result) return { result: result, method: 'sharp', region: rgi + 1, bandIdx: -1 };
     }
   } else {
     logStep('[Region] no regions at ' + deg + '°');
@@ -703,6 +716,16 @@ async function tryRotation(rotated, deg, ctx, ocrWorker) {
     var result = await uploadTryRecognize(bandEnh, acc, ocrWorker);
     logStep('[OCR] ' + deg + '° ' + bc.label + ' → ' + (result ? 'SUCCESS' : 'FAIL'));
     if (result) return { result: result, method: 'band-' + bc.label, region: 0, bandIdx: bi };
+
+    // İlk 2 band için sharp mode dene (bulanık fotoğraflar için)
+    if (bi < 2) {
+      if (processingCancelled) return null;
+      var bandSharp = uploadPreprocess(bandCrop, 'sharp');
+      ctx.ocrCount++; ctx.summary.totalOCR++;
+      result = await uploadTryRecognize(bandSharp, acc, ocrWorker);
+      logStep('[OCR] ' + deg + '° ' + bc.label + ' sharp → ' + (result ? 'SUCCESS' : 'FAIL'));
+      if (result) return { result: result, method: 'band-' + bc.label + '-sharp', region: 0, bandIdx: bi };
+    }
   }
 
   // ── Parçalı satır birleştirme denemesi ──
