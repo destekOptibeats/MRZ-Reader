@@ -13,29 +13,42 @@ function resizeOverlay() {
   }
 }
 
-// Calculate where the video actually displays inside the container (object-fit:contain letterbox)
+// Calculate where the video actually displays inside the container.
+// Handles both object-fit:contain (letterbox) and object-fit:cover (fill+clip).
+// Cover mode is active on portrait mobile via CSS media query.
 function getVideoDisplayRect() {
   const wrap = document.getElementById('video-wrap');
   const cw = wrap.offsetWidth, ch = wrap.offsetHeight;
   const vw = video.videoWidth, vh = video.videoHeight;
   if (!cw || !ch || !vw || !vh) return null;
 
-  const containerAR = cw / ch;
-  const videoAR = vw / vh;
+  // Detect cover mode: matches our CSS @media (max-width:768px) and (orientation:portrait)
+  const isCover = window.innerWidth <= 768 && window.innerHeight > window.innerWidth;
 
   let dw, dh, dx, dy;
-  if (videoAR > containerAR) {
-    // Video wider than container → letterbox top/bottom
-    dw = cw;
-    dh = cw / videoAR;
-    dx = 0;
+  if (isCover) {
+    // object-fit:cover — scale so video fills container entirely (may clip sides or top/bottom)
+    const scale = Math.max(cw / vw, ch / vh);
+    dw = vw * scale;
+    dh = vh * scale;
+    dx = (cw - dw) / 2;
     dy = (ch - dh) / 2;
   } else {
-    // Video taller than container → letterbox left/right
-    dh = ch;
-    dw = ch * videoAR;
-    dx = (cw - dw) / 2;
-    dy = 0;
+    const containerAR = cw / ch;
+    const videoAR = vw / vh;
+    if (videoAR > containerAR) {
+      // Video wider than container → letterbox top/bottom
+      dw = cw;
+      dh = cw / videoAR;
+      dx = 0;
+      dy = (ch - dh) / 2;
+    } else {
+      // Video taller than container → letterbox left/right
+      dh = ch;
+      dw = ch * videoAR;
+      dx = (cw - dw) / 2;
+      dy = 0;
+    }
   }
   return { dx, dy, dw, dh, sx: dw / vw, sy: dh / vh };
 }

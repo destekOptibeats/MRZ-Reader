@@ -77,8 +77,8 @@ function getMRZBand(vw, vh) {
 
   let w, h, x, y;
   if (isMobile && !isLandscape) {
-    // Mobil dikey (portrait) — MRZ target zone, narrower + lower
-    w = Math.round(vw * 0.87);
+    // Mobil dikey (portrait) — MRZ tam genişlik, yanlardan sadece %2 boşluk
+    w = Math.round(vw * 0.96);
     h = Math.round(vh * 0.20);
     y = Math.round(vh * 0.72);
   } else if (isMobile && isLandscape) {
