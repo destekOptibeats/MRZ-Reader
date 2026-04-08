@@ -386,9 +386,21 @@ input[type="text"] {
   border:1px solid rgba(255,255,255,.08);
 }
 </style>
+<script>window.APP_BUILD = '2026-04-08T00:00';</script>
 </head>
 <body>
-<div class="version-tag">v2.1.27</div>
+<div class="version-tag" id="version-tag">v2.1.27</div>
+<script>
+  (function(){
+    var el = document.getElementById('version-tag');
+    if(el && window.APP_BUILD) {
+      var d = new Date(window.APP_BUILD);
+      var pad = function(n){ return n < 10 ? '0'+n : n; };
+      var str = d.getFullYear()+'.'+pad(d.getMonth()+1)+'.'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes());
+      el.textContent = el.textContent + ' · ' + str;
+    }
+  })();
+</script>
 
 <!-- cache status pill -->
 <div id="cache-pill"><div class="pill-dot"></div><span id="pill-txt">Yükleniyor…</span></div>
