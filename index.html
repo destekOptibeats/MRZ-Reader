@@ -122,9 +122,20 @@ video{
   display:block;
   background:#000;
 }
-/* Tüm mobil cihazlarda (portre + yatay) video tam alanı kaplar */
+/* Tüm mobil cihazlarda video tam alanı kaplar */
 @media (hover:none) and (pointer:coarse){
   video { object-fit: cover; }
+}
+/* Yatay kilit ekranı */
+#landscape-blocker{
+  display:none;
+  position:fixed;inset:0;z-index:99999;
+  background:#000;
+  flex-direction:column;align-items:center;justify-content:center;
+  gap:18px;color:#fff;text-align:center;padding:24px;
+}
+@media (hover:none) and (pointer:coarse) and (orientation:landscape){
+  #landscape-blocker { display:flex; }
 }
 #cam-overlay{
   position:absolute;
@@ -390,6 +401,11 @@ input[type="text"] {
 <script>window.APP_BUILD = '2026-04-08T18:08';</script>
 </head>
 <body>
+<!-- Yatay mod engeli — CSS media query ile otomatik gösterilir/gizlenir -->
+<div id="landscape-blocker">
+  <span style="font-size:3.5rem">📱</span>
+  <span style="font-size:1.15rem;font-weight:600;line-height:1.5">Lütfen telefonunuzu<br><strong>dikey</strong> tutun</span>
+</div>
 <div class="version-tag" id="version-tag">v2.1.31</div>
 <script>
   (function(){
@@ -1321,10 +1337,11 @@ function stopScan() {
 
 // ── MRZ BAND — single source of truth for overlay + OCR crop ───────────
 function getMRZBandSize(vh) {
-  const isDesktop = window.innerWidth >= 768;
-  const hRatio = isDesktop ? 0.22 : 0.24;
-  const h = Math.max(Math.round(vh * hRatio), 120);
-  return h;
+  const isMobile = Math.min(window.innerWidth, window.innerHeight) <= 768;
+  // Mobil: daha kompakt band (yükseklik azaltıldı)
+  const hRatio = isMobile ? 0.15 : 0.22;
+  const minH   = isMobile ? 80   : 120;
+  return Math.max(Math.round(vh * hRatio), minH);
 }
 
 function getMRZBand(vw, vh) {
@@ -1344,7 +1361,7 @@ function getMRZBand(vw, vh) {
     const visStartY = Math.max(0, (vh - ch / scale) / 2); // dikeyde kırpılan başlangıç
     const visH      = ch / scale;                          // görünen video piksel yüksekliği
 
-    const margin = 0.02; // her yanda %2 boşluk
+    const margin = 0.04; // her yanda %4 boşluk
     w = Math.round(visW * (1 - 2 * margin));
     x = Math.round(visStartX + visW * margin);
     // MRZ bandı görünen alanın alt %25'inde
@@ -2100,6 +2117,28 @@ function onVideoResize() {
 }
 window.addEventListener('resize', onVideoResize);
 window.addEventListener('orientationchange', () => setTimeout(onVideoResize, 200));
+
+// Yatay modda kamerayı durdur, portre dönüşünde yeniden başlat
+(function() {
+  function handleOrientationLock() {
+    const isMobile = Math.min(window.innerWidth, window.innerHeight) <= 768;
+    if (!isMobile) return;
+    const isLandscape = window.innerWidth > window.innerHeight;
+    if (isLandscape && scanning) {
+      stopCamera();
+      window._cameraStoppedForLandscape = true;
+    } else if (!isLandscape && window._cameraStoppedForLandscape) {
+      window._cameraStoppedForLandscape = false;
+      // Kamera ekranındaysak yeniden başlat
+      const scanScreen = document.getElementById('s-scan');
+      if (scanScreen && scanScreen.classList.contains('active')) {
+        setTimeout(startCamera, 400);
+      }
+    }
+  }
+  window.addEventListener('resize', handleOrientationLock);
+  window.addEventListener('orientationchange', () => setTimeout(handleOrientationLock, 300));
+})();
 
 // ── LOG SİSTEMİ ────────────────────────────────────────────────────────
 const MAX_LOGS = 20;
