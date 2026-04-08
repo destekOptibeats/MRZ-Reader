@@ -72,25 +72,29 @@ function stopCamera() {
 }
 
 function getMRZBand(vw, vh) {
-  const isLandscape = vw > vh;
-  const isMobile = window.innerWidth <= 768;
+  // Ekran yönü ve cihaz tespiti — video boyutları değil, ekran boyutları kullanılır.
+  // (Kameralar genellikle her zaman yatay 1280×720 çıktı verir,
+  //  vw>vh kontrolü portre modda yanlış dal seçilmesine neden olur.)
+  const screenIsPortrait = window.innerHeight > window.innerWidth;
+  // Her iki yönde de doğru çalışan mobil tespiti: fiziksel ekranın kısa kenarı ≤768
+  const isMobile = Math.min(window.innerWidth, window.innerHeight) <= 768;
 
   let w, h, x, y;
-  if (isMobile && !isLandscape) {
-    // Mobil dikey (portrait) — MRZ tam genişlik, yanlardan sadece %2 boşluk
+  if (isMobile && screenIsPortrait) {
+    // Mobil dikey (portrait) — tam genişlik, yanlardan sadece %2 boşluk
     w = Math.round(vw * 0.96);
     h = Math.round(vh * 0.20);
     y = Math.round(vh * 0.72);
-  } else if (isMobile && isLandscape) {
+  } else if (isMobile && !screenIsPortrait) {
     // Mobil yatay (landscape)
-    w = Math.round(vw * 0.90);
-    h = Math.round(vh * 0.35);
-    y = Math.round(vh * 0.60);
+    w = Math.round(vw * 0.92);
+    h = Math.round(vh * 0.38);
+    y = Math.round(vh * 0.55);
   } else {
     // Desktop
     w = Math.round(vw * 0.85);
     h = Math.round(vh * 0.25);
-    y = Math.round(vh * 0.72);
+    y = Math.round(vh * 0.78);
   }
 
   x = Math.round((vw - w) / 2);

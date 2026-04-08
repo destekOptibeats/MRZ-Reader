@@ -122,7 +122,8 @@ video{
   display:block;
   background:#000;
 }
-@media (max-width:768px) and (orientation:portrait){
+/* Tüm mobil cihazlarda (portre + yatay) video tam alanı kaplar */
+@media (hover:none) and (pointer:coarse){
   video { object-fit: cover; }
 }
 #cam-overlay{

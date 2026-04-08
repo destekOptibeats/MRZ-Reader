@@ -22,8 +22,9 @@ function getVideoDisplayRect() {
   const vw = video.videoWidth, vh = video.videoHeight;
   if (!cw || !ch || !vw || !vh) return null;
 
-  // Detect cover mode: matches our CSS @media (max-width:768px) and (orientation:portrait)
-  const isCover = window.innerWidth <= 768 && window.innerHeight > window.innerWidth;
+  // Detect cover mode: tüm mobil cihazlar (portre + yatay)
+  // Math.min(w,h) ≤ 768 → kısa kenar bazlı mobil tespiti, her iki yönde çalışır
+  const isCover = Math.min(window.innerWidth, window.innerHeight) <= 768;
 
   let dw, dh, dx, dy;
   if (isCover) {
