@@ -5,7 +5,7 @@
 // These functions must NOT be used by image upload or batch paths.
 // ═══════════════════════════════════════════════════════════════════════
 
-let scanDebugCount = 0;
+// Debug mode: set window._mrzDebug = true in console to enable verbose logging
 let blurSkipCount = 0;
 let lastBlurLogTime = 0;
 
@@ -42,14 +42,12 @@ async function startCamera() {
     });
     await new Promise(r => setTimeout(r, 200));
 
-    console.log('[Camera] ready — videoWidth:', video.videoWidth, 'videoHeight:', video.videoHeight,
-      'readyState:', video.readyState);
+    if (window._mrzDebug) console.log('[MRZ] camera ready', video.videoWidth + 'x' + video.videoHeight, 'state:', video.readyState);
 
     // Safe delayed overlay sizing after layout settles
     requestAnimationFrame(() => resizeOverlay());
 
     scanning = true;
-    scanDebugCount = 0;
     blurSkipCount = 0;
     lastBlurLogTime = 0;
     lastFrameHash = 0;
@@ -245,8 +243,7 @@ async function scanLoop() {
 
   // Adaptive multi-band: try 3 vertical positions, stop early on strong result
   const candidates = getMRZBandCandidates(vw, vh);
-  const isDebug = scanDebugCount < 3;
-  if (isDebug) scanDebugCount++;
+  const isDebug = !!window._mrzDebug;
 
   let bestText = '', bestResult = null, bestScore = -1, bestBandIdx = -1;
 
@@ -270,7 +267,7 @@ async function scanLoop() {
       if (metrics) metrics.blurSkips++;
       const now = Date.now();
       if (now - lastBlurLogTime > 3000) {
-        console.log('[Blur] son 3s: ' + blurSkipCount + ' frame atlandı (toplam: ' + (metrics ? metrics.blurSkips : '?') + ')');
+        if (window._mrzDebug) console.log('[MRZ] blur: ' + blurSkipCount + ' frame skipped (total: ' + (metrics ? metrics.blurSkips : '?') + ')');
         lastBlurLogTime = now;
         blurSkipCount = 0;
       }
@@ -280,23 +277,19 @@ async function scanLoop() {
 
     let text;
     try { text = (await worker.recognize(mainC)).data.text; if (metrics) metrics.attemptedOCR++; }
-    catch(e) { continue; }
+    catch(e) { if (isDebug) console.warn('[MRZ] OCR error band' + (bi+1), e); continue; }
 
     const longest = longestOCRLine(text);
     const score = scoreMRZText(text);
 
-    if (isDebug) {
-      console.log('[ScanDebug] frame', scanDebugCount,
-        'band' + (bi+1), '{y:' + band.y + ' h:' + band.h + '}',
-        'longest:', longest, 'score:', score);
-    }
+    if (isDebug) console.log('[MRZ] band' + (bi+1), '{y:' + band.y + ' h:' + band.h + '}', 'longest:', longest, 'score:', score);
 
     // Priority 1: parse + checksum success → immediate accept
     const result = extractMRZ(clean(text));
     if (result) {
       const validation = validateMRZ(result);
       if (validation.valid) {
-        if (isDebug) console.log('[ScanDebug] frame', scanDebugCount, 'selected: band' + (bi+1), '(parse+checksum success)');
+        if (isDebug) console.log('[MRZ] band' + (bi+1), 'checksum OK score:' + validation.score);
 
         checksumPassed = true;
         const l2 = result.lines[1];
@@ -348,15 +341,9 @@ async function scanLoop() {
 
     // Early exit: longest > 35 → no need to try more bands
     if (longest > 35) {
-      if (isDebug) console.log('[ScanDebug] frame', scanDebugCount, 'early exit at band' + (bi+1), '(longest > 35)');
+      if (isDebug) console.log('[MRZ] early exit band' + (bi+1));
       break;
     }
-  }
-
-  if (isDebug) {
-    console.log('[ScanDebug] frame', scanDebugCount,
-      'selected: band' + (bestBandIdx+1), 'score:', bestScore,
-      'longest:', longestOCRLine(bestText));
   }
 
   // Shadow fallback: if no strong result AND MRZ area is dark, retry with shadow preprocess
@@ -364,7 +351,7 @@ async function scanLoop() {
   const noStrongResult = !bestResult || !validateMRZ(bestResult).valid;
   if (noStrongResult && bestLongest < 28 && bestBandIdx >= 0) {
     const brightness = measureBrightness(mainC);
-    if (isDebug) console.log('[ScanDebug] brightness:', Math.round(brightness), 'shadow fallback:', brightness < 80);
+    if (isDebug) console.log('[MRZ] brightness:', Math.round(brightness), 'shadow:', brightness < 80);
 
     if (brightness < 80) {
       // Show shadow hint (throttled: max once per 3s)
@@ -390,7 +377,7 @@ async function scanLoop() {
         if (metrics) metrics.attemptedOCR++;
         const shadowLongest = longestOCRLine(shadowText);
         const shadowScore = scoreMRZText(shadowText);
-        if (isDebug) console.log('[ScanDebug] shadow fallback: longest:', shadowLongest, 'score:', shadowScore);
+        if (isDebug) console.log('[MRZ] shadow: longest:', shadowLongest, 'score:', shadowScore);
 
         // Use shadow result if better
         if (shadowScore > bestScore) {

@@ -156,9 +156,7 @@ function makeSerialKey(parsed) {
 // ocrMeta: { ocrText, bandIdx, ocrAttempts } — optional, for analysis
 function addSerialResult(mrzResult, ocrMeta) {
   ocrMeta = ocrMeta || {};
-  // Debug: log video-wrap size before UI updates (first 5 scans)
   const _wrap = document.getElementById('video-wrap');
-  if (serialCount < 5) console.log('[SizeDebug] BEFORE addSerialResult #' + (serialCount+1), _wrap.offsetWidth + 'x' + _wrap.offsetHeight);
 
   const parsed = parseResult(mrzResult);
   const mrzName = MRZCore.parseMRZName(mrzResult);
@@ -278,8 +276,6 @@ function addSerialResult(mrzResult, ocrMeta) {
   drawOverlayState('accepted');
   setTimeout(() => { if (scanning) drawOverlayState('searching'); }, 800);
 
-  // Debug: log video-wrap size after UI updates
-  if (serialCount <= 5) console.log('[SizeDebug] AFTER addSerialResult #' + serialCount, _wrap.offsetWidth + 'x' + _wrap.offsetHeight);
 
   // Cooldown başlat
   startSerialCooldown();

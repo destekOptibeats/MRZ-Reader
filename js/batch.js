@@ -227,15 +227,11 @@ function batchPreprocessMRZ(srcCanvas) {
 
   ctx.putImageData(imgData, 0, 0);
 
-  // Validation: log pixel health
+  // Validation: log pixel health in debug mode
   const totalPixels = sw * sh;
-  const pct = ((nonZero / totalPixels) * 100).toFixed(1);
-  console.log('[Preprocess]', sw + 'x' + sh, 'non-zero:', nonZero + '/' + totalPixels, '(' + pct + '%)');
-  if (nonZero < totalPixels * 0.01) {
-    console.warn('[Preprocess] WARNING: almost all pixels are black — image may be too dark');
-  }
-  if (nonZero > totalPixels * 0.99) {
-    console.warn('[Preprocess] WARNING: almost all pixels are white — image may be too bright');
+  if (window._mrzDebug) {
+    const pct = ((nonZero / totalPixels) * 100).toFixed(1);
+    console.log('[MRZ] preprocess', sw + 'x' + sh, 'non-zero:', pct + '%');
   }
 
   return c;
@@ -312,7 +308,7 @@ async function fastBatchOCR(resized, timings, ocrWorker, fileName, fileIndex) {
   const rotations = [0, 90, 180, 270];
 
   timings.resizedSize = resized.width + 'x' + resized.height;
-  console.log('[BatchOCR]', fileName || '', 'resized:', resized.width, 'x', resized.height);
+  if (window._mrzDebug) console.log('[MRZ] batch', fileName || '', resized.width + 'x' + resized.height);
 
   const isLandscape = resized.width > resized.height;
   const crops = [
@@ -333,12 +329,7 @@ async function fastBatchOCR(resized, timings, ocrWorker, fileName, fileIndex) {
     const cropped = ratio >= 1.0 ? resized : batchCropBottom(resized, ratio);
     if (i === 0) timings.crop = Math.round(performance.now() - t);
 
-    console.log('[BatchOCR] crop attempt', i+1, 'size:', cropped.width + 'x' + cropped.height);
-
-    if (cropped.width <= 100 || cropped.height <= 100) {
-      console.warn('[BatchOCR] crop attempt', i+1, 'SKIPPED: too small');
-      continue;
-    }
+    if (cropped.width <= 100 || cropped.height <= 100) continue;
 
     // Try all rotations, collect scores
     bestScore = -1; bestText = ''; bestDeg = 0;
@@ -357,10 +348,7 @@ async function fastBatchOCR(resized, timings, ocrWorker, fileName, fileIndex) {
         const longest = longestOCRLine(text);
         const chevrons = countChevrons(text);
 
-        if (isFirstFile) {
-          console.log('[BatchOCR] crop', i+1, 'rot', deg + '°',
-            '→ longest:', longest, '<count:', chevrons, 'score:', score);
-        }
+        if (window._mrzDebug && isFirstFile) console.log('[MRZ] batch crop' + (i+1), deg + '°', 'longest:', longest, 'score:', score);
 
         // Immediate success: try parse+checksum on promising results
         if (longest >= 28) {
@@ -368,7 +356,6 @@ async function fastBatchOCR(resized, timings, ocrWorker, fileName, fileIndex) {
           if (result && validateMRZ(result).valid) {
             timings[attemptKey] = Math.round(performance.now() - t);
             timings['sz' + (i+1)] = ocrInput.width + 'x' + ocrInput.height;
-            console.log('[BatchOCR] SUCCESS at crop', i+1, 'rot', deg + '°');
             return { extracted: result, diag: diagnoseMRZ(text), attempts: i + 1,
               longestLine: longest, chevronCount: chevrons, rawOcrText: text,
               selectedBand: 'crop' + (i+1) + '/rot' + deg };
@@ -381,20 +368,15 @@ async function fastBatchOCR(resized, timings, ocrWorker, fileName, fileIndex) {
           bestDeg = deg;
         }
       } catch(e) {
-        if (isFirstFile) console.error('[BatchOCR] rot', deg + '° error:', e.message);
+        if (window._mrzDebug) console.warn('[MRZ] batch rot', deg + '° error:', e.message);
       }
     }
     timings[attemptKey] = Math.round(performance.now() - t);
-
-    if (isFirstFile) {
-      console.log('[BatchOCR] crop', i+1, 'best rotation:', bestDeg + '°', 'score:', bestScore);
-    }
 
     // Try parse on best rotation result
     if (bestText && longestOCRLine(bestText) >= 28) {
       const result = extractMRZ(clean(bestText));
       if (result && validateMRZ(result).valid) {
-        console.log('[BatchOCR] SUCCESS (best rot) at crop', i+1, 'rot', bestDeg + '°');
         return { extracted: result, diag: diagnoseMRZ(bestText), attempts: i + 1,
           longestLine: longestOCRLine(bestText), chevronCount: countChevrons(bestText),
           rawOcrText: bestText, selectedBand: 'crop' + (i+1) + '/rot' + bestDeg };
