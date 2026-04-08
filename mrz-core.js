@@ -333,8 +333,15 @@
     if (!cs.passOk) errors.push('Pasaport/Belge No checksum hatası (beklenen: ' + cs.passExpected + ', bulunan: ' + cs.passFound + ')');
     if (!cs.dobOk)  errors.push('Doğum tarihi checksum hatası (beklenen: ' + cs.dobExpected + ', bulunan: ' + cs.dobFound + ')');
     if (!cs.expOk)  errors.push('Geçerlilik tarihi checksum hatası (beklenen: ' + cs.expExpected + ', bulunan: ' + cs.expFound + ')');
-    const valid = cs.passOk || (cs.dobOk && cs.expOk);
-    return { valid, errors, checksums: cs };
+    // Weighted scoring: passOk=40, dobOk=30, expOk=20, compOk=10 (TD3 only)
+    const score =
+      (cs.passOk ? 40 : 0) +
+      (cs.dobOk  ? 30 : 0) +
+      (cs.expOk  ? 20 : 0) +
+      (cs.compOk ? 10 : 0);
+    // Accept if score >= 70: requires passOk+(dobOk or expOk), or dobOk+expOk+compOk
+    const valid = score >= 70;
+    return { valid, score, errors, checksums: cs };
   }
 
   // ── DIAGNOSE MRZ ─────────────────────────────────────────────────────
