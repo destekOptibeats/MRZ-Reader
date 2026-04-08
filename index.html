@@ -874,7 +874,7 @@ function addSerialResult(mrzResult, ocrMeta) {
   // Kısa görsel geri bildirim
   setHint('✓ ' + displayName + ' okundu', 'ok');
   drawOverlayState('accepted');
-  setTimeout(() => { if (scanning) drawOverlayState('searching'); }, 800);
+  setTimeout(() => { drawOverlayState('searching'); }, 800);
 
 
   // Cooldown başlat
@@ -889,9 +889,13 @@ function startSerialCooldown() {
   serialCooldownTimer = setTimeout(() => {
     serialCooldown = false;
     serialCooldownTimer = null;
-    if (scanning) {
+    if (serialMode) {
       setHint('📏 MRZ satırlarını çerçeveye hizalayın', '');
       drawOverlayState('searching');
+      if (!scanning) {
+        // Kamera yanlışlıkla durduysa yeniden başlat
+        startCamera();
+      }
     }
   }, 1000);
 }
@@ -2124,7 +2128,7 @@ window.addEventListener('orientationchange', () => setTimeout(onVideoResize, 200
     const isMobile = Math.min(window.innerWidth, window.innerHeight) <= 768;
     if (!isMobile) return;
     const isLandscape = window.innerWidth > window.innerHeight;
-    if (isLandscape && scanning) {
+    if (isLandscape && scanning && !serialMode) {
       stopCamera();
       window._cameraStoppedForLandscape = true;
     } else if (!isLandscape && window._cameraStoppedForLandscape) {
