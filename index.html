@@ -1270,29 +1270,31 @@ function resizeOverlay() {
   }
 }
 
-// Calculate where the video actually displays inside the container (object-fit:contain letterbox)
+// Calculate where the video actually displays inside the container.
+// Handles object-fit:contain (letterbox) and object-fit:cover (fill+clip).
 function getVideoDisplayRect() {
   const wrap = document.getElementById('video-wrap');
   const cw = wrap.offsetWidth, ch = wrap.offsetHeight;
   const vw = video.videoWidth, vh = video.videoHeight;
   if (!cw || !ch || !vw || !vh) return null;
 
-  const containerAR = cw / ch;
-  const videoAR = vw / vh;
-
+  // Cover mode: tüm mobil cihazlar (fiziksel kısa kenar ≤768px)
+  const isCover = Math.min(window.innerWidth, window.innerHeight) <= 768;
   let dw, dh, dx, dy;
-  if (videoAR > containerAR) {
-    // Video wider than container → letterbox top/bottom
-    dw = cw;
-    dh = cw / videoAR;
-    dx = 0;
-    dy = (ch - dh) / 2;
+  if (isCover) {
+    // scale = en büyük faktör → container tamamen dolar, taşan kısım kırpılır
+    const scale = Math.max(cw / vw, ch / vh);
+    dw = vw * scale; dh = vh * scale;
+    dx = (cw - dw) / 2; dy = (ch - dh) / 2;
   } else {
-    // Video taller than container → letterbox left/right
-    dh = ch;
-    dw = ch * videoAR;
-    dx = (cw - dw) / 2;
-    dy = 0;
+    const containerAR = cw / ch, videoAR = vw / vh;
+    if (videoAR > containerAR) {
+      // Video wider → letterbox top/bottom
+      dw = cw; dh = cw / videoAR; dx = 0; dy = (ch - dh) / 2;
+    } else {
+      // Video taller → letterbox left/right
+      dh = ch; dw = ch * videoAR; dx = (cw - dw) / 2; dy = 0;
+    }
   }
   return { dx, dy, dw, dh, sx: dw / vw, sy: dh / vh };
 }
@@ -1326,29 +1328,73 @@ function getMRZBandSize(vh) {
 }
 
 function getMRZBand(vw, vh) {
-  const w = Math.round(vw * 0.94);
+  const isMobile = Math.min(window.innerWidth, window.innerHeight) <= 768;
   const h = getMRZBandSize(vh);
-  let x = Math.round((vw - w) / 2);
-  let y = Math.round(vh * 0.60 - h / 2);
-  // Clamp within video bounds
+  let w, x, y;
+
+  if (isMobile) {
+    // Cover modu: kamera her zaman landscape frame üretir (örn. 1280×720).
+    // Ekranda gerçekten görünen video piksel bölgesini hesapla.
+    const wrap = document.getElementById('video-wrap');
+    const cw = wrap ? wrap.offsetWidth  : window.innerWidth;
+    const ch = wrap ? wrap.offsetHeight : window.innerHeight;
+    const scale     = Math.max(cw / vw, ch / vh);
+    const visStartX = Math.max(0, (vw - cw / scale) / 2); // yatayda kırpılan başlangıç
+    const visW      = cw / scale;                          // görünen video piksel genişliği
+    const visStartY = Math.max(0, (vh - ch / scale) / 2); // dikeyde kırpılan başlangıç
+    const visH      = ch / scale;                          // görünen video piksel yüksekliği
+
+    const margin = 0.02; // her yanda %2 boşluk
+    w = Math.round(visW * (1 - 2 * margin));
+    x = Math.round(visStartX + visW * margin);
+    // MRZ bandı görünen alanın alt %25'inde
+    y = Math.round(visStartY + visH * 0.75 - h / 2);
+  } else {
+    // Desktop: %85 genişlik, band merkezi %78'de (daha aşağıda)
+    w = Math.round(vw * 0.85);
+    x = Math.round((vw - w) / 2);
+    y = Math.round(vh * 0.78 - h / 2);
+  }
+
+  // Sınır güvenliği
   if (x < 0) x = 0;
   if (y < 0) y = 0;
-  if (x + w > vw) x = vw - w;
+  if (x + w > vw) w = vw - x;
   if (y + h > vh) y = vh - h;
   return { x, y, w, h };
 }
 
 // 3 candidate bands at different vertical positions for adaptive detection
 function getMRZBandCandidates(vw, vh) {
-  const w = Math.round(vw * 0.94);
+  const isMobile = Math.min(window.innerWidth, window.innerHeight) <= 768;
   const h = getMRZBandSize(vh);
-  const positions = [0.55, 0.65, 0.75];
+  let baseX, baseW, visStartY, visH;
+
+  if (isMobile) {
+    const wrap = document.getElementById('video-wrap');
+    const cw = wrap ? wrap.offsetWidth  : window.innerWidth;
+    const ch = wrap ? wrap.offsetHeight : window.innerHeight;
+    const scale     = Math.max(cw / vw, ch / vh);
+    const visStartX = Math.max(0, (vw - cw / scale) / 2);
+    const visW      = cw / scale;
+    visStartY       = Math.max(0, (vh - ch / scale) / 2);
+    visH            = ch / scale;
+    baseW = Math.round(visW * 0.96);
+    baseX = Math.round(visStartX + visW * 0.02);
+  } else {
+    visStartY = 0; visH = vh;
+    baseW = Math.round(vw * 0.85);
+    baseX = Math.round((vw - baseW) / 2);
+  }
+
+  // 3 aday: görünen alanın alt bölgesinde kaydırmalı pozisyonlar
+  const positions = isMobile ? [0.65, 0.75, 0.85] : [0.60, 0.72, 0.82];
   return positions.map(p => {
-    let x = Math.round((vw - w) / 2);
-    let y = Math.round(vh * p - h / 2);
+    let x = baseX, w = baseW;
+    let y = Math.round(visStartY + visH * p - h / 2);
     if (x < 0) x = 0;
     if (y < 0) y = 0;
-    if (x + w > vw) x = vw - w;
+    if (x + w > vw) w = vw - x;
     if (y + h > vh) y = vh - h;
     return { x, y, w, h };
   });
