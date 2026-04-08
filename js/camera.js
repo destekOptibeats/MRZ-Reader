@@ -8,6 +8,7 @@
 // Debug mode: set window._mrzDebug = true in console to enable verbose logging
 let blurSkipCount = 0;
 let lastBlurLogTime = 0;
+let scanBusy = false; // Mutex: prevents concurrent scanLoop instances during await
 
 async function startCamera() {
   if (stream) return;
@@ -54,6 +55,7 @@ async function startCamera() {
     lastL2 = null;
     l2Count = 0;
     checksumPassed = false;
+    scanBusy = false;
     resetMetrics();
     setHint('MRZ satırlarını kutuya hizalayın');
     drawOverlayState('searching');
@@ -75,10 +77,10 @@ function getMRZBand(vw, vh) {
 
   let w, h, x, y;
   if (isMobile && !isLandscape) {
-    // Mobil dikey (portrait) — MRZ target zone, lower area
-    w = Math.round(vw * 0.92);
+    // Mobil dikey (portrait) — MRZ target zone, narrower + lower
+    w = Math.round(vw * 0.87);
     h = Math.round(vh * 0.20);
-    y = Math.round(vh * 0.70);
+    y = Math.round(vh * 0.72);
   } else if (isMobile && isLandscape) {
     // Mobil yatay (landscape)
     w = Math.round(vw * 0.90);
@@ -222,14 +224,22 @@ let _lastShadowHintTime = 0;
 // ── SCAN LOOP ───────────────────────────────────────────────────────────
 const SCAN_INTERVAL = 250;
 
+// Releases the scan mutex and schedules next iteration
+function scheduleScan(delayMs) {
+  scanBusy = false;
+  setTimeout(scanLoop, delayMs);
+}
+
 async function scanLoop() {
   if (!scanning || !workerReady) return;
+  if (scanBusy) return; // Prevent concurrent instances during OCR await
+  scanBusy = true;
   // Serial cooldown — skip OCR but keep camera running
-  if (serialCooldown) { setTimeout(scanLoop, 300); return; }
+  if (serialCooldown) { scheduleScan(300); return; }
   const vw = video.videoWidth, vh = video.videoHeight;
   if (!vw || !vh) {
     setHint('Kamera hazırlanıyor...', 'warn');
-    setTimeout(scanLoop, 500); return;
+    scheduleScan(500); return;
   }
 
   // Frame hash uses wider zone for motion detection
@@ -237,7 +247,7 @@ async function scanLoop() {
   const hash = getFrameHash(z);
   if (Math.abs(hash - lastFrameHash) < 5000 && !checksumPassed) {
     if (metrics) metrics.motionSkips++;
-    setTimeout(scanLoop, SCAN_INTERVAL); return;
+    scheduleScan(SCAN_INTERVAL); return;
   }
   lastFrameHash = hash;
 
@@ -272,7 +282,7 @@ async function scanLoop() {
         blurSkipCount = 0;
       }
       drawOverlayState('blurry');
-      setTimeout(scanLoop, SCAN_INTERVAL); return;
+      scheduleScan(SCAN_INTERVAL); return;
     }
 
     let text;
@@ -295,7 +305,8 @@ async function scanLoop() {
         const l2 = result.lines[1];
         if (l2 === lastL2) l2Count++; else { lastL2 = l2; l2Count = 1; }
 
-        if (l2Count >= 2) {
+        const requiredL2 = validation.strong ? 2 : 3; // STRONG=2x, VALID=3x
+        if (l2Count >= requiredL2) {
           drawOverlayState('accepted');
           if (metrics) {
             metrics.acceptedOCR++;
@@ -306,7 +317,7 @@ async function scanLoop() {
             metrics.bandHits[bname] = (metrics.bandHits[bname] || 0) + 1;
           }
           const diag = diagnoseMRZ(text);
-          addLog('ok', `${result.type} → KABUL`, [
+          addLog('ok', `${result.type} → KABUL (${validation.level})`, [
             `L2: ${l2}`,
             `band: ${BAND_NAMES[bi] || bi} | score: ${score} | l2Count: ${l2Count}`,
             `OCR: ${metrics ? metrics.attemptedOCR : '?'} | blur: ${metrics ? metrics.blurSkips : '?'} | motion: ${metrics ? metrics.motionSkips : '?'}`,
@@ -325,13 +336,14 @@ async function scanLoop() {
           if (typeof setDocType === 'function') setDocType(camSummary, result);
           if (typeof enrichRunSummary === 'function') enrichRunSummary(camSummary);
           window._lastSummary = camSummary;
-          if (serialMode) { addSerialResult(result, { ocrText: text, bandIdx: bi, ocrAttempts: bi + 1 }); setTimeout(scanLoop, 500); return; }
+          if (serialMode) { addSerialResult(result, { ocrText: text, bandIdx: bi, ocrAttempts: bi + 1 }); scheduleScan(500); return; }
+          scanBusy = false;
           setTimeout(() => { stopCamera(); saveAndShow(result); }, 250);
           return;
         }
 
         drawOverlayState('confirming');
-        setTimeout(scanLoop, SCAN_INTERVAL);
+        scheduleScan(SCAN_INTERVAL);
         return;
       }
     }
@@ -389,7 +401,8 @@ async function scanLoop() {
               checksumPassed = true;
               const l2 = shadowResult.lines[1];
               if (l2 === lastL2) l2Count++; else { lastL2 = l2; l2Count = 1; }
-              if (l2Count >= 2) {
+              const requiredL2Shadow = sv.strong ? 2 : 3; // STRONG=2x, VALID=3x
+              if (l2Count >= requiredL2Shadow) {
                 drawOverlayState('accepted');
                 if (metrics) {
                   metrics.acceptedOCR++;
@@ -400,7 +413,7 @@ async function scanLoop() {
                   metrics.bandHits[bname] = (metrics.bandHits[bname] || 0) + 1;
                 }
                 const diag = diagnoseMRZ(shadowText);
-                addLog('ok', `${shadowResult.type} → KABUL (shadow)`, [
+                addLog('ok', `${shadowResult.type} → KABUL shadow (${sv.level})`, [
                   `L2: ${l2}`,
                   `band: ${BAND_NAMES[bestBandIdx] || bestBandIdx} | score: ${shadowScore} | l2Count: ${l2Count}`,
                   `OCR: ${metrics ? metrics.attemptedOCR : '?'} | blur: ${metrics ? metrics.blurSkips : '?'} | motion: ${metrics ? metrics.motionSkips : '?'}`,
@@ -414,12 +427,13 @@ async function scanLoop() {
                   winner: { rotation: 0, region: 0, method: 'camera-shadow-' + (BAND_NAMES[bestBandIdx] || bestBandIdx) },
                   durationMs: metrics && metrics.firstLockMs ? metrics.firstLockMs : 0
                 };
-                if (serialMode) { addSerialResult(shadowResult, { ocrText: shadowText, bandIdx: bestBandIdx, ocrAttempts: candidates.length + 1 }); setTimeout(scanLoop, 500); return; }
+                if (serialMode) { addSerialResult(shadowResult, { ocrText: shadowText, bandIdx: bestBandIdx, ocrAttempts: candidates.length + 1 }); scheduleScan(500); return; }
+                scanBusy = false;
                 setTimeout(() => { stopCamera(); saveAndShow(shadowResult); }, 250);
                 return;
               }
               drawOverlayState('confirming');
-              setTimeout(scanLoop, SCAN_INTERVAL);
+              scheduleScan(SCAN_INTERVAL);
               return;
             }
             bestResult = shadowResult;
@@ -441,7 +455,7 @@ async function scanLoop() {
     drawOverlayState('searching');
   }
 
-  setTimeout(scanLoop, SCAN_INTERVAL);
+  scheduleScan(SCAN_INTERVAL);
 }
 
 // ── HINT ────────────────────────────────────────────────────────────────

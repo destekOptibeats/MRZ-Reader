@@ -333,15 +333,29 @@
     if (!cs.passOk) errors.push('Pasaport/Belge No checksum hatası (beklenen: ' + cs.passExpected + ', bulunan: ' + cs.passFound + ')');
     if (!cs.dobOk)  errors.push('Doğum tarihi checksum hatası (beklenen: ' + cs.dobExpected + ', bulunan: ' + cs.dobFound + ')');
     if (!cs.expOk)  errors.push('Geçerlilik tarihi checksum hatası (beklenen: ' + cs.expExpected + ', bulunan: ' + cs.expFound + ')');
-    // Weighted scoring: passOk=40, dobOk=30, expOk=20, compOk=10 (TD3 only)
+    // Rule-based tier: passOk is a hard prerequisite gate
+    // additionalSignals = count of {dobOk, expOk, compOk} that are true
+    // >= 2 → STRONG (accept on 2 consistent reads)
+    // == 1 → VALID  (accept on 3 consistent reads)
+    // == 0 → REJECT (even if passOk, not enough corroboration)
+    const additionalSignals = [cs.dobOk, cs.expOk, cs.compOk].filter(Boolean).length;
+    let level, valid, strong;
+    if (!cs.passOk) {
+      level = 'reject'; valid = false; strong = false;
+    } else if (additionalSignals >= 2) {
+      level = 'strong'; valid = true; strong = true;
+    } else if (additionalSignals === 1) {
+      level = 'valid'; valid = true; strong = false;
+    } else {
+      level = 'reject'; valid = false; strong = false;
+    }
+    // score field kept for backward compatibility and debug logging
     const score =
       (cs.passOk ? 40 : 0) +
       (cs.dobOk  ? 30 : 0) +
       (cs.expOk  ? 20 : 0) +
       (cs.compOk ? 10 : 0);
-    // Accept if score >= 70: requires passOk+(dobOk or expOk), or dobOk+expOk+compOk
-    const valid = score >= 70;
-    return { valid, score, errors, checksums: cs };
+    return { valid, strong, level, score, errors, checksums: cs };
   }
 
   // ── DIAGNOSE MRZ ─────────────────────────────────────────────────────

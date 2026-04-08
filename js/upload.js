@@ -276,6 +276,210 @@ async function uploadTryRecognize(canvas, acc, ocrWorker, meta) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// PHASE 0: CONTOUR-BASED DOCUMENT DETECTION + PERSPECTIVE WARP
+// Detect the document boundary as a 4-point quad, then warp the MRZ
+// strip to a rectified rectangle before OCR.
+// Fallback: returns null → caller uses existing rotation pipeline.
+// ═══════════════════════════════════════════════════════════════════════
+
+// Detect document as largest convex quad in the image.
+// Returns { corners: [{x,y}×4] } or null if detection fails.
+function detectDocumentQuad(canvas) {
+  var w = canvas.width, h = canvas.height;
+  var ctx = canvas.getContext('2d', { willReadFrequently: true });
+  var imgData = ctx.getImageData(0, 0, w, h);
+  var d = imgData.data;
+
+  // Grayscale + Sobel edge magnitude
+  var gray = new Uint8Array(w * h);
+  for (var i = 0; i < w * h; i++) {
+    gray[i] = Math.round(0.299 * d[i*4] + 0.587 * d[i*4+1] + 0.114 * d[i*4+2]);
+  }
+  var edge = new Uint8Array(w * h);
+  for (var y = 1; y < h - 1; y++) {
+    for (var x = 1; x < w - 1; x++) {
+      var gx = -gray[(y-1)*w+(x-1)] + gray[(y-1)*w+(x+1)]
+               - 2*gray[y*w+(x-1)]  + 2*gray[y*w+(x+1)]
+               - gray[(y+1)*w+(x-1)] + gray[(y+1)*w+(x+1)];
+      var gy = -gray[(y-1)*w+(x-1)] - 2*gray[(y-1)*w+x] - gray[(y-1)*w+(x+1)]
+               + gray[(y+1)*w+(x-1)] + 2*gray[(y+1)*w+x] + gray[(y+1)*w+(x+1)];
+      var mag = Math.min(255, Math.sqrt(gx*gx + gy*gy));
+      edge[y*w+x] = mag > 30 ? 255 : 0;
+    }
+  }
+
+  // Find bounding box of largest connected edge region (approximate quad)
+  // Strategy: scan quadrants to find extreme points — top-left, top-right, bottom-left, bottom-right
+  var minX = w, minY = h, maxX = 0, maxY = 0;
+  var edgeCount = 0;
+  for (var y = 0; y < h; y++) {
+    for (var x = 0; x < w; x++) {
+      if (edge[y*w+x]) {
+        edgeCount++;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+
+  // Minimum edge coverage: document must fill at least 30% of frame
+  var quadW = maxX - minX, quadH = maxY - minY;
+  if (quadW < w * 0.30 || quadH < h * 0.30) return null;
+
+  // Aspect ratio check: passport ~1.42:1, TD1 card ~1.58:1 — allow [1.1, 2.5]
+  var aspect = quadW / Math.max(quadH, 1);
+  if (aspect < 1.1 || aspect > 2.5) return null;
+
+  // Refine corners by finding extreme points in each quadrant
+  var cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  var tl = { x: maxX, y: maxY }, tr = { x: minX, y: maxY };
+  var bl = { x: maxX, y: minY }, br = { x: minX, y: minY };
+
+  for (var y = 0; y < h; y++) {
+    for (var x = 0; x < w; x++) {
+      if (!edge[y*w+x]) continue;
+      if (x <= cx && y <= cy) { // top-left quadrant
+        if (x + y < tl.x + tl.y) { tl.x = x; tl.y = y; }
+      } else if (x > cx && y <= cy) { // top-right quadrant
+        if (-x + y < -tr.x + tr.y) { tr.x = x; tr.y = y; }
+      } else if (x <= cx && y > cy) { // bottom-left quadrant
+        if (x - y < bl.x - bl.y) { bl.x = x; bl.y = y; }
+      } else { // bottom-right quadrant
+        if (-x - y < -br.x - br.y) { br.x = x; br.y = y; }
+      }
+    }
+  }
+
+  return { corners: [tl, tr, br, bl] };
+}
+
+// Compute the homography matrix H (3x3) from 4 source to 4 destination points.
+// Returns a flat 9-element array (row-major).
+function computeHomography(src, dst) {
+  // Build 8x8 matrix A and vector b for the 8 equations
+  var A = [], b = [];
+  for (var i = 0; i < 4; i++) {
+    var sx = src[i].x, sy = src[i].y;
+    var dx = dst[i].x, dy = dst[i].y;
+    A.push([sx, sy, 1, 0, 0, 0, -dx*sx, -dx*sy]);
+    A.push([0, 0, 0, sx, sy, 1, -dy*sx, -dy*sy]);
+    b.push(dx);
+    b.push(dy);
+  }
+  // Gaussian elimination
+  var n = 8;
+  for (var col = 0; col < n; col++) {
+    var pivotRow = col;
+    var pivotVal = Math.abs(A[col][col]);
+    for (var row = col + 1; row < n; row++) {
+      if (Math.abs(A[row][col]) > pivotVal) { pivotVal = Math.abs(A[row][col]); pivotRow = row; }
+    }
+    var tmp = A[col]; A[col] = A[pivotRow]; A[pivotRow] = tmp;
+    var tmpb = b[col]; b[col] = b[pivotRow]; b[pivotRow] = tmpb;
+    for (var row = col + 1; row < n; row++) {
+      var factor = A[row][col] / A[col][col];
+      for (var c = col; c < n; c++) A[row][c] -= factor * A[col][c];
+      b[row] -= factor * b[col];
+    }
+  }
+  var h = new Array(n);
+  for (var i = n - 1; i >= 0; i--) {
+    h[i] = b[i];
+    for (var j = i + 1; j < n; j++) h[i] -= A[i][j] * h[j];
+    h[i] /= A[i][i];
+  }
+  return [h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 1];
+}
+
+// Warp the MRZ strip from a perspectivelly distorted document.
+// corners: [tl, tr, br, bl] from detectDocumentQuad
+// docType: 'TD3' (bottom 28%) or 'TD1' (bottom 36%)
+// Returns an HTMLCanvasElement containing the rectified MRZ strip.
+function warpMRZStrip(srcCanvas, corners, docType) {
+  var stripRatio = docType === 'TD1' ? 0.36 : 0.28;
+  var tl = corners[0], tr = corners[1], br = corners[2], bl = corners[3];
+
+  // Document width/height estimates from corners
+  var docW = Math.round((Math.hypot(tr.x-tl.x, tr.y-tl.y) + Math.hypot(br.x-bl.x, br.y-bl.y)) / 2);
+  var docH = Math.round((Math.hypot(bl.x-tl.x, bl.y-tl.y) + Math.hypot(br.x-tr.x, br.y-tr.y)) / 2);
+  var stripH = Math.round(docH * stripRatio);
+
+  // Target rect: full document width, bottom strip height
+  var outW = Math.max(docW, 200), outH = Math.max(stripH, 40);
+  var out = document.createElement('canvas');
+  out.width = outW; out.height = outH;
+  var outCtx = out.getContext('2d');
+
+  // Source quad: map to bottom strip of document
+  // bottom strip top = (1-stripRatio) * docH from the top of the document
+  var t = 1 - stripRatio;
+  var srcStrip = [
+    { x: tl.x + (bl.x - tl.x) * t, y: tl.y + (bl.y - tl.y) * t }, // strip top-left
+    { x: tr.x + (br.x - tr.x) * t, y: tr.y + (br.y - tr.y) * t }, // strip top-right
+    { x: br.x, y: br.y },                                            // strip bottom-right
+    { x: bl.x, y: bl.y },                                            // strip bottom-left
+  ];
+  var dstStrip = [
+    { x: 0,    y: 0 },
+    { x: outW, y: 0 },
+    { x: outW, y: outH },
+    { x: 0,    y: outH },
+  ];
+
+  // Compute inverse homography (dst → src) for bilinear sampling
+  var H = computeHomography(dstStrip, srcStrip);
+  var srcImgData = srcCanvas.getContext('2d', { willReadFrequently: true })
+                             .getImageData(0, 0, srcCanvas.width, srcCanvas.height);
+  var sd = srcImgData.data;
+  var sw = srcCanvas.width, sh = srcCanvas.height;
+  var outImgData = outCtx.createImageData(outW, outH);
+  var od = outImgData.data;
+
+  for (var dy = 0; dy < outH; dy++) {
+    for (var dx = 0; dx < outW; dx++) {
+      var w3 = H[6]*dx + H[7]*dy + H[8];
+      var sx = (H[0]*dx + H[1]*dy + H[2]) / w3;
+      var sy = (H[3]*dx + H[4]*dy + H[5]) / w3;
+
+      // Bilinear interpolation
+      var x0 = Math.floor(sx), y0 = Math.floor(sy);
+      var x1 = x0 + 1, y1 = y0 + 1;
+      var fx = sx - x0, fy = sy - y0;
+      if (x0 < 0 || y0 < 0 || x1 >= sw || y1 >= sh) {
+        var oi = (dy * outW + dx) * 4;
+        od[oi] = od[oi+1] = od[oi+2] = 255; od[oi+3] = 255;
+        continue;
+      }
+      var i00 = (y0*sw+x0)*4, i10 = (y0*sw+x1)*4;
+      var i01 = (y1*sw+x0)*4, i11 = (y1*sw+x1)*4;
+      var oi = (dy * outW + dx) * 4;
+      for (var ch = 0; ch < 3; ch++) {
+        od[oi+ch] = Math.round(
+          sd[i00+ch]*(1-fx)*(1-fy) + sd[i10+ch]*fx*(1-fy) +
+          sd[i01+ch]*(1-fx)*fy     + sd[i11+ch]*fx*fy
+        );
+      }
+      od[oi+3] = 255;
+    }
+  }
+  outCtx.putImageData(outImgData, 0, 0);
+
+  // Upscale if strip is too short for Tesseract
+  if (outH < 80) {
+    var scale = Math.ceil(80 / outH);
+    var big = document.createElement('canvas');
+    big.width = outW * scale; big.height = outH * scale;
+    var bigCtx = big.getContext('2d');
+    bigCtx.imageSmoothingEnabled = false;
+    bigCtx.drawImage(out, 0, 0, big.width, big.height);
+    return big;
+  }
+  return out;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // PHASE 1: OCR-FREE ROTATION RANKING
 // Pixel analysis at 4 rotations — rank by MRZ-likeness score
 // Signals: horizontal projection density, row variance, gradient strength
@@ -1025,6 +1229,37 @@ async function processImage(img) {
   window._debugAttempts = [];
   clearLiveLog();
   logStep('[START] mode=single-upload size=' + img.naturalWidth + 'x' + img.naturalHeight);
+
+  // ── 0. Contour detection + perspective warp (Phase 0) ─────────────
+  procMsg.textContent = 'Belge kenarı aranıyor…';
+  try {
+    var thumb0 = uploadMakeCanvas(img, 0, 800);
+    var quad = detectDocumentQuad(thumb0);
+    if (quad) {
+      logStep('[QUAD] status=detected corners=' + quad.corners.map(function(c) { return Math.round(c.x) + ',' + Math.round(c.y); }).join(' '));
+      var acc0 = { td1_l1: [], td1_l2: [], td1_l3: [], td3_l1: [], td3_l2: [] };
+      var docTypes = ['TD3', 'TD1'];
+      for (var qi = 0; qi < docTypes.length; qi++) {
+        if (processingCancelled) return;
+        var dt = docTypes[qi];
+        var strip = warpMRZStrip(thumb0, quad.corners, dt);
+        var eStrip = uploadPreprocess(strip);
+        ctx.ocrCount++; ctx.summary.totalOCR++;
+        var qr = await uploadTryRecognize(eStrip, acc0, null, { rotation: 0, method: 'quad-warp-' + dt, region: 'quad', preprocess: 'enhanced' });
+        logStep('[QUAD] docType=' + dt + ' result=' + (qr ? 'SUCCESS' : 'FAIL'));
+        if (qr) {
+          ctx.summary.selectedRotations = [0];
+          handleOCRSuccess({ result: qr, method: 'quad-warp-' + dt, region: 0, bandIdx: -1 }, 0, ctx);
+          return;
+        }
+      }
+      logStep('[QUAD] status=ocr_failed fallback=rotation_pipeline');
+    } else {
+      logStep('[QUAD] status=not_detected fallback=rotation_pipeline');
+    }
+  } catch(e) {
+    logStep('[QUAD] status=error err=' + e.message);
+  }
 
   // ── 1. Try 0° first (most photos are upright) ──────────────────────
   procMsg.textContent = '0° deneniyor…';
