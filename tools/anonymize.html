@@ -268,6 +268,38 @@
     };
   }
 
+  // ── DATE HELPERS ─────────────────────────────────────────────────────────────
+
+  // Convert YYMMDD to "DD.MM.YYYY" display format
+  function formatDateDisplay(yymmdd) {
+    if (!yymmdd || yymmdd.length !== 6) return yymmdd || '';
+    const yy = yymmdd.substring(0,2);
+    const mm = yymmdd.substring(2,4);
+    const dd = yymmdd.substring(4,6);
+    const yyyy = (parseInt(yy, 10) > 30 ? '19' : '20') + yy;
+    return dd + '.' + mm + '.' + yyyy;
+  }
+
+  // All reasonable display formats a given YYMMDD might appear as on a document
+  function dateVariants(yymmdd) {
+    if (!yymmdd || yymmdd.length !== 6) return [];
+    const yy = yymmdd.substring(0,2);
+    const mm = yymmdd.substring(2,4);
+    const dd = yymmdd.substring(4,6);
+    const yyyy = (parseInt(yy, 10) > 30 ? '19' : '20') + yy;
+    return [
+      dd + '.' + mm + '.' + yyyy,
+      dd + '/' + mm + '/' + yyyy,
+      dd + '-' + mm + '-' + yyyy,
+      yyyy + '-' + mm + '-' + dd,
+      dd + '.' + mm + '.' + yy,
+      dd + mm + yyyy,
+      // 6-digit run (for documents showing DDMMYY or YYMMDD adjacent)
+      dd + mm + yy,
+      yy + mm + dd,
+    ];
+  }
+
   // ── ICAO MRZ CONSTRUCTION ─────────────────────────────────────────────────────
 
   function mrzPad(s, len) {
@@ -381,6 +413,134 @@
     };
   }
 
+  // ── VISUAL FIELD DETECTION ───────────────────────────────────────────────────
+
+  // Returns { surname, given, docNo, dob, expiry, photo } — each { x, y, w, h }
+  // Layer 1 (always): MRZ-relative document layout fallback
+  // Layer 2 (when OCR matches): word bbox refinement
+  function detectVisualFields(words, parsed, zone, imgW, imgH, docType) {
+    const docW  = zone.w;
+    const mrzTop  = zone.y;
+    const mrzLeft = zone.x;
+    const lH      = zone.lineH;
+
+    // Estimated document height from ICAO aspect ratios
+    const docH = docType === 'TD1'
+      ? docW * 0.631   // ID card: 85.6 × 54 mm
+      : docW * 0.704;  // Passport: 125 × 88 mm
+
+    // ── Layer 1: document-relative fallback bboxes ──
+    const F = docType === 'TD1' ? {
+      surname: { x: mrzLeft + docW*0.28, y: mrzTop - docH*0.78, w: docW*0.58, h: lH*1.4 },
+      given:   { x: mrzLeft + docW*0.28, y: mrzTop - docH*0.68, w: docW*0.58, h: lH*1.4 },
+      docNo:   { x: mrzLeft + docW*0.28, y: mrzTop - docH*0.42, w: docW*0.32, h: lH*1.4 },
+      dob:     { x: mrzLeft + docW*0.28, y: mrzTop - docH*0.30, w: docW*0.26, h: lH*1.4 },
+      expiry:  { x: mrzLeft + docW*0.60, y: mrzTop - docH*0.30, w: docW*0.26, h: lH*1.4 },
+      photo:   { x: mrzLeft,             y: mrzTop - docH*0.96, w: docW*0.27, h: docH*0.76 },
+    } : {
+      surname: { x: mrzLeft + docW*0.17, y: mrzTop - docH*0.72, w: docW*0.68, h: lH*1.4 },
+      given:   { x: mrzLeft + docW*0.17, y: mrzTop - docH*0.62, w: docW*0.68, h: lH*1.4 },
+      docNo:   { x: mrzLeft + docW*0.17, y: mrzTop - docH*0.37, w: docW*0.30, h: lH*1.4 },
+      dob:     { x: mrzLeft + docW*0.17, y: mrzTop - docH*0.28, w: docW*0.24, h: lH*1.4 },
+      expiry:  { x: mrzLeft + docW*0.52, y: mrzTop - docH*0.28, w: docW*0.24, h: lH*1.4 },
+      photo:   { x: mrzLeft,             y: mrzTop - docH*0.96, w: docW*0.18, h: docH*0.72 },
+    };
+
+    const result = {};
+    for (const k of Object.keys(F)) result[k] = { ...F[k] };
+
+    // Clamp all fallbacks to image bounds
+    for (const k of Object.keys(result)) {
+      const b = result[k];
+      b.x = Math.max(0, b.x);
+      b.y = Math.max(0, b.y);
+      b.w = Math.min(b.w, imgW - b.x);
+      b.h = Math.min(b.h, imgH - b.y);
+    }
+
+    // ── Layer 2: OCR word matching ──
+    // Only look at words above the MRZ zone
+    const vizWords = words.filter(w => (w.bbox.y0 + w.bbox.y1) / 2 < zone.y - lH * 0.5);
+
+    function mergeBboxes(bboxArr) {
+      if (!bboxArr || bboxArr.length === 0) return null;
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const b of bboxArr) {
+        x0 = Math.min(x0, b.x0); y0 = Math.min(y0, b.y0);
+        x1 = Math.max(x1, b.x1); y1 = Math.max(y1, b.y1);
+      }
+      return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+    }
+
+    // Bbox size sanity check: width must be plausible, height within 0.4–3× lineH
+    function sane(bbox, minWFrac, maxWFrac) {
+      if (!bbox) return false;
+      return bbox.w >= docW * minWFrac && bbox.w <= docW * maxWFrac &&
+             bbox.h >= lH * 0.35 && bbox.h <= lH * 3.5 &&
+             bbox.x >= 0 && bbox.y >= 0;
+    }
+
+    // ── Surname ──
+    if (parsed.surname && parsed.surname.length > 2) {
+      const ref = parsed.surname.toUpperCase();
+      const hits = vizWords.filter(w => {
+        const t = w.text.toUpperCase().replace(/[^A-Z]/g,'');
+        return t.length > 2 && (t === ref || ref.includes(t) || t.includes(ref.substring(0,5)));
+      });
+      if (hits.length > 0) {
+        const m = mergeBboxes(hits.map(w => w.bbox));
+        if (sane(m, 0.05, 0.85)) result.surname = m;
+      }
+    }
+
+    // ── Given name ──
+    if (parsed.given && parsed.given.length > 1) {
+      const parts = parsed.given.toUpperCase().split(/[\s<]+/).filter(p => p.length > 2);
+      const hits  = vizWords.filter(w => {
+        const t = w.text.toUpperCase().replace(/[^A-Z]/g,'');
+        return parts.some(p => t === p || t.includes(p) || (p.length > 4 && p.includes(t)));
+      });
+      if (hits.length > 0) {
+        const m = mergeBboxes(hits.map(w => w.bbox));
+        if (sane(m, 0.04, 0.80)) result.given = m;
+      }
+    }
+
+    // ── Document number ──
+    if (parsed.passNo && parsed.passNo.length >= 4) {
+      const ref = parsed.passNo.toUpperCase().replace(/[^A-Z0-9]/g,'');
+      const hits = vizWords.filter(w => {
+        const t = w.text.toUpperCase().replace(/[\s\-]/g,'');
+        return t.length >= 4 && (t === ref || t.includes(ref) || (ref.length > 5 && ref.includes(t)));
+      });
+      if (hits.length > 0) {
+        const m = mergeBboxes(hits.map(w => w.bbox));
+        if (sane(m, 0.04, 0.45)) result.docNo = m;
+      }
+    }
+
+    // ── Dates (DOB, expiry) ──
+    function findDate(yymmdd, fallbackKey) {
+      if (!yymmdd) return;
+      const variants = dateVariants(yymmdd);
+      const digits6  = yymmdd; // raw YYMMDD for partial match
+      const hits = vizWords.filter(w => {
+        const t = w.text.replace(/\s/g,'');
+        return variants.some(v => t === v) ||
+               (t.replace(/[^0-9]/g,'').includes(digits6));
+      });
+      if (hits.length > 0) {
+        const m = mergeBboxes(hits.map(w => w.bbox));
+        if (sane(m, 0.03, 0.38)) result[fallbackKey] = m;
+      }
+    }
+
+    findDate(parsed.dob,    'dob');
+    findDate(parsed.expiry, 'expiry');
+
+    return result;
+  }
+
   // ── INPAINTING ────────────────────────────────────────────────────────────────
 
   function collectBorderRing(ctx, rx, ry, rw, rh, ringW) {
@@ -452,6 +612,51 @@
     boxBlurRegion(ctx, rx - 2, ry - 2, rw + 4, rh + 4, 1);
   }
 
+  // ── PHOTO ANONYMIZATION ──────────────────────────────────────────────────────
+
+  function anonymizePhotoField(ctx, bbox) {
+    const x = Math.max(0, Math.floor(bbox.x));
+    const y = Math.max(0, Math.floor(bbox.y));
+    const w = Math.max(1, Math.ceil(bbox.w));
+    const h = Math.max(1, Math.ceil(bbox.h));
+
+    // 1. Heavy 5-pass blur
+    boxBlurRegion(ctx, x, y, w, h, 5);
+
+    // 2. Luminance noise ±40 to break up blur uniformity
+    const d = ctx.getImageData(x, y, w, h);
+    for (let i = 0; i < d.data.length; i += 4) {
+      const n = (Math.random() - 0.5) * 40;
+      d.data[i]   = Math.min(255, Math.max(0, d.data[i]   + n));
+      d.data[i+1] = Math.min(255, Math.max(0, d.data[i+1] + n));
+      d.data[i+2] = Math.min(255, Math.max(0, d.data[i+2] + n));
+    }
+    ctx.putImageData(d, x, y);
+
+    // 3. Feather edges: sample a 10px border ring and blend inward
+    const borderPixels = collectBorderRing(ctx, x, y, w, h, 10);
+    if (borderPixels.length > 0) {
+      const edgeW = 10;
+      const ed = ctx.getImageData(x, y, w, h);
+      for (let row = 0; row < h; row++) {
+        for (let col = 0; col < w; col++) {
+          const distEdge = Math.min(row, h - 1 - row, col, w - 1 - col);
+          if (distEdge >= edgeW) continue;
+          // Blend fraction: 0 at edge, 1 at edgeW pixels in
+          const t  = distEdge / edgeW;
+          const s  = borderPixels[Math.floor(Math.random() * borderPixels.length)];
+          const idx = (row * w + col) * 4;
+          for (let c = 0; c < 3; c++) {
+            ed.data[idx + c] = Math.round(
+              s[c] * (1 - t) + ed.data[idx + c] * t
+            );
+          }
+        }
+      }
+      ctx.putImageData(ed, x, y);
+    }
+  }
+
   // ── BLUR MEASUREMENT ─────────────────────────────────────────────────────────
 
   function laplacianVariance(ctx, x, y, w, h) {
@@ -475,6 +680,21 @@
   }
 
   // ── TEXT RENDERING ────────────────────────────────────────────────────────────
+
+  // Render a single synthetic value into a detected visual field bbox
+  function renderTextField(ctx, bbox, text) {
+    const x = Math.floor(bbox.x);
+    const y = Math.floor(bbox.y);
+    const h = Math.max(8, Math.floor(bbox.h));
+    const fontSize = Math.max(8, Math.round(h * 0.70));
+
+    ctx.font         = `600 ${fontSize}px Arial, Helvetica, sans-serif`;
+    ctx.fillStyle    = '#1a1a1a';
+    ctx.textBaseline = 'middle';
+    ctx.globalAlpha  = 0.85;  // NOT 1.0 — background texture bleeds through
+    ctx.fillText(String(text), x, y + h / 2);
+    ctx.globalAlpha  = 1.0;
+  }
 
   function renderMRZLines(ctx, zone, lines) {
     const { x, y, lineH } = zone;
@@ -572,6 +792,11 @@
     // 4. Locate MRZ zone in pixel space
     const zone = findMRZZone(data.words || [], origCanvas.width, origCanvas.height, mrzResult);
 
+    // 4b. Detect visual field positions (once — uses original OCR data)
+    const vizFields = detectVisualFields(
+      data.words || [], parsed, zone, origCanvas.width, origCanvas.height, docType
+    );
+
     // 5. Retry loop — up to 3 attempts with different synthetic data
     let anonCanvas = null, valResult = null, finalSyn = null, finalMRZ = null;
 
@@ -597,6 +822,28 @@
       anonCanvas.height = origCanvas.height;
       const anonCtx = anonCanvas.getContext('2d');
       anonCtx.drawImage(origCanvas, 0, 0);
+
+      // ── Phase 2: Visual field anonymization (before MRZ, preserves MRZ zone) ──
+
+      // Photo: compound blur + noise + feathered edges
+      anonymizePhotoField(anonCtx, vizFields.photo);
+
+      // Text fields: inpaint then render synthetic replacement
+      const vizTextFields = [
+        { key: 'surname', text: syn.surname },
+        { key: 'given',   text: syn.given },
+        { key: 'docNo',   text: syn.docNo },
+        { key: 'dob',     text: formatDateDisplay(syn.dob) },
+        { key: 'expiry',  text: formatDateDisplay(syn.expiry) },
+      ];
+      for (const { key, text } of vizTextFields) {
+        const bbox = vizFields[key];
+        if (!bbox || bbox.w < 4 || bbox.h < 4) continue;
+        inpaintRegion(anonCtx, bbox.x, bbox.y, bbox.w, bbox.h);
+        renderTextField(anonCtx, bbox, text);
+      }
+
+      // ── MRZ zone (unchanged from Phase 1) ──
 
       // Measure original sharpness
       const origSharpness = laplacianVariance(origCtx, zone.x, zone.y, zone.w, zone.h);
