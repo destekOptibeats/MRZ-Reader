@@ -120,7 +120,8 @@ let running  = false;
 async function initWorker() {
   setPill('init', '⏳ Worker başlatılıyor...');
   try {
-    regressionWorker = await window.MRZPipeline.createBatchWorker();
+    // Pass '../' so traineddata resolves to project root, not /tests/
+    regressionWorker = await window.MRZPipeline.createBatchWorker('../');
     setPill('ready', '✅ Hazır');
     document.getElementById('run-btn').disabled = false;
   } catch (e) {

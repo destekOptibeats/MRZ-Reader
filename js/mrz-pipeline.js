@@ -236,8 +236,10 @@
   // ── WORKER FACTORY ────────────────────────────────────────────────────────
 
   // Create a dedicated batch Tesseract worker (isolated from global worker)
-  async function createBatchWorker() {
-    const localBase = window.location.origin + window.location.pathname.replace(/[^/]+$/, '');
+  async function createBatchWorker(langPathOverride) {
+    const localBase = langPathOverride
+      ? new URL(langPathOverride, window.location.href).href.replace(/\/?$/, '/')
+      : window.location.origin + window.location.pathname.replace(/[^/]+$/, '');
     let bw = null;
     let mrzLoaded = false;
 
