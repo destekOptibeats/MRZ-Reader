@@ -154,6 +154,8 @@
 
     let lastDiag = null;
     let t;
+    // Track overall best across all crop attempts (used in failure-path return)
+    let globalBestScore = -1, globalBestText = '', globalBestBand = -1;
 
     for (let i = 0; i < crops.length; i++) {
       const ratio = crops[i];
@@ -165,7 +167,7 @@
 
       if (cropped.width <= 100 || cropped.height <= 100) continue;
 
-      // Try all rotations, collect scores
+      // Try all rotations, collect scores (scoped to this crop iteration)
       let bestScore = -1, bestText = '', bestDeg = 0;
 
       t = performance.now();
@@ -209,6 +211,13 @@
       }
       timings[attemptKey] = Math.round(performance.now() - t);
 
+      // Update global best (for failure-path metadata)
+      if (bestScore > globalBestScore) {
+        globalBestScore = bestScore;
+        globalBestText  = bestText;
+        globalBestBand  = i;
+      }
+
       // Try parse on best rotation result
       if (bestText && longestOCRLine(bestText) >= 28) {
         const result = extractMRZ(clean(bestText));
@@ -226,11 +235,11 @@
     }
 
     // Include best OCR metadata even on failure
-    const failLongest = bestText ? longestOCRLine(bestText) : 0;
-    const failChevrons = bestText ? countChevrons(bestText) : 0;
+    const failLongest  = globalBestText ? longestOCRLine(globalBestText) : 0;
+    const failChevrons = globalBestText ? countChevrons(globalBestText)  : 0;
     return { extracted: null, diag: lastDiag, attempts: crops.length,
       longestLine: failLongest, chevronCount: failChevrons,
-      rawOcrText: bestText || '', selectedBand: bestBandIdx >= 0 ? 'crop' + (bestBandIdx+1) : '—' };
+      rawOcrText: globalBestText, selectedBand: globalBestBand >= 0 ? 'crop' + (globalBestBand + 1) : '—' };
   }
 
   // ── WORKER FACTORY ────────────────────────────────────────────────────────
