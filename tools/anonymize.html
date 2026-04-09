@@ -1,0 +1,843 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MRZ Anonymizer</title>
+  <style>
+    :root {
+      --bg:     #0f1117;
+      --card:   #1a1d27;
+      --border: #2a2d3a;
+      --blue:   #4f8ef7;
+      --green:  #22c55e;
+      --red:    #ef4444;
+      --yellow: #f59e0b;
+      --text:   #e2e8f0;
+      --muted:  #64748b;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, sans-serif;
+      padding: 28px 24px;
+      min-height: 100vh;
+    }
+    h1 { font-size: 1.35rem; margin-bottom: 2px; }
+    .subtitle { color: var(--muted); font-size: 0.82rem; margin-bottom: 24px; }
+
+    /* Toolbar */
+    .toolbar {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 18px;
+    }
+    .pill {
+      font-size: 0.75rem;
+      padding: 3px 11px;
+      border-radius: 99px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .pill.init  { background: #1e293b; color: #94a3b8; }
+    .pill.ready { background: #14532d; color: #4ade80; }
+    .pill.error { background: #450a0a; color: #fca5a5; }
+
+    button {
+      padding: 7px 18px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.88rem;
+      font-weight: 600;
+      transition: opacity 0.15s;
+    }
+    button:disabled { opacity: 0.38; cursor: not-allowed; }
+    #process-btn    { background: var(--blue); color: #fff; }
+    #manifest-btn   { background: #334155; color: var(--text); display: none; }
+
+    .file-label {
+      display: inline-block;
+      padding: 7px 18px;
+      background: #1e293b;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.88rem;
+      font-weight: 600;
+      border: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    .file-label:hover { background: #2d3f55; }
+    #file-input { display: none; }
+
+    /* Image grid */
+    #grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(620px, 1fr));
+      gap: 18px;
+      margin-top: 18px;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+    }
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .card-filename {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 280px;
+    }
+    .card-badges { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 9px;
+      border-radius: 4px;
+      font-size: 0.73rem;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .badge.td3     { background: #1e3a5f; color: #7dd3fc; }
+    .badge.td1     { background: #3b1f5f; color: #c4b5fd; }
+    .badge.ok      { background: #14532d; color: #4ade80; }
+    .badge.fail    { background: #450a0a; color: #fca5a5; }
+    .badge.warn    { background: #451a03; color: #fb923c; }
+    .badge.running { background: #172554; color: #93c5fd; }
+
+    .card-previews {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .preview-wrap { position: relative; }
+    .preview-label {
+      font-size: 0.72rem;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    .preview-wrap canvas, .preview-wrap img {
+      width: 100%;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      display: block;
+    }
+
+    .card-mrz {
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 0.72rem;
+      color: #93c5fd;
+      background: #0f172a;
+      border-radius: 6px;
+      padding: 8px 10px;
+      margin-bottom: 10px;
+      word-break: break-all;
+      line-height: 1.6;
+    }
+
+    .card-score {
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+    .card-score span { color: var(--text); }
+
+    .card-actions { display: flex; gap: 8px; }
+    .card-actions button {
+      padding: 5px 14px;
+      font-size: 0.8rem;
+      background: #1e293b;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .card-actions button:hover:not(:disabled) { background: #2d3f55; }
+
+    .status-msg {
+      font-size: 0.8rem;
+      color: var(--muted);
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+  <h1>MRZ Anonymizer</h1>
+  <p class="subtitle">Replace MRZ with synthetic data. Preserves visual difficulty. Validates via re-OCR.</p>
+
+  <div class="toolbar">
+    <span class="pill init" id="worker-pill">⏳ Starting...</span>
+    <label class="file-label" for="file-input">📂 Select Images</label>
+    <input type="file" id="file-input" multiple accept="image/*">
+    <button id="process-btn" disabled>▶ Process All</button>
+    <button id="manifest-btn">⬇ Download Manifest</button>
+  </div>
+
+  <div id="grid"></div>
+
+  <script src="../mrz-core.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script>
+  'use strict';
+
+  // ── CONSTANTS ──────────────────────────────────────────────────────────────────
+
+  const SURNAMES = ['GARCIA','MARTINEZ','SILVA','YILMAZ','DEMIR','KAYA','CELIK','SCHMIDT','MULLER','SANTOS'];
+  const GIVENS   = ['ALEJANDRO','MARIA','CARLOS','ANA','AHMET','AYSE','MEHMET','SOPHIE','LUCAS','ANNA'];
+
+  // ── STATE ─────────────────────────────────────────────────────────────────────
+
+  let ocrWorker = null;
+  let selectedFiles = [];
+  let manifestEntries = [];
+  let processing = false;
+
+  // ── WORKER ────────────────────────────────────────────────────────────────────
+
+  async function initWorker() {
+    setPill('init', '⏳ Starting Tesseract...');
+    try {
+      ocrWorker = await Tesseract.createWorker('eng', 1, {
+        workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js',
+        corePath:   'https://cdn.jsdelivr.net/npm/tesseract.js-core@5/tesseract-core-simd-lstm.wasm.js',
+      });
+      await ocrWorker.setParameters({ tessedit_pageseg_mode: '1' });
+      setPill('ready', '✅ Ready');
+      document.getElementById('process-btn').disabled = false;
+    } catch (e) {
+      setPill('error', '❌ Worker failed: ' + e.message);
+      console.error('[Anonymize] Worker init error:', e);
+    }
+  }
+
+  function setPill(state, text) {
+    const p = document.getElementById('worker-pill');
+    p.textContent = text;
+    p.className = 'pill ' + state;
+  }
+
+  // ── SYNTHETIC DATA ────────────────────────────────────────────────────────────
+
+  function pickRandom(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+  function randomDocNo() {
+    const letters = 'ABCDEFGHJKLMNPRSTUVWXYZ';
+    return letters[Math.floor(Math.random() * letters.length)] +
+           letters[Math.floor(Math.random() * letters.length)] +
+           String(Math.floor(Math.random() * 10000000)).padStart(7, '0');
+  }
+
+  function randomDate(minYearsAgo, maxYearsAgo) {
+    const now = new Date();
+    const year = now.getFullYear() - minYearsAgo - Math.floor(Math.random() * (maxYearsAgo - minYearsAgo));
+    const month = 1 + Math.floor(Math.random() * 12);
+    const day   = 1 + Math.floor(Math.random() * 28);
+    return String(year).slice(2) + String(month).padStart(2,'0') + String(day).padStart(2,'0');
+  }
+
+  function randomFutureDate(minYears, maxYears) {
+    const now = new Date();
+    const year = now.getFullYear() + minYears + Math.floor(Math.random() * (maxYears - minYears));
+    const month = 1 + Math.floor(Math.random() * 12);
+    const day   = 1 + Math.floor(Math.random() * 28);
+    return String(year).slice(2) + String(month).padStart(2,'0') + String(day).padStart(2,'0');
+  }
+
+  function generateSynthetic() {
+    return {
+      surname: pickRandom(SURNAMES),
+      given:   pickRandom(GIVENS),
+      docNo:   randomDocNo(),
+      dob:     randomDate(19, 60),
+      expiry:  randomFutureDate(1, 10),
+    };
+  }
+
+  // ── ICAO MRZ CONSTRUCTION ─────────────────────────────────────────────────────
+
+  function mrzPad(s, len) {
+    const str = String(s);
+    return str.length >= len ? str.substring(0, len) : str + '<'.repeat(len - str.length);
+  }
+
+  function buildTD3(parsed, syn) {
+    const { chk } = window.MRZCore;
+    const issuer = mrzPad(parsed.issuer || 'XXX', 3);
+    const nation = mrzPad(parsed.nation || 'XXX', 3);
+    const sex    = (parsed.sex === 'M' || parsed.sex === 'F') ? parsed.sex : 'M';
+
+    // Line 1: P<{issuer3}{surname}<<{given} padded to 44
+    const nameField = mrzPad(syn.surname + '<<' + syn.given, 39);
+    const l1 = 'P<' + issuer + nameField;
+
+    // Line 2 fields
+    const docNoF  = mrzPad(syn.docNo, 9);
+    const docChk  = chk(docNoF);
+    const dobF    = mrzPad(syn.dob, 6);
+    const dobChk  = chk(dobF);
+    const expF    = mrzPad(syn.expiry, 6);
+    const expChk  = chk(expF);
+    const optPers = '<'.repeat(14); // personal number: all fillers
+    const optChk  = '<';           // personal number check digit (< = 0)
+
+    // Assemble pre-composite (43 chars)
+    const l2pre = docNoF + docChk + nation + dobF + dobChk + sex + expF + expChk + optPers + optChk;
+    // Composite input: L2[0..9] + L2[13..19] + L2[21..42]
+    const compIn = l2pre.substring(0,10) + l2pre.substring(13,20) + l2pre.substring(21,43);
+    const l2 = l2pre + chk(compIn);
+
+    return { type: 'TD3', lines: [l1, l2] };
+  }
+
+  function buildTD1(parsed, syn) {
+    const { chk } = window.MRZCore;
+    const issuer = mrzPad(parsed.issuer || 'XXX', 3);
+    const nation = mrzPad(parsed.nation || 'XXX', 3);
+    const sex    = (parsed.sex === 'M' || parsed.sex === 'F') ? parsed.sex : 'M';
+
+    // Line 1: I<{issuer3}{docNo9}{chk}{optional15}
+    const docNoF = mrzPad(syn.docNo, 9);
+    const docChk = chk(docNoF);
+    const opt1   = '<'.repeat(15);
+    const l1 = 'I<' + issuer + docNoF + docChk + opt1;
+
+    // Line 2: {dob6}{chk}{sex}{expiry6}{chk}{nation3}{optional7}{compChk}
+    const dobF    = mrzPad(syn.dob, 6);
+    const dobChk  = chk(dobF);
+    const expF    = mrzPad(syn.expiry, 6);
+    const expChk  = chk(expF);
+    const opt2    = '<'.repeat(11); // 11 optional chars to make pre = 29 chars
+
+    // Assemble pre-composite (29 chars)
+    const l2pre = dobF + dobChk + sex + expF + expChk + nation + opt2;
+    // Composite: L1[5..29] + L2[0..6] + L2[8..14] + L2[18..28]
+    const compIn = l1.substring(5,30) + l2pre.substring(0,7) + l2pre.substring(8,15) + l2pre.substring(18,29);
+    const l2 = l2pre + chk(compIn);
+
+    // Line 3: {surname}<<{given} padded to 30
+    const l3 = mrzPad(syn.surname + '<<' + syn.given, 30);
+
+    return { type: 'TD1', lines: [l1, l2, l3] };
+  }
+
+  // ── MRZ ZONE DETECTION ────────────────────────────────────────────────────────
+
+  function findMRZZone(words, imgW, imgH, mrzResult) {
+    const numLines = mrzResult.type === 'TD1' ? 3 : 2;
+    const lineLen  = mrzResult.type === 'TD1' ? 30 : 44;
+
+    // Collect words that look like MRZ characters and live in the bottom 30% of the image
+    const threshold = imgH * 0.70;
+    const mrzWords = words.filter(w => {
+      const mid = (w.bbox.y0 + w.bbox.y1) / 2;
+      return mid > threshold && /^[A-Z0-9<]{3,}$/.test(w.text.replace(/\s/g,''));
+    });
+
+    if (mrzWords.length >= 2) {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const w of mrzWords) {
+        minX = Math.min(minX, w.bbox.x0);
+        minY = Math.min(minY, w.bbox.y0);
+        maxX = Math.max(maxX, w.bbox.x1);
+        maxY = Math.max(maxY, w.bbox.y1);
+      }
+      // Sanity: at least 20% image width
+      if (maxX - minX > imgW * 0.2) {
+        return {
+          x: minX, y: minY,
+          w: maxX - minX, h: maxY - minY,
+          lineH: Math.max((maxY - minY) / numLines, 10),
+          numLines,
+        };
+      }
+    }
+
+    // Fallback: estimate from image size (standard document proportions)
+    const estLineH = imgH * 0.055;
+    const estMrzH  = estLineH * numLines;
+    const estLeft  = imgW * 0.05;
+    return {
+      x: estLeft,
+      y: imgH - estMrzH - imgH * 0.04,
+      w: imgW * 0.90,
+      h: estMrzH,
+      lineH: estLineH,
+      numLines,
+    };
+  }
+
+  // ── INPAINTING ────────────────────────────────────────────────────────────────
+
+  function collectBorderRing(ctx, rx, ry, rw, rh, ringW) {
+    const px = Math.max(0, rx - ringW);
+    const py = Math.max(0, ry - ringW);
+    const pw = rw + ringW * 2;
+    const ph = rh + ringW * 2;
+    const d  = ctx.getImageData(px, py, pw, ph);
+    const pixels = [];
+
+    for (let row = 0; row < ph; row++) {
+      for (let col = 0; col < pw; col++) {
+        const inInner = row >= ringW && row < ph - ringW &&
+                        col >= ringW && col < pw - ringW;
+        if (inInner) continue;
+        const i = (row * pw + col) * 4;
+        pixels.push([d.data[i], d.data[i+1], d.data[i+2]]);
+      }
+    }
+    return pixels;
+  }
+
+  function boxBlurRegion(ctx, x, y, w, h, passes) {
+    x = Math.max(0, Math.floor(x));
+    y = Math.max(0, Math.floor(y));
+    w = Math.max(1, Math.floor(w));
+    h = Math.max(1, Math.floor(h));
+
+    for (let p = 0; p < passes; p++) {
+      const d   = ctx.getImageData(x, y, w, h);
+      const src = new Uint8ClampedArray(d.data);
+      for (let row = 1; row < h - 1; row++) {
+        for (let col = 1; col < w - 1; col++) {
+          const idx = (row * w + col) * 4;
+          for (let c = 0; c < 3; c++) {
+            let sum = 0;
+            for (let dr = -1; dr <= 1; dr++)
+              for (let dc = -1; dc <= 1; dc++)
+                sum += src[((row+dr)*w + (col+dc))*4 + c];
+            d.data[idx+c] = sum / 9;
+          }
+        }
+      }
+      ctx.putImageData(d, x, y);
+    }
+  }
+
+  function inpaintRegion(ctx, x, y, w, h) {
+    const padPx = 4;
+    const rx = Math.max(0, Math.floor(x - padPx));
+    const ry = Math.max(0, Math.floor(y - padPx));
+    const rw = Math.ceil(w + padPx * 2);
+    const rh = Math.ceil(h + padPx * 2);
+
+    const borderPixels = collectBorderRing(ctx, rx, ry, rw, rh, 6);
+    if (borderPixels.length === 0) return;
+
+    const imgData = ctx.createImageData(rw, rh);
+    for (let i = 0; i < rw * rh; i++) {
+      const s = borderPixels[Math.floor(Math.random() * borderPixels.length)];
+      const noise = () => (Math.random() - 0.5) * 16;
+      imgData.data[i*4]   = Math.min(255, Math.max(0, s[0] + noise()));
+      imgData.data[i*4+1] = Math.min(255, Math.max(0, s[1] + noise()));
+      imgData.data[i*4+2] = Math.min(255, Math.max(0, s[2] + noise()));
+      imgData.data[i*4+3] = 255;
+    }
+    ctx.putImageData(imgData, rx, ry);
+    // Blend edges with a soft blur
+    boxBlurRegion(ctx, rx - 2, ry - 2, rw + 4, rh + 4, 1);
+  }
+
+  // ── BLUR MEASUREMENT ─────────────────────────────────────────────────────────
+
+  function laplacianVariance(ctx, x, y, w, h) {
+    x = Math.max(0, Math.floor(x)); y = Math.max(0, Math.floor(y));
+    w = Math.max(3, Math.floor(w)); h = Math.max(3, Math.floor(h));
+    const d = ctx.getImageData(x, y, w, h);
+    let sum = 0, count = 0;
+    function gray(row, col) {
+      const i = (row * w + col) * 4;
+      return 0.299*d.data[i] + 0.587*d.data[i+1] + 0.114*d.data[i+2];
+    }
+    for (let row = 1; row < h - 1; row++) {
+      for (let col = 1; col < w - 1; col++) {
+        const lap = gray(row-1,col) + gray(row+1,col) +
+                    gray(row,col-1) + gray(row,col+1) - 4*gray(row,col);
+        sum += lap * lap;
+        count++;
+      }
+    }
+    return count > 0 ? sum / count : 0;
+  }
+
+  // ── TEXT RENDERING ────────────────────────────────────────────────────────────
+
+  function renderMRZLines(ctx, zone, lines) {
+    const { x, y, lineH } = zone;
+    const fontSize = Math.max(8, Math.round(lineH * 0.65));
+
+    ctx.font = `${fontSize}px 'Courier New', Courier, monospace`;
+    ctx.fillStyle    = '#111111';
+    ctx.textBaseline = 'middle';
+    ctx.globalAlpha  = 0.87;
+
+    // OCR-B spacing approximation (Chrome 94+)
+    try { ctx.letterSpacing = '1.5px'; } catch (_) {}
+
+    for (let i = 0; i < lines.length; i++) {
+      const lineY = y + lineH * i + lineH * 0.5;
+      ctx.fillText(lines[i], x, lineY);
+    }
+
+    ctx.globalAlpha = 1.0;
+    try { ctx.letterSpacing = '0px'; } catch (_) {}
+  }
+
+  // ── VALIDATION ────────────────────────────────────────────────────────────────
+
+  async function validateAnonymized(canvas) {
+    const { extractMRZ, validateMRZ, clean } = window.MRZCore;
+    const t0 = performance.now();
+    const { data } = await ocrWorker.recognize(canvas);
+    const parseTime = Math.round(performance.now() - t0);
+
+    const result = extractMRZ(clean(data.text));
+    if (!result) return { ok: false, reason: 'no_parse', confidence: 0, parseTime, level: null };
+
+    const v = validateMRZ(result);
+
+    // Confidence: average over MRZ-pattern words
+    const mrzWords = (data.words || []).filter(w => /^[A-Z0-9<]{3,}$/.test(w.text));
+    const avgConf = mrzWords.length > 0
+      ? mrzWords.reduce((s, w) => s + w.confidence, 0) / mrzWords.length / 100
+      : 0;
+
+    return {
+      ok:         v.valid,
+      reason:     v.valid ? null : (v.errors[0] || 'checksum_fail'),
+      confidence: Math.round(avgConf * 100) / 100,
+      parseTime,
+      level:      v.level,
+    };
+  }
+
+  // ── MAIN PROCESS PIPELINE ─────────────────────────────────────────────────────
+
+  async function processFile(file, cardEl) {
+    const { extractMRZ, validateMRZ, clean, parseResult } = window.MRZCore;
+
+    setCardStatus(cardEl, 'running', 'Decoding image...');
+
+    // 1. Load image onto canvas
+    let bitmap;
+    try { bitmap = await createImageBitmap(file); }
+    catch (e) { setCardStatus(cardEl, 'fail', 'Cannot decode image'); return null; }
+
+    const origCanvas = document.createElement('canvas');
+    origCanvas.width  = bitmap.width;
+    origCanvas.height = bitmap.height;
+    const origCtx = origCanvas.getContext('2d');
+    origCtx.drawImage(bitmap, 0, 0);
+    bitmap.close();
+
+    // Show original preview
+    showPreview(cardEl, 'original', origCanvas);
+
+    setCardStatus(cardEl, 'running', 'Running OCR...');
+
+    // 2. Tesseract full-page OCR
+    let data;
+    try {
+      ({ data } = await ocrWorker.recognize(origCanvas));
+    } catch (e) {
+      setCardStatus(cardEl, 'fail', 'OCR failed: ' + e.message);
+      return null;
+    }
+
+    // 3. Extract MRZ from OCR text
+    const mrzResult = extractMRZ(clean(data.text));
+    if (!mrzResult) {
+      setCardStatus(cardEl, 'fail', 'MRZ not detected in image');
+      return null;
+    }
+
+    const parsed  = parseResult(mrzResult);
+    const docType = mrzResult.type;
+    setCardDocType(cardEl, docType);
+
+    // 4. Locate MRZ zone in pixel space
+    const zone = findMRZZone(data.words || [], origCanvas.width, origCanvas.height, mrzResult);
+
+    // 5. Retry loop — up to 3 attempts with different synthetic data
+    let anonCanvas = null, valResult = null, finalSyn = null, finalMRZ = null;
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      setCardStatus(cardEl, 'running', `Attempt ${attempt + 1}/3 — generating...`);
+
+      // Generate synthetic values
+      const syn = generateSynthetic();
+
+      // Build ICAO-valid MRZ
+      const synMRZ = docType === 'TD1' ? buildTD1(parsed, syn) : buildTD3(parsed, syn);
+
+      // Sanity-check our own construction
+      const synVal = validateMRZ(synMRZ);
+      if (!synVal.valid) {
+        console.warn('[Anonymize] Synthetic MRZ invalid (attempt ' + attempt + '):', synVal.errors);
+        continue;
+      }
+
+      // Clone canvas
+      anonCanvas = document.createElement('canvas');
+      anonCanvas.width  = origCanvas.width;
+      anonCanvas.height = origCanvas.height;
+      const anonCtx = anonCanvas.getContext('2d');
+      anonCtx.drawImage(origCanvas, 0, 0);
+
+      // Measure original sharpness
+      const origSharpness = laplacianVariance(origCtx, zone.x, zone.y, zone.w, zone.h);
+
+      // Inpaint original MRZ area
+      inpaintRegion(anonCtx, zone.x, zone.y, zone.w, zone.h);
+
+      // Render new synthetic MRZ text
+      renderMRZLines(anonCtx, zone, synMRZ.lines);
+
+      // Blur to match original sharpness (preserve visual difficulty)
+      const blurPasses = origSharpness < 100 ? 3 : origSharpness < 300 ? 1 : 0;
+      if (blurPasses > 0) {
+        boxBlurRegion(anonCtx, Math.floor(zone.x), Math.floor(zone.y),
+                      Math.ceil(zone.w), Math.ceil(zone.h), blurPasses);
+      }
+
+      // Validate via re-OCR
+      setCardStatus(cardEl, 'running', `Attempt ${attempt + 1}/3 — validating...`);
+      valResult = await validateAnonymized(anonCanvas);
+
+      if (valResult.ok) {
+        finalSyn = syn;
+        finalMRZ = synMRZ;
+        break;
+      }
+      console.warn('[Anonymize] Re-OCR validation failed (attempt ' + attempt + '):', valResult.reason);
+    }
+
+    if (!anonCanvas) {
+      setCardStatus(cardEl, 'fail', 'Synthetic MRZ construction failed');
+      return null;
+    }
+
+    const success = valResult && valResult.ok;
+    setCardStatus(cardEl, success ? 'ok' : 'warn', success ? 'OK' : 'MRZ unreadable after 3 attempts');
+
+    // Show anonymized preview
+    showPreview(cardEl, 'anon', anonCanvas);
+
+    // Show MRZ lines
+    if (finalMRZ) {
+      setCardMRZ(cardEl, finalMRZ.lines);
+    }
+
+    // Show score
+    if (valResult) {
+      setCardScore(cardEl, valResult);
+    }
+
+    // Build manifest entry (only if validation passed)
+    const baseName = file.name.replace(/\.[^.]+$/, '') + '-anon.png';
+    const manifestEntry = success ? buildManifestEntry(baseName, file.name, docType, parsed, finalSyn, finalMRZ, valResult) : null;
+
+    // Download PNG button
+    activateDownload(cardEl, anonCanvas, baseName);
+
+    return manifestEntry;
+  }
+
+  // ── MANIFEST ENTRY ────────────────────────────────────────────────────────────
+
+  function buildManifestEntry(baseName, origName, docType, parsed, syn, synMRZ, valResult) {
+    const idx = manifestEntries.length + 1;
+    const id  = (docType === 'TD3' ? 'passport' : 'id') + '-' + String(idx).padStart(3, '0');
+
+    return {
+      id,
+      file:         baseName,
+      original:     origName,
+      type:         docType,
+      match:        'exact',
+      mrz_expected: synMRZ.lines,
+      score: {
+        confidence: valResult.confidence,
+        parseTime:  valResult.parseTime,
+        level:      valResult.level,
+      },
+      expected: {
+        docType:  docType === 'TD3' ? 'Pasaport' : 'TC Kimlik',
+        passNo:   syn.docNo,
+        nation:   parsed.nation || '',
+        dob:      syn.dob,
+        sex:      (parsed.sex === 'M' || parsed.sex === 'F') ? parsed.sex : 'M',
+        expiry:   syn.expiry,
+        surname:  syn.surname,
+        given:    syn.given,
+        validation: { valid: true, strong: valResult.level === 'strong', level: valResult.level },
+        checksums:  { passOk: true, dobOk: true, expOk: true },
+      },
+    };
+  }
+
+  // ── UI HELPERS ────────────────────────────────────────────────────────────────
+
+  function createCard(file) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `
+      <div class="card-header">
+        <span class="card-filename" title="${escHtml(file.name)}">${escHtml(file.name)}</span>
+        <div class="card-badges">
+          <span class="badge running" data-status>⏳ Waiting</span>
+        </div>
+      </div>
+      <div class="card-previews">
+        <div class="preview-wrap">
+          <div class="preview-label">Original</div>
+          <canvas data-original style="display:none"></canvas>
+        </div>
+        <div class="preview-wrap">
+          <div class="preview-label">Anonymized</div>
+          <canvas data-anon style="display:none"></canvas>
+        </div>
+      </div>
+      <div class="card-mrz" data-mrz style="display:none"></div>
+      <div class="card-score" data-score style="display:none"></div>
+      <div class="card-actions">
+        <button data-dl disabled>⬇ Download PNG</button>
+      </div>
+    `;
+    document.getElementById('grid').appendChild(card);
+    return card;
+  }
+
+  function setCardStatus(card, cls, text) {
+    const badge = card.querySelector('[data-status]');
+    const icons = { running: '⏳', ok: '✅', fail: '❌', warn: '⚠', td3: '', td1: '' };
+    badge.className = 'badge ' + cls;
+    badge.textContent = (icons[cls] || '') + ' ' + text;
+  }
+
+  function setCardDocType(card, docType) {
+    const badges = card.querySelector('.card-badges');
+    const dt = document.createElement('span');
+    dt.className = 'badge ' + docType.toLowerCase();
+    dt.textContent = docType;
+    badges.appendChild(dt);
+  }
+
+  function showPreview(card, which, srcCanvas) {
+    const dest = card.querySelector(which === 'original' ? '[data-original]' : '[data-anon]');
+    dest.width  = srcCanvas.width;
+    dest.height = srcCanvas.height;
+    dest.getContext('2d').drawImage(srcCanvas, 0, 0);
+    dest.style.display = 'block';
+  }
+
+  function setCardMRZ(card, lines) {
+    const el = card.querySelector('[data-mrz]');
+    el.textContent = lines.join('\n');
+    el.style.display = 'block';
+  }
+
+  function setCardScore(card, valResult) {
+    const el = card.querySelector('[data-score]');
+    el.innerHTML =
+      'Confidence: <span>' + (valResult.confidence * 100).toFixed(0) + '%</span> &nbsp; ' +
+      'Parse time: <span>' + valResult.parseTime + 'ms</span> &nbsp; ' +
+      'Level: <span>' + (valResult.level || '—') + '</span>';
+    el.style.display = 'block';
+  }
+
+  function activateDownload(card, canvas, filename) {
+    const btn = card.querySelector('[data-dl]');
+    btn.disabled = false;
+    btn.addEventListener('click', () => {
+      canvas.toBlob(blob => {
+        const url = URL.createObjectURL(blob);
+        const a   = Object.assign(document.createElement('a'), { href: url, download: filename });
+        a.click();
+        URL.revokeObjectURL(url);
+      }, 'image/png');
+    });
+  }
+
+  function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // ── RUN ALL ───────────────────────────────────────────────────────────────────
+
+  async function processAll() {
+    if (processing || !ocrWorker || selectedFiles.length === 0) return;
+    processing = true;
+    manifestEntries = [];
+
+    document.getElementById('process-btn').disabled = true;
+    document.getElementById('manifest-btn').style.display = 'none';
+    document.getElementById('grid').innerHTML = '';
+
+    for (const file of selectedFiles) {
+      const card = createCard(file);
+      try {
+        const entry = await processFile(file, card);
+        if (entry) manifestEntries.push(entry);
+      } catch (e) {
+        setCardStatus(card, 'fail', 'Unexpected error: ' + e.message);
+        console.error('[Anonymize] Unhandled error for', file.name, e);
+      }
+    }
+
+    document.getElementById('process-btn').disabled = false;
+    if (manifestEntries.length > 0) {
+      document.getElementById('manifest-btn').style.display = 'inline-block';
+    }
+    processing = false;
+  }
+
+  // ── MANIFEST EXPORT ───────────────────────────────────────────────────────────
+
+  function downloadManifest() {
+    const manifest = { version: 1, cases: manifestEntries };
+    const blob = new Blob([JSON.stringify(manifest, null, 2)], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = Object.assign(document.createElement('a'), {
+      href:     url,
+      download: 'manifest-' + new Date().toISOString().slice(0,10) + '.json',
+    });
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // ── EVENT LISTENERS ───────────────────────────────────────────────────────────
+
+  document.getElementById('file-input').addEventListener('change', function () {
+    selectedFiles = Array.from(this.files);
+    if (selectedFiles.length > 0) {
+      document.getElementById('process-btn').disabled = !ocrWorker;
+    }
+  });
+
+  document.getElementById('process-btn').addEventListener('click', processAll);
+  document.getElementById('manifest-btn').addEventListener('click', downloadManifest);
+
+  window.addEventListener('beforeunload', () => {
+    if (ocrWorker) try { ocrWorker.terminate(); } catch (_) {}
+  });
+
+  // Boot
+  initWorker();
+  </script>
+</body>
+</html>
