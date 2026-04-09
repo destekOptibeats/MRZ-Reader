@@ -1,4 +1,133 @@
 {
   "version": 1,
-  "cases": []
+  "cases": [
+    {
+      "id": "img_1775",
+      "file": "IMG_1775.jpg",
+      "category": "passport_rotated_hard",
+      "docType": "TD3",
+      "match": "fuzzy",
+      "confidence": "medium",
+      "mrz_expected": [
+          "P<ESPGUCEL<SEVI<<SUAT<<<<<<<<<<<<<<<<<<<<<<<",
+          "XDF6847989ESP8001070M3512159RE20160044140690"
+      ],
+      "notes": "First line manually reconstructed from visible image + OCR; verify first line before locking."
+    },
+    {
+      "id": "img_1777",
+      "file": "IMG_1777.jpg",
+      "category": "passport_rotated_hard",
+      "docType": "TD3",
+      "match": "exact",
+      "confidence": "high",
+      "mrz_expected": [
+        "P<ESPMAZLIYAH<KOHEN<<LINET<<<<<<<<<<<<<<<<<<",
+        "XDF6852826ESP8506081F3512159RE20160044040660"
+      ]
+    },
+    {
+      "id": "img_1780",
+      "file": "IMG_1780.jpg",
+      "category": "passport_rotated_hard",
+      "docType": "TD3",
+      "match": "exact",
+      "confidence": "high",
+      "mrz_expected": [
+        "P<ESPGUCEL<MAZLIYAH<<NICOLE<<<<<<<<<<<<<<<<<",
+        "XDF6847990ESP1908011F3012154RE20230019040686"
+      ]
+    },
+    {
+      "id": "img_1785",
+      "file": "IMG_1785.jpg",
+      "category": "passport_rotated_hard",
+      "docType": "TD3",
+      "match": "fuzzy",
+      "confidence": "medium",
+      "mrz_expected": [
+        "P<ESPGUCEL<MAZLIYAH<<MIA<<<<<<<<<<<<<<<<<<<<",
+        "XDF4677822ESP1507218F230123RE20160135040650"
+      ],
+      "notes": "First line manually reconstructed; verify first line before locking."
+    },
+    {
+      "id": "img_1913",
+      "file": "IMG_1913.jpg",
+      "category": "id_glare_medium",
+      "docType": "TD1",
+      "match": "exact",
+      "confidence": "high",
+      "mrz_expected": [
+        "I<TURA48P241286<52000135084<<<",
+        "8001070M3411067TUR<<<<<<<<<<<0",
+        "GUCEL<<SUAT<<<<<<<<<<<<<<<<<<<"
+      ]
+    },
+    {
+      "id": "img_1914",
+      "file": "IMG_1914.jpg",
+      "category": "id_clean_easy",
+      "docType": "TD1",
+      "match": "exact",
+      "confidence": "high",
+      "mrz_expected": [
+          "I<TURA48P241286<52000135084<<<",
+          "8001070M3411067TUR<<<<<<<<<<<0",
+          "GUCEL<<SUAT<<<<<<<<<<<<<<<<<<<"
+      ]
+    },
+    {
+      "id": "img_1923",
+      "file": "IMG_1923.jpg",
+      "category": "id_damage_medium",
+      "docType": "TD1",
+      "match": "exact",
+      "confidence": "high",
+      "mrz_expected": [
+        "I<TURA00E487812<50476346072<<<",
+        "7905285M2612317TUR<<<<<<<<<<<6",
+        "ALMALEH<<ALPER<<<<<<<<<<<<<<<<"
+      ]
+    },
+    {
+      "id": "img_1924",
+      "file": "IMG_1924.jpg",
+      "category": "id_distance_hard",
+      "docType": "TD1",
+      "match": "exact",
+      "confidence": "high",
+      "mrz_expected": [
+          "I<TURA00E487812<50476346072<<<",
+          "7905285M2612317TUR<<<<<<<<<<<6",
+          "ALMALEH<<ALPER<<<<<<<<<<<<<<<<"
+      ]
+    },
+    {
+      "id": "img_1925",
+      "file": "IMG_1925.jpg",
+      "category": "id_distance_hard",
+      "docType": "TD1",
+      "match": "exact",
+      "confidence": "high",
+      "mrz_expected": [
+          "I<TURA00E487812<50476346072<<<",
+          "7905285M2612317TUR<<<<<<<<<<<6",
+          "ALMALEH<<ALPER<<<<<<<<<<<<<<<<"
+      ]
+    },
+    {
+      "id": "img_1926",
+      "file": "IMG_1926.PNG",
+      "category": "id_distance_hard",
+      "docType": "TD1",
+      "match": "exact",
+      "confidence": "high",
+      "mrz_expected": [
+          "I<TURA00E487812<50476346072<<<",
+          "7905285M2612317TUR<<<<<<<<<<<6",
+          "ALMALEH<<ALPER<<<<<<<<<<<<<<<<"
+      ]
+    }
+  ]
 }
