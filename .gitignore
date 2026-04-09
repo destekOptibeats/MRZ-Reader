@@ -1,0 +1,3 @@
+# Real test images — never commit, load locally via file picker
+tests/images/*
+!tests/images/.gitkeep

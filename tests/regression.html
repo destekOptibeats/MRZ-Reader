@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MRZ Regression Tests</title>
+  <style>
+    :root {
+      --bg:     #0f1117;
+      --card:   #1a1d27;
+      --border: #2a2d3a;
+      --blue:   #4f8ef7;
+      --green:  #22c55e;
+      --red:    #ef4444;
+      --yellow: #f59e0b;
+      --text:   #e2e8f0;
+      --muted:  #64748b;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, sans-serif;
+      padding: 28px 24px;
+      min-height: 100vh;
+    }
+
+    h1 { font-size: 1.35rem; margin-bottom: 2px; }
+    .subtitle { color: var(--muted); font-size: 0.82rem; margin-bottom: 24px; }
+
+    /* ── Toolbar ── */
+    .toolbar {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+    .pill {
+      font-size: 0.75rem;
+      padding: 3px 11px;
+      border-radius: 99px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .pill.init  { background: #1e293b; color: #94a3b8; }
+    .pill.ready { background: #14532d; color: #4ade80; }
+    .pill.error { background: #450a0a; color: #fca5a5; }
+
+    button {
+      padding: 7px 18px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.88rem;
+      font-weight: 600;
+      transition: opacity 0.15s;
+    }
+    button:disabled { opacity: 0.38; cursor: not-allowed; }
+    #run-btn    { background: var(--blue); color: #fff; }
+    #export-btn { background: #334155; color: var(--text); }
+
+    .file-label {
+      display: inline-block;
+      padding: 7px 18px;
+      background: #1e293b;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.88rem;
+      font-weight: 600;
+      border: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    .file-label:hover { background: #2d3f55; }
+    #file-input { display: none; }
+
+    .meta-row {
+      display: flex;
+      gap: 16px;
+      align-items: center;
+      margin-bottom: 18px;
+      flex-wrap: wrap;
+    }
+    #file-status, #case-count { font-size: 0.8rem; color: var(--muted); }
+
+    /* ── Progress ── */
+    .progress-wrap {
+      height: 5px;
+      background: var(--border);
+      border-radius: 3px;
+      margin-bottom: 18px;
+      display: none;
+    }
+    .progress-bar {
+      height: 100%;
+      background: var(--blue);
+      border-radius: 3px;
+      transition: width 0.25s ease;
+    }
+
+    /* ── Summary ── */
+    .summary {
+      display: none;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 20px;
+    }
+    .summary-pill {
+      padding: 5px 14px;
+      border-radius: 8px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      border: 1px solid var(--border);
+      background: var(--card);
+    }
+    .summary-pill.pass { border-color: var(--green); color: var(--green); }
+    .summary-pill.fail { border-color: var(--red);   color: var(--red);   }
+    .summary-pill.skip { border-color: var(--muted); color: var(--muted); }
+    .summary-pill.warn { border-color: var(--yellow); color: var(--yellow); }
+
+    /* ── Results table ── */
+    table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
+    th {
+      text-align: left;
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    td {
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    tr.pending td { color: var(--muted); }
+
+    /* ── Badges ── */
+    .badge {
+      display: inline-block;
+      padding: 2px 9px;
+      border-radius: 4px;
+      font-size: 0.73rem;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .badge.pass        { background: #14532d; color: #4ade80; }
+    .badge.fail        { background: #450a0a; color: #fca5a5; }
+    .badge.skip        { background: #1e293b; color: #94a3b8; }
+    .badge.no-parse    { background: #431407; color: #fb923c; }
+    .badge.decode-fail { background: #292524; color: #a8a29e; }
+    .badge.running     { background: #172554; color: #93c5fd; }
+
+    .subtype {
+      font-size: 0.72rem;
+      color: var(--muted);
+      margin-left: 5px;
+    }
+    .time { color: var(--muted); font-size: 0.78rem; }
+
+    /* ── Diff table ── */
+    .diff-table { margin-top: 5px; font-size: 0.78rem; }
+    .diff-table td { padding: 2px 6px; border: none; }
+    .diff-field { color: var(--muted); font-family: monospace; }
+    .diff-exp   { color: var(--green); font-family: monospace; }
+    .diff-act   { color: var(--red);   font-family: monospace; }
+  </style>
+</head>
+<body>
+  <h1>MRZ Regression Tests</h1>
+  <p class="subtitle">Aynı pipeline (js/mrz-pipeline.js + mrz-core.js) — worker tek seferlik başlatılır, tüm testlerde yeniden kullanılır</p>
+
+  <div class="toolbar">
+    <span class="pill init" id="worker-pill">⏳ Başlatılıyor...</span>
+    <label class="file-label" for="file-input">📂 Test Görüntüleri Seç</label>
+    <input type="file" id="file-input" multiple accept="image/*">
+    <button id="run-btn" disabled>▶ Tüm Testleri Çalıştır</button>
+    <button id="export-btn" style="display:none">⬇ JSON Aktar</button>
+  </div>
+
+  <div class="meta-row">
+    <span id="case-count">manifest.json yükleniyor...</span>
+    <span id="file-status"></span>
+  </div>
+
+  <div class="progress-wrap" id="progress-wrap">
+    <div class="progress-bar" id="progress-bar" style="width:0%"></div>
+  </div>
+
+  <div class="summary" id="summary"></div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Açıklama</th>
+        <th>Durum</th>
+        <th>Süre</th>
+        <th>Sorunlar</th>
+      </tr>
+    </thead>
+    <tbody id="results-body"></tbody>
+  </table>
+
+  <!-- Load order: mrz-core → mrz-pipeline → Tesseract → runner -->
+  <script src="../mrz-core.js"></script>
+  <script src="../js/mrz-pipeline.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="regression.js"></script>
+</body>
+</html>
