@@ -84,7 +84,10 @@
       gray[j] = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
     }
 
-    const thresh = computeOtsuThreshold(gray);
+    // Otsu threshold, but never below 140 (the proven minimum for document text).
+    // Otsu improves binarization when it produces a HIGHER threshold (brighter paper),
+    // but going below 140 drops ink pixels and reduces OCR accuracy on colored cards.
+    const thresh = Math.max(140, computeOtsuThreshold(gray));
 
     // Detect inverted image: if >65% of pixels are darker than threshold → flip
     let darkCount = 0;
