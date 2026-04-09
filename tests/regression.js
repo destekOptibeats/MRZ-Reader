@@ -53,7 +53,8 @@ function editDistance(a, b) {
 //   subtype: null | 'wrong_fields' | 'weak_validation' | 'partial_parse'
 //   diffs:   Array<{ field, expected, actual }>
 function compareCase(pipelineResult, caseConfig) {
-  const { expected, match: matchMode = 'exact' } = caseConfig;
+  const expected  = caseConfig.expected || null;   // may be absent in mrz_expected-only cases
+  const matchMode = caseConfig.match || 'exact';
 
   // Pipeline-level failures — not a field comparison
   if (!pipelineResult || pipelineResult.error) {
@@ -64,47 +65,66 @@ function compareCase(pipelineResult, caseConfig) {
 
   const diffs = [];
 
-  // Count missing critical fields (for partial_parse detection)
-  const missingCritical = CRITICAL_FIELDS.filter(f => {
-    const v = pipelineResult.parsed && pipelineResult.parsed[f];
-    return !v || v.trim().length === 0;
-  });
-
-  // Scalar field comparison
-  for (const field of SCALAR_FIELDS) {
-    if (expected[field] === null || expected[field] === undefined) continue;
-    const isName = NAME_FIELDS.includes(field);
-    const a = normalize(pipelineResult.parsed && pipelineResult.parsed[field], isName);
-    const e = normalize(expected[field], isName);
-    if (a === e) continue;
-    if (matchMode === 'fuzzy' && isName && editDistance(a, e) <= 2) continue;
-    diffs.push({ field, expected: e, actual: a });
+  // ── MRZ line comparison (mrz_expected) ──────────────────────────────────────
+  if (Array.isArray(caseConfig.mrz_expected) && caseConfig.mrz_expected.length > 0) {
+    const actualLines = (pipelineResult.extracted && pipelineResult.extracted.lines) || [];
+    for (let i = 0; i < caseConfig.mrz_expected.length; i++) {
+      const exp = (caseConfig.mrz_expected[i] || '').trim();
+      const act = (actualLines[i]             || '').trim();
+      if (matchMode === 'fuzzy') {
+        // Allow up to 5% of line length or 2 chars, whichever is larger
+        const tol = Math.max(2, Math.round(exp.length * 0.05));
+        if (editDistance(exp, act) > tol)
+          diffs.push({ field: 'mrz_line' + (i + 1), expected: exp, actual: act });
+      } else {
+        if (exp !== act)
+          diffs.push({ field: 'mrz_line' + (i + 1), expected: exp, actual: act });
+      }
+    }
   }
 
-  // Validation sub-field comparison
-  for (const [k, v] of Object.entries(expected.validation || {})) {
-    const actualV = pipelineResult.validation && pipelineResult.validation[k];
-    if (actualV !== v) diffs.push({ field: 'validation.' + k, expected: v, actual: actualV });
-  }
+  // ── Scalar field comparison (expected object) ────────────────────────────────
+  if (expected) {
+    // Count missing critical fields (for partial_parse detection)
+    const missingCritical = CRITICAL_FIELDS.filter(f => {
+      const v = pipelineResult.parsed && pipelineResult.parsed[f];
+      return !v || v.trim().length === 0;
+    });
 
-  // Checksum sub-field comparison
-  for (const [k, v] of Object.entries(expected.checksums || {})) {
-    const cs = pipelineResult.validation && pipelineResult.validation.checksums;
-    const actualV = cs && cs[k];
-    if (actualV !== v) diffs.push({ field: 'checksums.' + k, expected: v, actual: actualV });
+    for (const field of SCALAR_FIELDS) {
+      if (expected[field] === null || expected[field] === undefined) continue;
+      const isName = NAME_FIELDS.includes(field);
+      const a = normalize(pipelineResult.parsed && pipelineResult.parsed[field], isName);
+      const e = normalize(expected[field], isName);
+      if (a === e) continue;
+      if (matchMode === 'fuzzy' && isName && editDistance(a, e) <= 2) continue;
+      diffs.push({ field, expected: e, actual: a });
+    }
+
+    for (const [k, v] of Object.entries(expected.validation || {})) {
+      const actualV = pipelineResult.validation && pipelineResult.validation[k];
+      if (actualV !== v) diffs.push({ field: 'validation.' + k, expected: v, actual: actualV });
+    }
+
+    for (const [k, v] of Object.entries(expected.checksums || {})) {
+      const cs      = pipelineResult.validation && pipelineResult.validation.checksums;
+      const actualV = cs && cs[k];
+      if (actualV !== v) diffs.push({ field: 'checksums.' + k, expected: v, actual: actualV });
+    }
+
+    if (diffs.length === 0) return { outcome: 'PASS', subtype: null, diffs: [] };
+
+    let subtype = 'wrong_fields';
+    if (missingCritical.length >= 2) {
+      subtype = 'partial_parse';
+    } else if (diffs.every(d => d.field.startsWith('validation.') || d.field.startsWith('checksums.'))) {
+      subtype = 'weak_validation';
+    }
+    return { outcome: 'FAIL', subtype, diffs };
   }
 
   if (diffs.length === 0) return { outcome: 'PASS', subtype: null, diffs: [] };
-
-  // Classify failure subtype
-  let subtype = 'wrong_fields';
-  if (missingCritical.length >= 2) {
-    subtype = 'partial_parse';
-  } else if (diffs.every(d => d.field.startsWith('validation.') || d.field.startsWith('checksums.'))) {
-    subtype = 'weak_validation';
-  }
-
-  return { outcome: 'FAIL', subtype, diffs };
+  return { outcome: 'FAIL', subtype: 'wrong_fields', diffs };
 }
 
 // ── STATE ─────────────────────────────────────────────────────────────────────
@@ -227,6 +247,18 @@ function updateSummary() {
     (counts.DECODE_FAIL ? '<span class="summary-pill warn">🚫 ' + counts.DECODE_FAIL + ' decode hatası</span>' : '');
 }
 
+// ── IMAGE LOADER ──────────────────────────────────────────────────────────────
+
+// Fetch an image from a server URL and wrap it as a File object.
+// `url` is relative to the page location (e.g. 'images/IMG_1775.jpg').
+async function fetchImageAsFile(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + url);
+  const blob     = await r.blob();
+  const filename = url.split('/').pop();
+  return new File([blob], filename, { type: blob.type || 'image/jpeg' });
+}
+
 // ── RUNNER ────────────────────────────────────────────────────────────────────
 
 async function runAllTests() {
@@ -254,9 +286,18 @@ async function runAllTests() {
     updateRow(c.id, 'RUNNING', null, [], undefined);
     progBar.style.width = Math.round((i / cases.length) * 100) + '%';
 
-    // Resolve file: strip any path prefix (user selects by basename)
+    // Resolve file: fileMap (manual picker) first, then auto-fetch from tests/images/
     const baseName = c.file.replace(/^.*\//, '');
-    const file = fileMap[baseName] || fileMap[c.file];
+    let file = fileMap[baseName] || fileMap[c.file];
+
+    if (!file) {
+      try {
+        file = await fetchImageAsFile('images/' + baseName);
+      } catch (e) {
+        console.warn('[Regression] Auto-fetch failed for', baseName, '—', e.message);
+        // file stays null → SKIPPED below
+      }
+    }
 
     let outcome, subtype = null, diffs = [], timingMs, timingsDetail = null, meta = null;
 
