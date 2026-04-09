@@ -598,21 +598,28 @@
     const rw = Math.ceil(w + padPx * 2);
     const rh = Math.ceil(h + padPx * 2);
 
-    const borderPixels = collectBorderRing(ctx, rx, ry, rw, rh, 6);
+    // 14 px ring — wide enough to clear adjacent text characters and reach blank paper
+    const borderPixels = collectBorderRing(ctx, rx, ry, rw, rh, 14);
     if (borderPixels.length === 0) return;
 
+    // Keep only the lightest 35 % of border pixels (paper/background, not text ink)
+    const sorted = borderPixels
+      .map(p => ({ p, lum: 0.299*p[0] + 0.587*p[1] + 0.114*p[2] }))
+      .sort((a, b) => b.lum - a.lum);
+    const bgPixels = sorted.slice(0, Math.max(1, Math.floor(sorted.length * 0.35))).map(s => s.p);
+
+    // Fill region with background colour + ±24 noise for visible paper texture
     const imgData = ctx.createImageData(rw, rh);
     for (let i = 0; i < rw * rh; i++) {
-      const s = borderPixels[Math.floor(Math.random() * borderPixels.length)];
-      const noise = () => (Math.random() - 0.5) * 16;
+      const s = bgPixels[Math.floor(Math.random() * bgPixels.length)];
+      const noise = () => (Math.random() - 0.5) * 24;
       imgData.data[i*4]   = Math.min(255, Math.max(0, s[0] + noise()));
       imgData.data[i*4+1] = Math.min(255, Math.max(0, s[1] + noise()));
       imgData.data[i*4+2] = Math.min(255, Math.max(0, s[2] + noise()));
       imgData.data[i*4+3] = 255;
     }
     ctx.putImageData(imgData, rx, ry);
-    // Blend edges with a soft blur
-    boxBlurRegion(ctx, rx - 2, ry - 2, rw + 4, rh + 4, 1);
+    // No blur here — blur destroys texture and produces the flat-patch appearance
   }
 
   // ── PHOTO ANONYMIZATION ──────────────────────────────────────────────────────
@@ -694,7 +701,7 @@
     ctx.font         = `600 ${fontSize}px Arial, Helvetica, sans-serif`;
     ctx.fillStyle    = '#1a1a1a';
     ctx.textBaseline = 'middle';
-    ctx.globalAlpha  = 0.85;  // NOT 1.0 — background texture bleeds through
+    ctx.globalAlpha  = 0.95;  // near-opaque = printed appearance; 5% bleed-through retains texture
     ctx.fillText(String(text), x, y + h / 2);
     ctx.globalAlpha  = 1.0;
   }
@@ -917,7 +924,7 @@
     activateDownload(cardEl, anonCanvas, baseName);
 
     // Store for ZIP export
-    processedResults.push({ filename: baseName, canvas: anonCanvas });
+    processedResults.push({ filename: baseName, canvas: anonCanvas, hasMRZ });
 
     // Build manifest entry
     const mrzSuccess = hasMRZ && valResult && valResult.ok;
@@ -1088,6 +1095,72 @@
     processing = false;
   }
 
+  // ── ZIP COMPRESSION HELPERS ──────────────────────────────────────────────────
+
+  function canvasToBlob(canvas, type, quality) {
+    return new Promise(resolve => canvas.toBlob(resolve, type, quality));
+  }
+
+  function scaleCanvas(canvas, scale) {
+    if (scale === 1.0) return canvas;
+    const c = document.createElement('canvas');
+    c.width  = Math.round(canvas.width  * scale);
+    c.height = Math.round(canvas.height * scale);
+    c.getContext('2d').drawImage(canvas, 0, 0, c.width, c.height);
+    return c;
+  }
+
+  async function blobToCanvas(blob) {
+    const url = URL.createObjectURL(blob);
+    try {
+      const img = new Image();
+      await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
+      const c = document.createElement('canvas');
+      c.width  = img.naturalWidth;
+      c.height = img.naturalHeight;
+      c.getContext('2d').drawImage(img, 0, 0);
+      return c;
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  // Returns the best blob for this canvas that fits within 20 MB and keeps MRZ readable.
+  // Ladder: PNG first (lossless), then JPEG quality steps, then resolution downscale.
+  // If MRZ breaks at any step, reverts to the last known-good blob.
+  async function compressForZip(canvas, hasMRZ) {
+    const LIMIT = 20 * 1024 * 1024; // 20 MB
+
+    const pngBlob = await canvasToBlob(canvas, 'image/png');
+    if (pngBlob.size <= LIMIT) return pngBlob;
+
+    const ladder = [
+      { scale: 1.0, quality: 0.92 },
+      { scale: 1.0, quality: 0.85 },
+      { scale: 1.0, quality: 0.75 },
+      { scale: 0.9, quality: 0.75 },
+      { scale: 0.8, quality: 0.75 },
+    ];
+
+    let lastGoodBlob = pngBlob; // fallback: original PNG even if oversized
+
+    for (const { scale, quality } of ladder) {
+      const scaled = scaleCanvas(canvas, scale);
+      const blob   = await canvasToBlob(scaled, 'image/jpeg', quality);
+
+      if (hasMRZ) {
+        const decoded = await blobToCanvas(blob);
+        const val = await validateAnonymized(decoded);
+        if (!val.ok) break; // MRZ no longer readable — stop, revert to lastGoodBlob
+      }
+
+      lastGoodBlob = blob;
+      if (blob.size <= LIMIT) return blob;
+    }
+
+    return lastGoodBlob; // best achievable without breaking MRZ
+  }
+
   // ── MANIFEST EXPORT ───────────────────────────────────────────────────────────
 
   async function downloadAllZip() {
@@ -1097,14 +1170,16 @@
     zipBtn.disabled = true;
     zipBtn.textContent = '⏳ Zipping...';
 
-    const zip = new JSZip();
+    const zip   = new JSZip();
+    const total = processedResults.length;
 
-    // Add all anonymized images
-    await Promise.all(processedResults.map(({ filename, canvas }) =>
-      new Promise(resolve => {
-        canvas.toBlob(blob => { zip.file(filename, blob); resolve(); }, 'image/png');
-      })
-    ));
+    // Sequential — OCR validation (for MRZ readability gate) cannot run in parallel
+    for (let i = 0; i < total; i++) {
+      const { filename, canvas, hasMRZ } = processedResults[i];
+      zipBtn.textContent = `⏳ Compressing ${i + 1}/${total}...`;
+      const blob = await compressForZip(canvas, hasMRZ);
+      zip.file(filename, blob);
+    }
 
     // Add manifest.json (all entries including no-MRZ cases)
     const allEntries = manifestEntries.length > 0
