@@ -261,11 +261,10 @@
   // ── BATCH OCR LOOP ────────────────────────────────────────────────────────
 
   // Pipeline:
-  //  1. Pre-score all 4 rotations via horizontal density projection (no OCR yet)
-  //  2. Sort by score → try best 2 rotations only
-  //  3. For each: Attempt A = projection-detected region + 3% H-padding
-  //              Attempt B = bottom-75% fallback (only if A failed)
-  //  Total OCR calls: max 4 (vs. previous 12)
+  //  Phase 0: score all 4 rotations via density projection (no OCR)
+  //  Phase 1: projection-detected crop on all 4 rotations (best-first) — early exit on success
+  //  Phase 2: bottom-75% fallback on all 4 rotations (best-first)    — early exit on success
+  //  Max OCR calls: 8 (vs. 12 before). Speed: ~8-20s vs ~36s.
   async function fastBatchOCR(resized, timings, ocrWorker, fileName, fileIndex) {
     const wr = ocrWorker || worker;
     const isFirstFile = (fileIndex === 0);
@@ -273,10 +272,9 @@
     timings.resizedSize = resized.width + 'x' + resized.height;
     if (window._mrzDebug) console.log('[MRZ] batch', fileName || '', resized.width + 'x' + resized.height);
 
-    // ── Step 1: Rotation pre-selection (density projection, no OCR) ──────────
-    const rotations = [0, 90, 180, 270];
+    // ── Phase 0: Rotation pre-selection (density projection, no OCR) ─────────
     const t0 = performance.now();
-    const rotCandidates = rotations.map(deg => {
+    const rotCandidates = [0, 90, 180, 270].map(deg => {
       const rotated = rotateCanvas(resized, deg);
       const binary  = batchPreprocessMRZ(rotated);
       const { score, cropY, cropH } = scoreMRZPresence(binary);
@@ -284,13 +282,12 @@
     });
     timings.crop = Math.round(performance.now() - t0);
 
-    // Best 2 rotations first
+    // Sort: highest density score first (but try ALL 4 rotations in both phases)
     rotCandidates.sort((a, b) => b.score - a.score);
-    const tryList = rotCandidates.slice(0, 2);
 
     if (window._mrzDebug && isFirstFile) {
       rotCandidates.forEach(r =>
-        console.log('[MRZ] rot', r.deg + '°', 'density score:', r.score.toFixed(3),
+        console.log('[MRZ] rot', r.deg + '°', 'density:', r.score.toFixed(3),
           'cropY:', r.cropY, 'cropH:', r.cropH));
     }
 
@@ -299,106 +296,55 @@
     let ocrAttempt = 0;
     let t;
 
-    for (const { deg, rotated, cropY, cropH } of tryList) {
-
-      // ── Attempt A: projection-detected region + horizontal padding ──────────
+    // Helper: run one OCR attempt on a canvas, update globals, return result or null
+    async function tryOCR(canvas, label) {
+      const ocrIn = batchUpscaleIfNeeded(batchPreprocessMRZ(canvas));
+      if (ocrIn.width <= 100 || ocrIn.height <= 100) return null;
       ocrAttempt++;
-      const keyA = 'ocr' + ocrAttempt;
+      const key = 'ocr' + ocrAttempt;
       t = performance.now();
+      try {
+        const { data: { text } } = await wr.recognize(ocrIn);
+        const score   = scoreMRZText(text);
+        const longest = longestOCRLine(text);
+        const chevs   = countChevrons(text);
+        timings[key] = Math.round(performance.now() - t);
+        timings['sz' + ocrAttempt] = ocrIn.width + 'x' + ocrIn.height;
+        if (window._mrzDebug && isFirstFile)
+          console.log('[MRZ]', label, 'longest:', longest, 'score:', score);
+        if (text) lastDiag = diagnoseMRZ(text);
+        if (longest >= 28) {
+          const result = extractMRZ(clean(text));
+          if (result && validateMRZ(result).valid)
+            return { extracted: result, diag: diagnoseMRZ(text), attempts: ocrAttempt,
+              longestLine: longest, chevronCount: chevs, rawOcrText: text, selectedBand: label };
+        }
+        if (score > globalBestScore) {
+          globalBestScore = score; globalBestText = text; globalBestBand = ocrAttempt - 1;
+        }
+      } catch(e) {
+        timings[key] = Math.round(performance.now() - t);
+        if (window._mrzDebug) console.warn('[MRZ]', label, 'error:', e.message);
+      }
+      return null;
+    }
 
-      // 3% left/right padding to avoid cutting edge characters
+    // ── Phase 1: projection-detected crop + 3% horizontal padding ────────────
+    for (const { deg, rotated, cropY, cropH } of rotCandidates) {
       const padW  = Math.round(rotated.width * 0.03);
-      const cX    = padW;
-      const cW    = rotated.width - 2 * padW;
-      const cY    = cropY;
-      const cH    = cropH;
-
       const canvA = document.createElement('canvas');
-      canvA.width  = cW; canvA.height = cH;
-      canvA.getContext('2d').drawImage(rotated, cX, cY, cW, cH, 0, 0, cW, cH);
+      canvA.width  = rotated.width - 2 * padW;
+      canvA.height = cropH;
+      canvA.getContext('2d').drawImage(rotated, padW, cropY, canvA.width, cropH, 0, 0, canvA.width, cropH);
+      const hit = await tryOCR(canvA, 'rot' + deg + '/proj');
+      if (hit) return hit;
+    }
 
-      const prepA  = batchPreprocessMRZ(canvA);
-      const ocrInA = batchUpscaleIfNeeded(prepA);
-      timings[keyA] = 0;
-
-      if (ocrInA.width > 100 && ocrInA.height > 100) {
-        try {
-          const { data: { text } } = await wr.recognize(ocrInA);
-          const score   = scoreMRZText(text);
-          const longest = longestOCRLine(text);
-          const chevs   = countChevrons(text);
-
-          timings[keyA] = Math.round(performance.now() - t);
-          timings['sz' + ocrAttempt] = ocrInA.width + 'x' + ocrInA.height;
-
-          if (window._mrzDebug && isFirstFile) {
-            console.log('[MRZ] rot' + deg + '° proj-crop  longest:', longest, 'score:', score);
-          }
-
-          if (longest >= 28) {
-            const result = extractMRZ(clean(text));
-            if (result && validateMRZ(result).valid) {
-              return { extracted: result, diag: diagnoseMRZ(text), attempts: ocrAttempt,
-                longestLine: longest, chevronCount: chevs, rawOcrText: text,
-                selectedBand: 'proj/rot' + deg };
-            }
-          }
-
-          if (score > globalBestScore) {
-            globalBestScore = score; globalBestText = text; globalBestBand = ocrAttempt - 1;
-          }
-          if (text) lastDiag = diagnoseMRZ(text);
-        } catch(e) {
-          timings[keyA] = Math.round(performance.now() - t);
-          if (window._mrzDebug) console.warn('[MRZ] rot' + deg + '° proj error:', e.message);
-        }
-      }
-
-      // ── Attempt B: wide fallback — bottom 75% of rotated image ─────────────
-      // Only if attempt A didn't score well enough
-      if (globalBestScore < 20) {
-        ocrAttempt++;
-        const keyB  = 'ocr' + ocrAttempt;
-        t = performance.now();
-
-        const croppedB = cropBottom(rotated, 0.75);
-        const prepB    = batchPreprocessMRZ(croppedB);
-        const ocrInB   = batchUpscaleIfNeeded(prepB);
-        timings[keyB]  = 0;
-
-        if (ocrInB.width > 100 && ocrInB.height > 100) {
-          try {
-            const { data: { text: text2 } } = await wr.recognize(ocrInB);
-            const score2   = scoreMRZText(text2);
-            const longest2 = longestOCRLine(text2);
-            const chevs2   = countChevrons(text2);
-
-            timings[keyB] = Math.round(performance.now() - t);
-            timings['sz' + ocrAttempt] = ocrInB.width + 'x' + ocrInB.height;
-
-            if (window._mrzDebug && isFirstFile) {
-              console.log('[MRZ] rot' + deg + '° fallback75 longest:', longest2, 'score:', score2);
-            }
-
-            if (longest2 >= 28) {
-              const result = extractMRZ(clean(text2));
-              if (result && validateMRZ(result).valid) {
-                return { extracted: result, diag: diagnoseMRZ(text2), attempts: ocrAttempt,
-                  longestLine: longest2, chevronCount: chevs2, rawOcrText: text2,
-                  selectedBand: 'fallback75/rot' + deg };
-              }
-            }
-
-            if (score2 > globalBestScore) {
-              globalBestScore = score2; globalBestText = text2; globalBestBand = ocrAttempt - 1;
-            }
-            if (text2) lastDiag = diagnoseMRZ(text2);
-          } catch(e) {
-            timings[keyB] = Math.round(performance.now() - t);
-            if (window._mrzDebug) console.warn('[MRZ] rot' + deg + '° fallback error:', e.message);
-          }
-        }
-      }
+    // ── Phase 2: bottom-75% fallback on all 4 rotations ─────────────────────
+    for (const { deg, rotated } of rotCandidates) {
+      const croppedB = cropBottom(rotated, 0.75);
+      const hit = await tryOCR(croppedB, 'rot' + deg + '/fallback75');
+      if (hit) return hit;
     }
 
     const failLongest  = globalBestText ? longestOCRLine(globalBestText) : 0;
