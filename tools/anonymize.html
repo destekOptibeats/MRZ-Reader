@@ -186,12 +186,14 @@
     <input type="file" id="file-input" multiple accept="image/*">
     <button id="process-btn" disabled>▶ Process All</button>
     <button id="manifest-btn">⬇ Download Manifest</button>
+    <button id="zip-btn" disabled>📦 Download All ZIP</button>
   </div>
 
   <div id="grid"></div>
 
   <script src="../mrz-core.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3/dist/jszip.min.js"></script>
   <script>
   'use strict';
 
@@ -205,6 +207,7 @@
   let ocrWorker = null;
   let selectedFiles = [];
   let manifestEntries = [];
+  let processedResults = [];   // { filename, canvas } for ZIP export
   let processing = false;
 
   // ── WORKER ────────────────────────────────────────────────────────────────────
@@ -778,57 +781,117 @@
       return null;
     }
 
-    // 3. Extract MRZ from OCR text
+    // 3. Detect MRZ (failure is now non-fatal — hard cases are included in dataset)
     const mrzResult = extractMRZ(clean(data.text));
-    if (!mrzResult) {
-      setCardStatus(cardEl, 'fail', 'MRZ not detected in image');
-      return null;
+    const hasMRZ    = !!mrzResult;
+
+    // 4. Zone + field detection — branched on MRZ presence
+    let parsed  = {};
+    let docType = 'TD3'; // safe default for no-MRZ case
+    let zone;
+
+    if (hasMRZ) {
+      parsed  = parseResult(mrzResult);
+      docType = mrzResult.type;
+      setCardDocType(cardEl, docType);
+      zone = findMRZZone(data.words || [], origCanvas.width, origCanvas.height, mrzResult);
+    } else {
+      // Estimate zone from image dimensions alone (TD3 defaults — 2 lines)
+      const estLineH = origCanvas.height * 0.055;
+      zone = {
+        x:        origCanvas.width * 0.05,
+        y:        origCanvas.height - estLineH * 2 - origCanvas.height * 0.04,
+        w:        origCanvas.width * 0.90,
+        h:        estLineH * 2,
+        lineH:    estLineH,
+        numLines: 2,
+      };
     }
 
-    const parsed  = parseResult(mrzResult);
-    const docType = mrzResult.type;
-    setCardDocType(cardEl, docType);
-
-    // 4. Locate MRZ zone in pixel space
-    const zone = findMRZZone(data.words || [], origCanvas.width, origCanvas.height, mrzResult);
-
-    // 4b. Detect visual field positions (once — uses original OCR data)
+    // Detect visual field positions using original OCR data + zone anchor
     const vizFields = detectVisualFields(
       data.words || [], parsed, zone, origCanvas.width, origCanvas.height, docType
     );
 
-    // 5. Retry loop — up to 3 attempts with different synthetic data
+    // 5. Anonymization — two separate paths
     let anonCanvas = null, valResult = null, finalSyn = null, finalMRZ = null;
 
-    for (let attempt = 0; attempt < 3; attempt++) {
-      setCardStatus(cardEl, 'running', `Attempt ${attempt + 1}/3 — generating...`);
+    if (hasMRZ) {
+      // ── MRZ path: retry loop up to 3 attempts ──
+      for (let attempt = 0; attempt < 3; attempt++) {
+        setCardStatus(cardEl, 'running', `Attempt ${attempt + 1}/3 — generating...`);
 
-      // Generate synthetic values
-      const syn = generateSynthetic();
+        const syn    = generateSynthetic();
+        const synMRZ = docType === 'TD1' ? buildTD1(parsed, syn) : buildTD3(parsed, syn);
 
-      // Build ICAO-valid MRZ
-      const synMRZ = docType === 'TD1' ? buildTD1(parsed, syn) : buildTD3(parsed, syn);
+        const synVal = validateMRZ(synMRZ);
+        if (!synVal.valid) {
+          console.warn('[Anonymize] Synthetic MRZ invalid (attempt ' + attempt + '):', synVal.errors);
+          continue;
+        }
 
-      // Sanity-check our own construction
-      const synVal = validateMRZ(synMRZ);
-      if (!synVal.valid) {
-        console.warn('[Anonymize] Synthetic MRZ invalid (attempt ' + attempt + '):', synVal.errors);
-        continue;
+        anonCanvas = document.createElement('canvas');
+        anonCanvas.width  = origCanvas.width;
+        anonCanvas.height = origCanvas.height;
+        const anonCtx = anonCanvas.getContext('2d');
+        anonCtx.drawImage(origCanvas, 0, 0);
+
+        // Visual fields first (photo + text)
+        anonymizePhotoField(anonCtx, vizFields.photo);
+        const vizTextFields = [
+          { key: 'surname', text: syn.surname },
+          { key: 'given',   text: syn.given },
+          { key: 'docNo',   text: syn.docNo },
+          { key: 'dob',     text: formatDateDisplay(syn.dob) },
+          { key: 'expiry',  text: formatDateDisplay(syn.expiry) },
+        ];
+        for (const { key, text } of vizTextFields) {
+          const bbox = vizFields[key];
+          if (!bbox || bbox.w < 4 || bbox.h < 4) continue;
+          inpaintRegion(anonCtx, bbox.x, bbox.y, bbox.w, bbox.h);
+          renderTextField(anonCtx, bbox, text);
+        }
+
+        // MRZ zone
+        const origSharpness = laplacianVariance(origCtx, zone.x, zone.y, zone.w, zone.h);
+        inpaintRegion(anonCtx, zone.x, zone.y, zone.w, zone.h);
+        renderMRZLines(anonCtx, zone, synMRZ.lines);
+        const blurPasses = origSharpness < 100 ? 3 : origSharpness < 300 ? 1 : 0;
+        if (blurPasses > 0) {
+          boxBlurRegion(anonCtx, Math.floor(zone.x), Math.floor(zone.y),
+                        Math.ceil(zone.w), Math.ceil(zone.h), blurPasses);
+        }
+
+        setCardStatus(cardEl, 'running', `Attempt ${attempt + 1}/3 — validating...`);
+        valResult = await validateAnonymized(anonCanvas);
+
+        if (valResult.ok) { finalSyn = syn; finalMRZ = synMRZ; break; }
+        console.warn('[Anonymize] Re-OCR validation failed (attempt ' + attempt + '):', valResult.reason);
       }
 
-      // Clone canvas
+      if (!anonCanvas) {
+        setCardStatus(cardEl, 'fail', 'Synthetic MRZ construction failed');
+        return null;
+      }
+
+      const success = valResult && valResult.ok;
+      setCardStatus(cardEl, success ? 'ok' : 'warn',
+        success ? 'OK' : 'MRZ unreadable after 3 attempts');
+      if (finalMRZ) setCardMRZ(cardEl, finalMRZ.lines);
+      if (valResult) setCardScore(cardEl, valResult);
+
+    } else {
+      // ── No-MRZ path: single pass, visual fields only ──
+      setCardStatus(cardEl, 'running', 'Anonymizing visual fields...');
+      const syn = generateSynthetic();
+
       anonCanvas = document.createElement('canvas');
       anonCanvas.width  = origCanvas.width;
       anonCanvas.height = origCanvas.height;
       const anonCtx = anonCanvas.getContext('2d');
       anonCtx.drawImage(origCanvas, 0, 0);
 
-      // ── Phase 2: Visual field anonymization (before MRZ, preserves MRZ zone) ──
-
-      // Photo: compound blur + noise + feathered edges
       anonymizePhotoField(anonCtx, vizFields.photo);
-
-      // Text fields: inpaint then render synthetic replacement
       const vizTextFields = [
         { key: 'surname', text: syn.surname },
         { key: 'given',   text: syn.given },
@@ -843,63 +906,24 @@
         renderTextField(anonCtx, bbox, text);
       }
 
-      // ── MRZ zone (unchanged from Phase 1) ──
-
-      // Measure original sharpness
-      const origSharpness = laplacianVariance(origCtx, zone.x, zone.y, zone.w, zone.h);
-
-      // Inpaint original MRZ area
-      inpaintRegion(anonCtx, zone.x, zone.y, zone.w, zone.h);
-
-      // Render new synthetic MRZ text
-      renderMRZLines(anonCtx, zone, synMRZ.lines);
-
-      // Blur to match original sharpness (preserve visual difficulty)
-      const blurPasses = origSharpness < 100 ? 3 : origSharpness < 300 ? 1 : 0;
-      if (blurPasses > 0) {
-        boxBlurRegion(anonCtx, Math.floor(zone.x), Math.floor(zone.y),
-                      Math.ceil(zone.w), Math.ceil(zone.h), blurPasses);
-      }
-
-      // Validate via re-OCR
-      setCardStatus(cardEl, 'running', `Attempt ${attempt + 1}/3 — validating...`);
-      valResult = await validateAnonymized(anonCanvas);
-
-      if (valResult.ok) {
-        finalSyn = syn;
-        finalMRZ = synMRZ;
-        break;
-      }
-      console.warn('[Anonymize] Re-OCR validation failed (attempt ' + attempt + '):', valResult.reason);
+      finalSyn = syn;
+      setCardStatus(cardEl, 'warn', '⚠ MRZ not detected');
     }
 
-    if (!anonCanvas) {
-      setCardStatus(cardEl, 'fail', 'Synthetic MRZ construction failed');
-      return null;
-    }
-
-    const success = valResult && valResult.ok;
-    setCardStatus(cardEl, success ? 'ok' : 'warn', success ? 'OK' : 'MRZ unreadable after 3 attempts');
-
-    // Show anonymized preview
-    showPreview(cardEl, 'anon', anonCanvas);
-
-    // Show MRZ lines
-    if (finalMRZ) {
-      setCardMRZ(cardEl, finalMRZ.lines);
-    }
-
-    // Show score
-    if (valResult) {
-      setCardScore(cardEl, valResult);
-    }
-
-    // Build manifest entry (only if validation passed)
+    // 6. Common output — always reached for both paths
     const baseName = file.name.replace(/\.[^.]+$/, '') + '-anon.png';
-    const manifestEntry = success ? buildManifestEntry(baseName, file.name, docType, parsed, finalSyn, finalMRZ, valResult) : null;
 
-    // Download PNG button
+    showPreview(cardEl, 'anon', anonCanvas);
     activateDownload(cardEl, anonCanvas, baseName);
+
+    // Store for ZIP export
+    processedResults.push({ filename: baseName, canvas: anonCanvas });
+
+    // Build manifest entry
+    const mrzSuccess = hasMRZ && valResult && valResult.ok;
+    const manifestEntry = mrzSuccess
+      ? buildManifestEntry(baseName, file.name, docType, parsed, finalSyn, finalMRZ, valResult)
+      : buildNoMRZManifestEntry(baseName, file.name);
 
     return manifestEntry;
   }
@@ -935,6 +959,12 @@
         checksums:  { passOk: true, dobOk: true, expOk: true },
       },
     };
+  }
+
+  function buildNoMRZManifestEntry(baseName, origName) {
+    const idx = manifestEntries.length + 1;
+    const id  = 'unknown-' + String(idx).padStart(3, '0');
+    return { id, file: baseName, original: origName, status: 'no_mrz_detected' };
   }
 
   // ── UI HELPERS ────────────────────────────────────────────────────────────────
@@ -1029,10 +1059,12 @@
   async function processAll() {
     if (processing || !ocrWorker || selectedFiles.length === 0) return;
     processing = true;
-    manifestEntries = [];
+    manifestEntries  = [];
+    processedResults = [];
 
     document.getElementById('process-btn').disabled = true;
     document.getElementById('manifest-btn').style.display = 'none';
+    document.getElementById('zip-btn').disabled = true;
     document.getElementById('grid').innerHTML = '';
 
     for (const file of selectedFiles) {
@@ -1050,10 +1082,47 @@
     if (manifestEntries.length > 0) {
       document.getElementById('manifest-btn').style.display = 'inline-block';
     }
+    if (processedResults.length > 0) {
+      document.getElementById('zip-btn').disabled = false;
+    }
     processing = false;
   }
 
   // ── MANIFEST EXPORT ───────────────────────────────────────────────────────────
+
+  async function downloadAllZip() {
+    if (typeof JSZip === 'undefined' || processedResults.length === 0) return;
+
+    const zipBtn = document.getElementById('zip-btn');
+    zipBtn.disabled = true;
+    zipBtn.textContent = '⏳ Zipping...';
+
+    const zip = new JSZip();
+
+    // Add all anonymized images
+    await Promise.all(processedResults.map(({ filename, canvas }) =>
+      new Promise(resolve => {
+        canvas.toBlob(blob => { zip.file(filename, blob); resolve(); }, 'image/png');
+      })
+    ));
+
+    // Add manifest.json (all entries including no-MRZ cases)
+    const allEntries = manifestEntries.length > 0
+      ? manifestEntries
+      : [];
+    zip.file('manifest.json', JSON.stringify({ version: 1, cases: allEntries }, null, 2));
+
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const url  = URL.createObjectURL(blob);
+    Object.assign(document.createElement('a'), {
+      href:     url,
+      download: 'mrz-dataset-' + new Date().toISOString().slice(0,10) + '.zip',
+    }).click();
+    URL.revokeObjectURL(url);
+
+    zipBtn.disabled = false;
+    zipBtn.textContent = '📦 Download All ZIP';
+  }
 
   function downloadManifest() {
     const manifest = { version: 1, cases: manifestEntries };
@@ -1078,6 +1147,7 @@
 
   document.getElementById('process-btn').addEventListener('click', processAll);
   document.getElementById('manifest-btn').addEventListener('click', downloadManifest);
+  document.getElementById('zip-btn').addEventListener('click', downloadAllZip);
 
   window.addEventListener('beforeunload', () => {
     if (ocrWorker) try { ocrWorker.terminate(); } catch (_) {}
