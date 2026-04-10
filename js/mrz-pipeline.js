@@ -138,9 +138,9 @@
       smooth[y] = (density[y - 2] + density[y - 1] + density[y] + density[y + 1] + density[y + 2]) / 5;
     }
 
-    // Search bottom 60% of image (MRZ is always near the bottom of a document)
-    const searchStart = Math.floor(h * 0.40);
-    const TEXT_THRESH = 0.08;
+    // Search bottom 75% of image — covers centered compositions and distance shots
+    const searchStart = Math.floor(h * 0.25);
+    const TEXT_THRESH = 0.05;  // lowered from 0.08 to catch sparse text in distance shots
 
     // Find contiguous dark-pixel bands
     const bands = [];
@@ -208,10 +208,10 @@
     return { score: bestScore, cropY: bestY, cropH: bestH };
   }
 
-  // Simple upscale for small crop canvases
+  // Upscale small crop canvases to at least 600px tall for reliable Tesseract recognition
   function batchUpscaleIfNeeded(canvas) {
-    if (canvas.height >= 400) return canvas;
-    const factor = 2;
+    if (canvas.height >= 600) return canvas;
+    const factor = Math.max(2, Math.ceil(600 / canvas.height));
     const c = document.createElement('canvas');
     c.width = canvas.width * factor;
     c.height = canvas.height * factor;
@@ -350,6 +350,12 @@
       if (hit) return hit;
     }
 
+    // ── Phase 3: full image (no crop) for top-2 rotations ────────────────────
+    for (const { deg, rotated } of rotCandidates.slice(0, 2)) {
+      const hit = await tryOCR(rotated, 'rot' + deg + '/full');
+      if (hit) return hit;
+    }
+
     const failLongest  = globalBestText ? longestOCRLine(globalBestText) : 0;
     const failChevrons = globalBestText ? countChevrons(globalBestText)  : 0;
     return { extracted: null, diag: lastDiag, attempts: ocrAttempt,
@@ -411,7 +417,7 @@
     timings = timings || {};
     let bitmap;
     try {
-      bitmap = await createImageBitmap(file);
+      bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
     } catch (e) {
       return { error: 'decode_failed' };
     }
