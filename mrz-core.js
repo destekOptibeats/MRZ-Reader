@@ -230,7 +230,7 @@
     // Guards: P< prefix check, chevron density on each candidate, isL1_TD3/isL2_TD3, max 100 P< hits.
     const rawFlat = rawOCR.toUpperCase().replace(/[^A-Z0-9<]/g, '');
     let pHits = 0;
-    for (let i = 0; i < rawFlat.length - 86 && pHits < 100; i++) {
+    for (let i = 0; i <= rawFlat.length - 86 && pHits < 100; i++) {
       if (rawFlat[i] !== 'P' || rawFlat[i + 1] !== '<') continue;  // fast reject
       pHits++;
       for (let l1len = 43; l1len <= 45 && i + l1len <= rawFlat.length; l1len++) {
