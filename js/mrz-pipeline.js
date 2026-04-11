@@ -444,8 +444,8 @@
         if (window._mrzDebug) console.log('[MRZ] rot' + deg + '/' + label,
           'longest:', longest, 'ocrScore:', ocrScore);
 
-        // TEMP DEBUG — img_1914/1924/1925 L2 root cause investigation
-        if (['1914','1924','1925'].some(id => (fileName||'').includes(id))) {
+        // TEMP DEBUG — img_1914/1780 root cause investigation
+        if (['1914','1780'].some(id => (fileName||'').includes(id))) {
           const lines = text.split('\n');
           const mrzLines = lines.filter(l => l.length >= 28);
           const entry = { rot: deg, label, fileName,
