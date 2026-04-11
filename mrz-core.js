@@ -224,6 +224,29 @@
         if (isL1_TD3(l1) && l2 && isL2_TD3(l2)) return { type:'TD3', lines:[l1, l2] };
       }
     }
+    // Fallback: pattern-based TD3 sliding window — variable L1/L2 lengths (43–45)
+    // Handles OCR that drops 1–2 trailing chars per line (longestLine = 43 instead of 44).
+    // rawFlat strips ALL non-MRZ chars so adjacent OCR lines are found as one flat string.
+    // Guards: P< prefix check, chevron density on each candidate, isL1_TD3/isL2_TD3, max 100 P< hits.
+    const rawFlat = rawOCR.toUpperCase().replace(/[^A-Z0-9<]/g, '');
+    let pHits = 0;
+    for (let i = 0; i < rawFlat.length - 86 && pHits < 100; i++) {
+      if (rawFlat[i] !== 'P' || rawFlat[i + 1] !== '<') continue;  // fast reject
+      pHits++;
+      for (let l1len = 43; l1len <= 45 && i + l1len <= rawFlat.length; l1len++) {
+        const l1raw = rawFlat.substring(i, i + l1len);
+        if ((l1raw.match(/</g) || []).length < 5) continue;  // chevron density guard
+        const l1f = fixLine(l1raw, { targetLen: 44, kind: 'TD3_L1' });
+        if (!l1f || !isL1_TD3(l1f)) continue;
+        for (let l2len = 43; l2len <= 45 && i + l1len + l2len <= rawFlat.length; l2len++) {
+          const l2raw = rawFlat.substring(i + l1len, i + l1len + l2len);
+          if ((l2raw.match(/</g) || []).length < 1) continue;  // at least 1 chevron
+          const l2f = fixLine(l2raw, { targetLen: 44, kind: 'TD3_L2' });
+          if (l2f && isL2_TD3(l2f)) return { type: 'TD3', lines: [l1f, l2f] };
+        }
+      }
+    }
+
     // Fallback: flat sliding window — TD1
     if (flat.length >= 90) {
       for (let i = 0; i <= flat.length - 90; i++) {
