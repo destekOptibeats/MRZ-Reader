@@ -467,7 +467,8 @@
     let globalBestScore = -1, globalBestText = '', globalBestMRZ = null;
     let lastDiag = null, ocrAttempt = 0;
     const allFragmentLines = []; // Phase 2.5: accumulate candidate lines across OCR attempts
-    let bestProjCropData = null; // Phase 2.75: save best proj raw crop for hi-contrast fallback
+    let bestProjCropData = null;  // Phase 2.75: save best proj raw crop for hi-contrast fallback
+    let hiContrastCanvas = null; // Phase 2.8:  reuse hi-contrast canvas across phases
 
     // ── Phase 1: OCR top candidates in rank order ─────────────────────────
     for (const { deg, rotated, y: cropY, h: cropH, label } of topCandidates) {
@@ -653,7 +654,8 @@
     // can recover MRZ zones that the standard path over-thresholds or under-exposes.
     if (bestProjCropData) {
       try {
-        const hiOcrIn = batchUpscaleIfNeeded(hiContrastPreprocess(bestProjCropData.crop));
+        hiContrastCanvas = hiContrastPreprocess(bestProjCropData.crop); // save for Phase 2.8
+        const hiOcrIn = batchUpscaleIfNeeded(hiContrastCanvas);
         if (hiOcrIn.width > 100 && hiOcrIn.height > 100) {
           ocrAttempt++;
           const { data: { text: hiText } } = await wr.recognize(hiOcrIn);
@@ -687,6 +689,62 @@
           }
         }
       } catch (_) {}
+    }
+
+    // ── Phase 2.8: PSM 7 / PSM 8 targeted line fallback (≤2 extra OCR calls) ─
+    // Feeds the hi-contrast crop to Tesseract with PSM 7 (single text line),
+    // which can improve character recognition when block segmentation fails.
+    // Falls back to PSM 8 (single word) if PSM 7 also fails to find MRZ.
+    // Always restores PSM 6 (uniform block) before exiting.
+    if (hiContrastCanvas) {
+      const hiOcrIn28 = batchUpscaleIfNeeded(hiContrastCanvas);
+      const tryPsm = async (psm) => {
+        try {
+          await wr.setParameters({ tessedit_pageseg_mode: psm });
+          ocrAttempt++;
+          const { data: { text: psmText } } = await wr.recognize(hiOcrIn28);
+          await wr.setParameters({ tessedit_pageseg_mode: '6' }); // restore
+
+          // Debug log for targeted images
+          if (['1914','1780'].some(id => (fileName||'').includes(id))) {
+            const psmLines = psmText.split('\n');
+            const entry = { rot: bestProjCropData?.deg, label: 'psm' + psm, fileName,
+              allLengths: psmLines.map(l => l.length),
+              mrzCandidates: psmLines.filter(l => l.length >= 28) };
+            if (!window._dbgData) window._dbgData = [];
+            window._dbgData.push(entry);
+          }
+
+          const psmResult = extractMRZ(clean(psmText));
+          if (psmResult) {
+            const corrLines = correctCheckDigits(psmResult.type, psmResult.lines);
+            const corrCount = countCheckDigitChanges(psmResult.type, psmResult.lines, corrLines);
+            if (corrCount <= MAX_CORRECTIONS) {
+              const corrResult = { type: psmResult.type, lines: corrLines };
+              if (validateMRZ(corrResult).valid) {
+                return {
+                  extracted: corrResult, diag: lastDiag, attempts: ocrAttempt,
+                  longestLine: failLongest, chevronCount: failChevrons,
+                  rawOcrText: psmText, selectedBand: 'psm' + psm,
+                  corrected: corrCount > 0, correctionCount: corrCount,
+                  recoveryMode: 'psm' + psm,
+                };
+              }
+            }
+          }
+          return null;
+        } catch (_) {
+          try { await wr.setParameters({ tessedit_pageseg_mode: '6' }); } catch (_2) {}
+          return null;
+        }
+      };
+
+      if (hiOcrIn28.width > 100 && hiOcrIn28.height > 100) {
+        const r7 = await tryPsm('7');
+        if (r7) return r7;
+        const r8 = await tryPsm('8');
+        if (r8) return r8;
+      }
     }
 
     // ── Phase 3: NO_PARSE ─────────────────────────────────────────────────
