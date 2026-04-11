@@ -22,17 +22,27 @@
     if (!s) return null;
 
     if (s.length > targetLen && s.length - targetLen <= 15) {
-      // TD1_L3: pick first clean match (minimum skip) — name lines print left-to-right
-      // "most trailing <" was wrong: biases toward shorter surnames with more padding
+      // TD1_L3: two strategies based on leading char of OCR line
+      //   s[0] !== '<' → padding extends at the END  → minimum skip (first valid non-<-starting)
+      //   s[0] === '<' → garbage prefix at the START → most-trailing-< among non-<-starting
+      // Both exclude candidates starting with '<' (real surnames never start with filler)
       if (kind === 'TD1_L3') {
-        let bestL3 = null;
+        let bestL3 = null, bestTrailing = -1;
+        const leadingGarbage = s[0] === '<';
         for (let skip = 0; skip <= s.length - targetLen; skip++) {
           const c = s.substring(skip, skip + targetLen);
-          // Must contain '<<' (name separator) and be at least 25 chars of real content
           if (!c.includes('<<') || c.length < 25) continue;
-          const clean = /^[A-Z<]+$/.test(c);
-          // First clean match wins — don't continue searching
-          if (clean && bestL3 === null) { bestL3 = c; break; }
+          if (!/^[A-Z<]+$/.test(c)) continue;   // must be clean
+          if (c[0] === '<') continue;             // surname must start with a letter
+          if (!leadingGarbage) {
+            // Strategy A: minimum skip — first valid candidate wins
+            bestL3 = c; break;
+          } else {
+            // Strategy B: most trailing '<' — scan all, keep best
+            let trailing = 0;
+            for (let t = c.length - 1; t >= 0 && c[t] === '<'; t--) trailing++;
+            if (trailing > bestTrailing) { bestTrailing = trailing; bestL3 = c; }
+          }
         }
         if (bestL3) return applyNameFixes(bestL3, kind);
         // Relaxed: allow digits → convert to letters
