@@ -116,6 +116,56 @@
     return c;
   }
 
+  // Hi-contrast variant: contrast-stretch THEN Otsu (no 140 floor).
+  // Used as a fallback preprocessing path for images where standard Otsu
+  // binarization gives poor results (low-contrast MRZ zones, blurry text).
+  function hiContrastPreprocess(srcCanvas) {
+    const sw = srcCanvas.width, sh = srcCanvas.height;
+    if (!sw || !sh) return srcCanvas;
+
+    const c = document.createElement('canvas');
+    c.width = sw; c.height = sh;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(srcCanvas, 0, 0, sw, sh, 0, 0, sw, sh);
+
+    const imgData = ctx.getImageData(0, 0, sw, sh);
+    const data = imgData.data;
+
+    // 1. Grayscale + find actual pixel range for contrast stretch
+    const gray = new Uint8Array(sw * sh);
+    let minV = 255, maxV = 0;
+    for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+      const g = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+      gray[j] = g;
+      if (g < minV) minV = g;
+      if (g > maxV) maxV = g;
+    }
+
+    // 2. Contrast stretch: map [minV, maxV] → [0, 255] (uses full dynamic range)
+    const range = maxV - minV || 1;
+    for (let j = 0; j < gray.length; j++) {
+      gray[j] = Math.round((gray[j] - minV) * 255 / range);
+    }
+
+    // 3. Otsu threshold on stretched image — NO 140 floor, computed freely
+    const thresh = computeOtsuThreshold(gray);
+
+    // 4. Inversion detection (same logic as batchPreprocessMRZ)
+    let darkCount = 0;
+    for (let j = 0; j < gray.length; j++) if (gray[j] < thresh) darkCount++;
+    const inverted = (darkCount / gray.length) > 0.65;
+
+    // 5. Binarize
+    for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+      const isDark = inverted ? (gray[j] >= thresh) : (gray[j] < thresh);
+      const val = isDark ? 0 : 255;
+      data[i] = data[i + 1] = data[i + 2] = val;
+      data[i + 3] = 255;
+    }
+    ctx.putImageData(imgData, 0, 0);
+    return c;
+  }
+
   // ── HORIZONTAL DENSITY PROJECTION ────────────────────────────────────────
 
   // Analyse a binarised canvas: find dense text bands near the bottom.
@@ -417,6 +467,7 @@
     let globalBestScore = -1, globalBestText = '', globalBestMRZ = null;
     let lastDiag = null, ocrAttempt = 0;
     const allFragmentLines = []; // Phase 2.5: accumulate candidate lines across OCR attempts
+    let bestProjCropData = null; // Phase 2.75: save best proj raw crop for hi-contrast fallback
 
     // ── Phase 1: OCR top candidates in rank order ─────────────────────────
     for (const { deg, rotated, y: cropY, h: cropH, label } of topCandidates) {
@@ -425,6 +476,9 @@
       crop.width  = Math.max(1, rotated.width - 2 * padW);
       crop.height = Math.max(1, cropH);
       crop.getContext('2d').drawImage(rotated, padW, cropY, crop.width, cropH, 0, 0, crop.width, cropH);
+
+      // Save first proj crop (raw, before preprocessing) for Phase 2.75 hi-contrast fallback
+      if (label === 'proj' && !bestProjCropData) bestProjCropData = { crop, deg };
 
       const ocrIn = batchUpscaleIfNeeded(batchPreprocessMRZ(crop));
       if (ocrIn.width <= 100 || ocrIn.height <= 100) continue;
@@ -585,6 +639,48 @@
                   recoveryMode: 'fragment-combined',
                   combinationCount,
                   fragmentSources: sources([frags[i], frags[j], frags[k]]),
+                };
+              }
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    // ── Phase 2.75: proj-hicontrast (1 extra OCR call, only on full failure) ─
+    // Applies contrast-stretch + free-Otsu binarization to the best proj crop.
+    // Different from standard batchPreprocessMRZ (no 140 threshold floor) so it
+    // can recover MRZ zones that the standard path over-thresholds or under-exposes.
+    if (bestProjCropData) {
+      try {
+        const hiOcrIn = batchUpscaleIfNeeded(hiContrastPreprocess(bestProjCropData.crop));
+        if (hiOcrIn.width > 100 && hiOcrIn.height > 100) {
+          ocrAttempt++;
+          const { data: { text: hiText } } = await wr.recognize(hiOcrIn);
+
+          // Debug log — same images as Phase 1 debug
+          if (['1914','1780'].some(id => (fileName||'').includes(id))) {
+            const hiLines = hiText.split('\n');
+            const entry = { rot: bestProjCropData.deg, label: 'proj-hicontrast', fileName,
+              allLengths: hiLines.map(l => l.length),
+              mrzCandidates: hiLines.filter(l => l.length >= 28) };
+            if (!window._dbgData) window._dbgData = [];
+            window._dbgData.push(entry);
+          }
+
+          const hiResult = extractMRZ(clean(hiText));
+          if (hiResult) {
+            const corrLines = correctCheckDigits(hiResult.type, hiResult.lines);
+            const corrCount = countCheckDigitChanges(hiResult.type, hiResult.lines, corrLines);
+            if (corrCount <= MAX_CORRECTIONS) {
+              const corrResult = { type: hiResult.type, lines: corrLines };
+              if (validateMRZ(corrResult).valid) {
+                return {
+                  extracted: corrResult, diag: lastDiag, attempts: ocrAttempt,
+                  longestLine: failLongest, chevronCount: failChevrons,
+                  rawOcrText: hiText, selectedBand: 'proj-hicontrast',
+                  corrected: corrCount > 0, correctionCount: corrCount,
+                  recoveryMode: 'proj-hicontrast',
                 };
               }
             }
