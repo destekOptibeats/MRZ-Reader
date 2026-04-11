@@ -446,9 +446,10 @@
         // TEMP DEBUG — img_1914/1924/1925 L2 root cause investigation
         if (['1914','1924','1925'].some(id => (fileName||'').includes(id))) {
           const lines = text.split('\n');
+          const mrzLines = lines.filter(l => l.length >= 28);
           const entry = { rot: deg, label, fileName,
-            lengths: lines.map(l => l.length),
-            lines: lines.slice(0, 5) };
+            allLengths: lines.map(l => l.length),
+            mrzCandidates: mrzLines };
           if (!window._dbgData) window._dbgData = [];
           window._dbgData.push(entry);
         }
