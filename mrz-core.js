@@ -50,7 +50,11 @@
         // L2: digit fix ÖNCE uygula, sonra validate (OCR S→5, O→0 gibi düzeltmeler)
         if (kind === 'TD1_L2') {
           const fixed = applyDigitFixes(c, kind);
-          if (/^\d{6}/.test(fixed)) return fixed;
+          if (/^\d{6}/.test(fixed)) {
+            const mm = +fixed.slice(2, 4), dd = +fixed.slice(4, 6);
+            if (mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31) return fixed;
+            // Invalid date (e.g. MM=79) — continue loop to try next skip offset
+          }
         }
         if (kind === 'TD3_L2') {
           const fixed = applyDigitFixes(c, kind);
