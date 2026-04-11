@@ -456,8 +456,10 @@
       a[9]  = String(chk(l2.substring(0, 9)));                   // docNo check
       a[19] = String(chk(l2.substring(13, 19)));                  // dob check
       a[27] = String(chk(l2.substring(21, 27)));                  // exp check
-      // composite = L2[0:10] + L2[13:20] + L2[21:43]
-      a[43] = String(chk(l2.substring(0, 10) + l2.substring(13, 20) + l2.substring(21, 43)));
+      // composite must use CORRECTED values (a[] not l2) so that a fixed docNo check
+      // is included in the composite, not the original OCR garbage value
+      const ac = a.join('');
+      a[43] = String(chk(ac.substring(0, 10) + ac.substring(13, 20) + ac.substring(21, 43)));
       return [l1, a.join('')];
     }
     if (type === 'TD1') {
@@ -465,9 +467,10 @@
       a1[14] = String(chk(l1.substring(5, 14)));                  // docNo check (L1)
       a2[6]  = String(chk(l2.substring(0, 6)));                   // dob check
       a2[14] = String(chk(l2.substring(8, 14)));                  // exp check
-      // TD1 composite = L1[5:30] + L2[0:7] + L2[8:15] + L2[18:29]
+      // composite must use CORRECTED values (a1[], a2[] not l1/l2 strings)
+      const a1c = a1.join(''), a2c = a2.join('');
       a2[29] = String(chk(
-        l1.substring(5, 30) + l2.substring(0, 7) + l2.substring(8, 15) + l2.substring(18, 29)
+        a1c.substring(5, 30) + a2c.substring(0, 7) + a2c.substring(8, 15) + a2c.substring(18, 29)
       ));
       return [a1.join(''), a2.join(''), l3];
     }
