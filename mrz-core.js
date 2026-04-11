@@ -21,7 +21,7 @@
   function fixLine(s, { targetLen, kind }) {
     if (!s) return null;
 
-    if (s.length > targetLen && s.length - targetLen <= 5) {
+    if (s.length > targetLen && s.length - targetLen <= 15) {
       // TD1_L3: pick first clean match (minimum skip) — name lines print left-to-right
       // "most trailing <" was wrong: biases toward shorter surnames with more padding
       if (kind === 'TD1_L3') {
