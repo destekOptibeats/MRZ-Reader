@@ -416,6 +416,7 @@
 
     let globalBestScore = -1, globalBestText = '', globalBestMRZ = null;
     let lastDiag = null, ocrAttempt = 0;
+    const allFragmentLines = []; // Phase 2.5: accumulate candidate lines across OCR attempts
 
     // ── Phase 1: OCR top candidates in rank order ─────────────────────────
     for (const { deg, rotated, y: cropY, h: cropH, label } of topCandidates) {
@@ -455,6 +456,15 @@
         }
 
         if (ocrScore > globalBestScore) { globalBestScore = ocrScore; globalBestText = text; }
+
+        // Collect MRZ-candidate lines for Phase 2.5 fragment combine
+        for (const rawLine of text.split('\n')) {
+          const fline = rawLine.replace(/[^A-Z0-9<]/g, '');
+          const fchevs = (fline.match(/</g) || []).length;
+          if (fline.length >= 28 && fline.length <= 46 && fchevs >= 3) {
+            allFragmentLines.push({ line: fline, rot: deg, label });
+          }
+        }
 
         if (longest >= 28) {
           const result = extractMRZ(clean(text));
@@ -504,9 +514,86 @@
       } catch (_) {}
     }
 
-    // ── Phase 3: NO_PARSE ─────────────────────────────────────────────────
+    // Shared stats for Phase 2.5 and Phase 3
     const failLongest  = globalBestText ? longestOCRLine(globalBestText) : 0;
     const failChevrons = globalBestText ? countChevrons(globalBestText)  : 0;
+
+    // ── Phase 2.5: fragment combine (0 extra OCR calls) ──────────────────
+    // Deduplicate candidate lines (max 10 unique), try all combinations (max 20)
+    if (allFragmentLines.length >= 2) {
+      try {
+        const seen = new Set();
+        const frags = [];
+        for (const c of allFragmentLines) {
+          if (!seen.has(c.line) && frags.length < 10) {
+            seen.add(c.line);
+            frags.push(c);
+          }
+        }
+
+        let combinationCount = 0;
+
+        const tryCombo = (combo) => {
+          combinationCount++;
+          const synText = combo.map(f => f.line).join('\n');
+          const r = extractMRZ(synText);
+          if (!r) return null;
+          const corrLines  = correctCheckDigits(r.type, r.lines);
+          const corrCount  = countCheckDigitChanges(r.type, r.lines, corrLines);
+          if (corrCount > MAX_CORRECTIONS) return null;
+          const corrResult = { type: r.type, lines: corrLines };
+          if (!validateMRZ(corrResult).valid) return null;
+          return { corrResult, corrCount };
+        };
+
+        const sources = (combo) =>
+          combo.map(f => 'rot' + f.rot + '/' + f.label).join('+');
+
+        outer25:
+        for (let i = 0; i < frags.length; i++) {
+          for (let j = 0; j < frags.length; j++) {
+            if (i === j) continue;
+            if (combinationCount >= 20) break outer25;
+
+            // 2-line combo (TD3)
+            const r2 = tryCombo([frags[i], frags[j]]);
+            if (r2) {
+              return {
+                extracted: r2.corrResult, diag: lastDiag, attempts: ocrAttempt,
+                longestLine: failLongest, chevronCount: failChevrons,
+                rawOcrText: globalBestText,
+                selectedBand: 'fragment-combined',
+                corrected: r2.corrCount > 0, correctionCount: r2.corrCount,
+                recoveryMode: 'fragment-combined',
+                combinationCount,
+                fragmentSources: sources([frags[i], frags[j]]),
+              };
+            }
+
+            // 3-line combos (TD1)
+            for (let k = 0; k < frags.length; k++) {
+              if (k === i || k === j) continue;
+              if (combinationCount >= 20) break outer25;
+              const r3 = tryCombo([frags[i], frags[j], frags[k]]);
+              if (r3) {
+                return {
+                  extracted: r3.corrResult, diag: lastDiag, attempts: ocrAttempt,
+                  longestLine: failLongest, chevronCount: failChevrons,
+                  rawOcrText: globalBestText,
+                  selectedBand: 'fragment-combined',
+                  corrected: r3.corrCount > 0, correctionCount: r3.corrCount,
+                  recoveryMode: 'fragment-combined',
+                  combinationCount,
+                  fragmentSources: sources([frags[i], frags[j], frags[k]]),
+                };
+              }
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    // ── Phase 3: NO_PARSE ─────────────────────────────────────────────────
     return {
       extracted: null, diag: lastDiag, attempts: ocrAttempt,
       longestLine: failLongest, chevronCount: failChevrons,
@@ -585,7 +672,10 @@
       parsed:     parseResult(ocr.extracted),
       validation: validateMRZ(ocr.extracted),
       meta:       { selectedBand: ocr.selectedBand, attempts: ocr.attempts,
-                    corrected: ocr.corrected || false, correctionCount: ocr.correctionCount || 0 },
+                    corrected: ocr.corrected || false, correctionCount: ocr.correctionCount || 0,
+                    recoveryMode: ocr.recoveryMode || null,
+                    combinationCount: ocr.combinationCount || 0,
+                    fragmentSources: ocr.fragmentSources || null },
     };
   }
 
