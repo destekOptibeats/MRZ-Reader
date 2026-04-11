@@ -841,6 +841,7 @@
     batchPreprocessMRZ,
     batchUpscaleIfNeeded,
     rotateCanvas,
+    scoreMRZPresence,
     longestOCRLine,
     countChevrons,
     scoreMRZText,

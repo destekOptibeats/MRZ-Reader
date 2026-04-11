@@ -1,25 +1,32 @@
 // ═══════════════════════════════════════════════════════════════════════
-// VISION DEBUG — Batch/Regression test yardımcı görsel analiz modülü
-// Sadece FAIL / NO_PARSE satırlarında aktif olur.
-// OCR çağrısı yapmaz. LocalStorage kullanmaz. Mevcut pipeline'a dokunmaz.
+// VISION DEBUG — Batch/Regression test görsel analiz modülü
+// Rotation-first, best-match region selection, warp advantage.
+// OCR çağrısı yapmaz. LocalStorage kullanmaz. Pipeline'a dokunmaz.
 // ═══════════════════════════════════════════════════════════════════════
 
-// In-memory cache: rowIdx → { imgCanvas: HTMLCanvasElement, vd: null | VisionResult }
 var batchVisionCache = new Map();
 
-// ── HELPERS ──────────────────────────────────────────────────────────────
+// ── HELPERS ───────────────────────────────────────────────────────────────
+
+function visionCropRegion(srcCanvas, y, cropH) {
+  var c = document.createElement('canvas');
+  c.width = srcCanvas.width;
+  c.height = Math.max(1, cropH);
+  c.getContext('2d').drawImage(srcCanvas, 0, y, srcCanvas.width, cropH, 0, 0, srcCanvas.width, cropH);
+  return c;
+}
 
 function visionClassifyDocType(corners) {
   var tl = corners[0], tr = corners[1], br = corners[2], bl = corners[3];
-  var w = (Math.hypot(tr.x - tl.x, tr.y - tl.y) + Math.hypot(br.x - bl.x, br.y - bl.y)) / 2;
-  var h = (Math.hypot(bl.x - tl.x, bl.y - tl.y) + Math.hypot(br.x - tr.x, br.y - tr.y)) / 2;
+  var w = (Math.hypot(tr.x-tl.x, tr.y-tl.y) + Math.hypot(br.x-bl.x, br.y-bl.y)) / 2;
+  var h = (Math.hypot(bl.x-tl.x, bl.y-tl.y) + Math.hypot(br.x-tr.x, br.y-tr.y)) / 2;
   var aspect = w / Math.max(h, 1);
-  if (aspect > 1.50) return 'TD1';
-  if (aspect > 1.38) return 'TD3';
-  return 'TD2';
+  return aspect > 1.50 ? 'TD1' : aspect > 1.38 ? 'TD3' : 'TD2';
 }
 
-// ── DOCUMENT QUAD DETECTION (Sobel edge, self-contained) ─────────────────
+// ── DOCUMENT QUAD DETECTION ───────────────────────────────────────────────
+// Sobel edge → bounding box → corner refinement.
+// Aspect ratio check [1.1, 2.5] selects landscape documents.
 
 function visionDetectDocumentQuad(canvas) {
   var w = canvas.width, h = canvas.height;
@@ -78,7 +85,7 @@ function visionDetectDocumentQuad(canvas) {
   return { corners: [tl, tr, br, bl] };
 }
 
-// ── PERSPECTIVE WARP (homography + bilinear, self-contained) ─────────────
+// ── PERSPECTIVE WARP ──────────────────────────────────────────────────────
 
 function visionComputeHomography(src, dst) {
   var A = [], b = [];
@@ -111,33 +118,25 @@ function visionComputeHomography(src, dst) {
   return [hv[0], hv[1], hv[2], hv[3], hv[4], hv[5], hv[6], hv[7], 1];
 }
 
-function visionWarpMRZStrip(srcCanvas, corners, docType) {
-  var stripRatio = docType === 'TD1' ? 0.36 : 0.28;
+function visionWarpDocument(srcCanvas, corners, docType) {
   var tl = corners[0], tr = corners[1], br = corners[2], bl = corners[3];
   var docW = Math.round((Math.hypot(tr.x-tl.x, tr.y-tl.y) + Math.hypot(br.x-bl.x, br.y-bl.y)) / 2);
   var docH = Math.round((Math.hypot(bl.x-tl.x, bl.y-tl.y) + Math.hypot(br.x-tr.x, br.y-tr.y)) / 2);
-  var stripH = Math.round(docH * stripRatio);
-  var outW = Math.max(docW, 200), outH = Math.max(stripH, 40);
+  var outW = Math.max(docW, 200), outH = Math.max(docH, 100);
 
   var out = document.createElement('canvas');
   out.width = outW; out.height = outH;
   var outCtx = out.getContext('2d');
 
-  var t = 1 - stripRatio;
-  var srcStrip = [
-    { x: tl.x + (bl.x - tl.x) * t, y: tl.y + (bl.y - tl.y) * t },
-    { x: tr.x + (br.x - tr.x) * t, y: tr.y + (br.y - tr.y) * t },
-    { x: br.x, y: br.y },
-    { x: bl.x, y: bl.y },
-  ];
-  var dstStrip = [{ x: 0, y: 0 }, { x: outW, y: 0 }, { x: outW, y: outH }, { x: 0, y: outH }];
-  var H = visionComputeHomography(dstStrip, srcStrip);
+  var srcPts = [tl, tr, br, bl];
+  var dstPts = [{ x: 0, y: 0 }, { x: outW, y: 0 }, { x: outW, y: outH }, { x: 0, y: outH }];
+  var H = visionComputeHomography(dstPts, srcPts);
 
-  var srcImgData = srcCanvas.getContext('2d', { willReadFrequently: true })
-                             .getImageData(0, 0, srcCanvas.width, srcCanvas.height);
-  var sd = srcImgData.data, sw = srcCanvas.width, sh = srcCanvas.height;
-  var outImgData = outCtx.createImageData(outW, outH);
-  var od = outImgData.data;
+  var srcData = srcCanvas.getContext('2d', { willReadFrequently: true })
+                          .getImageData(0, 0, srcCanvas.width, srcCanvas.height);
+  var sd = srcData.data, sw = srcCanvas.width, sh = srcCanvas.height;
+  var outData = outCtx.createImageData(outW, outH);
+  var od = outData.data;
 
   for (var dy = 0; dy < outH; dy++) {
     for (var dx = 0; dx < outW; dx++) {
@@ -162,167 +161,108 @@ function visionWarpMRZStrip(srcCanvas, corners, docType) {
       od[oi+3] = 255;
     }
   }
-  outCtx.putImageData(outImgData, 0, 0);
+  outCtx.putImageData(outData, 0, 0);
   return out;
 }
 
-// ── MRZ REGION LOCATOR (simplified row-density projection, no external deps) ──
+// ── MAIN ANALYSIS ─────────────────────────────────────────────────────────
+//
+// Strategy:
+//   For each rotation in [0, 90, 180, 270]:
+//     1. Rotate image
+//     2. Binarize (Otsu — same as pipeline)
+//     3. scoreMRZPresence → origScore (+ bottom-half bonus)
+//     4. Try visionDetectDocumentQuad → if found, warp whole document
+//     5. scoreMRZPresence on warp → warpScore (× 1.2 advantage)
+//     6. effectiveScore = max(origScore, warpScore)
+//   Best effectiveScore across all rotations wins.
+//   MRZ crop taken from winner's best source (warp > original).
+//
+// srcCanvas: READ-ONLY, never mutated.
 
-function visionLocateMRZRegions(canvas) {
-  var w = canvas.width, h = canvas.height;
-  if (w < 50 || h < 50) return [];
-  var ctx = canvas.getContext('2d', { willReadFrequently: true });
-  var data = ctx.getImageData(0, 0, w, h).data;
-
-  // Row dark-pixel fraction
-  var rowDensity = new Float32Array(h);
-  for (var y = 0; y < h; y++) {
-    var dark = 0;
-    for (var x = 0; x < w; x++) {
-      var i = (y * w + x) * 4;
-      var lum = 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
-      if (lum < 128) dark++;
-    }
-    rowDensity[y] = dark / w;
-  }
-
-  // Smooth
-  var smooth = new Float32Array(h);
-  var k = Math.max(2, Math.round(h * 0.005));
-  for (var y = k; y < h - k; y++) {
-    var sum = 0;
-    for (var j = -k; j <= k; j++) sum += rowDensity[y + j];
-    smooth[y] = sum / (2 * k + 1);
-  }
-
-  // Adaptive threshold
-  var vals = [];
-  for (var y = 0; y < h; y++) { if (smooth[y] > 0) vals.push(smooth[y]); }
-  vals.sort(function(a, b) { return a - b; });
-  var median = vals.length ? vals[Math.floor(vals.length * 0.5)] : 0;
-  var thresh = Math.max(median * 1.5, 0.03);
-
-  // Peak detection
-  var peaks = [];
-  var inPeak = false, peakStart = 0;
-  var minPH = Math.max(5, Math.round(h * 0.02));
-  var maxPH = Math.round(h * 0.25);
-
-  for (var y = 0; y < h; y++) {
-    if (smooth[y] > thresh && !inPeak) { inPeak = true; peakStart = y; }
-    else if ((smooth[y] <= thresh || y === h - 1) && inPeak) {
-      inPeak = false;
-      var pw = y - peakStart;
-      if (pw >= minPH && pw <= maxPH) {
-        var dsum = 0;
-        for (var p = peakStart; p < y; p++) dsum += smooth[p];
-        peaks.push({ start: peakStart, end: y, density: dsum / pw });
-      }
-    }
-  }
-
-  if (!peaks.length) return [];
-
-  // Find best cluster of 1-3 consecutive peaks
-  var maxGap = Math.round(h * 0.10);
-  var bestCluster = null, bestScore = -1;
-
-  for (var i = 0; i < peaks.length; i++) {
-    // 3-peak (TD1)
-    if (i + 2 < peaks.length &&
-        peaks[i+1].start - peaks[i].end <= maxGap &&
-        peaks[i+2].start - peaks[i+1].end <= maxGap) {
-      var s3 = (peaks[i].density + peaks[i+1].density + peaks[i+2].density) / 3 * 1.5;
-      if (s3 > bestScore) { bestScore = s3; bestCluster = [peaks[i], peaks[i+1], peaks[i+2]]; }
-    }
-    // 2-peak (TD3)
-    if (i + 1 < peaks.length && peaks[i+1].start - peaks[i].end <= maxGap) {
-      var s2 = (peaks[i].density + peaks[i+1].density) / 2 * 1.2;
-      if (s2 > bestScore) { bestScore = s2; bestCluster = [peaks[i], peaks[i+1]]; }
-    }
-    // single peak fallback
-    if (peaks[i].density > bestScore) { bestScore = peaks[i].density; bestCluster = [peaks[i]]; }
-  }
-
-  if (!bestCluster) return [];
-
-  var cStart = bestCluster[0].start;
-  var cEnd   = bestCluster[bestCluster.length - 1].end;
-  var pad    = Math.round((cEnd - cStart) * 0.5);
-  return [{
-    y:        Math.max(0, cStart - pad),
-    h:        Math.min(h, cEnd + pad) - Math.max(0, cStart - pad),
-    lines:    bestCluster.length,
-    score:    bestScore,
-    rawStart: cStart,
-    rawEnd:   cEnd
-  }];
-}
-
-// ── SIMPLE CROP ───────────────────────────────────────────────────────────
-
-function visionCropRegion(srcCanvas, y, cropH) {
-  var c = document.createElement('canvas');
-  c.width = srcCanvas.width; c.height = cropH;
-  c.getContext('2d').drawImage(srcCanvas, 0, y, srcCanvas.width, cropH, 0, 0, srcCanvas.width, cropH);
-  return c;
-}
-
-// ── MAIN ANALYSIS ENTRY POINT ─────────────────────────────────────────────
-
-// srcCanvas is READ-ONLY — never mutated
 function visionAnalyzeImage(srcCanvas) {
   var t0 = performance.now();
+  var ROTATIONS = [0, 90, 180, 270];
+  var best = null; // { deg, rotated, origScore, warpCanvas, warpScore, effectiveScore, origPresence, warpPresence, quad, docType }
 
-  // Step 1: Document quad detection
-  var quad = null;
-  try { quad = visionDetectDocumentQuad(srcCanvas); } catch(e) {}
-  var documentFound = quad !== null;
+  for (var ri = 0; ri < ROTATIONS.length; ri++) {
+    var deg = ROTATIONS[ri];
+    var rotated, binary, origPresence, origScore;
+
+    try {
+      rotated = (deg === 0) ? srcCanvas : window.MRZPipeline.rotateCanvas(srcCanvas, deg);
+      binary = window.MRZPipeline.batchPreprocessMRZ(rotated);
+      origPresence = window.MRZPipeline.scoreMRZPresence(binary);
+    } catch(e) { continue; }
+
+    // Bottom-half bonus: MRZ should be in lower portion of image
+    var mrzCenter = origPresence.cropY + origPresence.cropH / 2;
+    var bottomBonus = (mrzCenter > rotated.height * 0.40) ? 1.15 : 1.0;
+    origScore = origPresence.score * bottomBonus;
+
+    // Try document quad + full-document warp
+    var quad = null, warpCanvas = null, warpBinary = null, warpPresence = null, warpScore = 0, docType = null;
+    try {
+      quad = visionDetectDocumentQuad(rotated);
+      if (quad) {
+        docType = visionClassifyDocType(quad.corners);
+        warpCanvas = visionWarpDocument(rotated, quad.corners, docType);
+        warpBinary = window.MRZPipeline.batchPreprocessMRZ(warpCanvas);
+        warpPresence = window.MRZPipeline.scoreMRZPresence(warpBinary);
+        warpScore = warpPresence.score * 1.2; // warp advantage: perspective-corrected text scores better
+      }
+    } catch(e) { warpCanvas = null; warpScore = 0; }
+
+    var effectiveScore = Math.max(origScore, warpScore);
+
+    if (!best || effectiveScore > best.effectiveScore) {
+      best = { deg, rotated, binary, origPresence, origScore, quad, docType,
+               warpCanvas, warpBinary, warpPresence, warpScore, effectiveScore };
+    }
+  }
+
+  if (!best) best = { deg: 0, rotated: srcCanvas, binary: srcCanvas,
+                      origPresence: { score: 0, cropY: 0, cropH: srcCanvas.height },
+                      origScore: 0, warpCanvas: null, warpScore: 0, effectiveScore: 0 };
+
   var t1 = performance.now();
 
-  // Step 2: Perspective warp (only if quad found)
-  var warpCanvas = null, docType = null;
-  if (documentFound) {
-    try {
-      docType = visionClassifyDocType(quad.corners);
-      warpCanvas = visionWarpMRZStrip(srcCanvas, quad.corners, docType);
-    } catch(e) { warpCanvas = null; }
-  }
+  // Select best source: warp beats original when warpScore > origScore
+  var useWarp = best.warpCanvas && (best.warpScore > best.origScore);
+  var detectSrc    = useWarp ? best.warpCanvas    : best.rotated;
+  var detectBinary = useWarp ? best.warpBinary    : best.binary;
+  var presence     = useWarp ? best.warpPresence  : best.origPresence;
+  var selectedWhy  = useWarp ? 'warp_score_higher' : 'orig_score_higher';
+
+  // MRZ crop: color + binary version
+  var mrzCrop = null, mrzBinary = null;
+  try { mrzCrop   = visionCropRegion(detectSrc,    presence.cropY, presence.cropH); } catch(e) {}
+  try { mrzBinary = visionCropRegion(detectBinary, presence.cropY, presence.cropH); } catch(e) {}
+
   var t2 = performance.now();
-
-  // Step 3: MRZ region detection — prefer warp, fallback to original
-  var detectSrc = warpCanvas || srcCanvas;
-  var sourceUsedForMrz = warpCanvas ? 'warp' : 'original';
-  var regions = [];
-  try { regions = visionLocateMRZRegions(detectSrc) || []; } catch(e) {}
-  var mrzFound = regions.length > 0;
-  var bestRegion = mrzFound ? regions[0] : null;
-
-  // Step 4: Crop MRZ region
-  var mrzCrop = null;
-  if (bestRegion) {
-    try { mrzCrop = visionCropRegion(detectSrc, bestRegion.y, bestRegion.h); } catch(e) {}
-  }
-  var t3 = performance.now();
 
   return {
     images: {
-      original:     srcCanvas,   // referans, kopyalanmaz
-      documentWarp: warpCanvas,  // null olabilir
-      mrzCrop:      mrzCrop      // null olabilir
+      original:     best.rotated,     // rotation-normalized source
+      documentWarp: best.warpCanvas,  // full-document warp (null if quad not found)
+      mrzCrop:      mrzCrop           // horizontal MRZ strip (best source)
     },
     meta: {
-      documentFound:    documentFound,
-      docType:          docType,
-      docCorners:       quad ? quad.corners : null,
-      mrzFound:         mrzFound,
-      mrzBox:           bestRegion ? { y: bestRegion.y, h: bestRegion.h, lines: bestRegion.lines } : null,
-      sourceUsedForMrz: sourceUsedForMrz,
-      regionCount:      regions.length,
-      detectMs:         Math.round(t1 - t0),
-      warpMs:           Math.round(t2 - t1),
-      mrzLocateMs:      Math.round(t3 - t2),
-      totalMs:          Math.round(t3 - t0)
+      detectedRotation:  best.deg,
+      mrzFound:          best.effectiveScore > 0,
+      sourceUsedForMrz:  useWarp ? 'warp' : 'original',
+      selectedWhy:       selectedWhy,
+      selectedScore:     best.effectiveScore,
+      mrzOrigRegions:    { y: best.origPresence.cropY, h: best.origPresence.cropH, score: best.origScore },
+      mrzWarpRegions:    best.warpPresence
+                           ? { y: best.warpPresence.cropY, h: best.warpPresence.cropH, score: best.warpScore }
+                           : null,
+      mrzBox:            { y: presence.cropY, h: presence.cropH },
+      docType:           best.docType,
+      quadFound:         !!best.quad,
+      analyzeMs:         Math.round(t1 - t0),
+      cropMs:            Math.round(t2 - t1),
+      totalMs:           Math.round(t2 - t0)
     }
   };
 }
@@ -330,12 +270,12 @@ function visionAnalyzeImage(srcCanvas) {
 // ── PANEL RENDERER ────────────────────────────────────────────────────────
 
 function visionRenderPanel(containerEl, vd) {
-  var MAX_W = 280;
+  var MAX_W = 300;
 
   function makeDisplayCanvas(src) {
     if (!src) return null;
     var scale = Math.min(MAX_W / src.width, 1.0);
-    var dw = Math.round(src.width * scale);
+    var dw = Math.round(src.width  * scale);
     var dh = Math.round(src.height * scale);
     var c = document.createElement('canvas');
     c.width = dw; c.height = dh;
@@ -372,29 +312,34 @@ function visionRenderPanel(containerEl, vd) {
   var panel = document.createElement('div');
   panel.className = 'vision-panel';
 
-  // Image row
+  // Image slots
   var imgRow = document.createElement('div');
   imgRow.className = 'vision-images';
-  imgRow.appendChild(makeSlot('Original', vd.images.original));
-  imgRow.appendChild(makeSlot('Document Warp', vd.images.documentWarp));
-  imgRow.appendChild(makeSlot('MRZ Crop', vd.images.mrzCrop));
+  var origLabel = 'Original' + (m.detectedRotation ? ' (rot ' + m.detectedRotation + '\u00b0)' : '');
+  imgRow.appendChild(makeSlot(origLabel,        vd.images.original));
+  imgRow.appendChild(makeSlot('Document Warp',  vd.images.documentWarp));
+  imgRow.appendChild(makeSlot('MRZ Crop ('      + m.sourceUsedForMrz + ')', vd.images.mrzCrop));
   panel.appendChild(imgRow);
 
   // Meta row
   var metaDiv = document.createElement('div');
   metaDiv.className = 'vision-meta';
 
+  var origR = m.mrzOrigRegions;
+  var warpR = m.mrzWarpRegions;
   var fields = [
-    ['documentFound', m.documentFound ? '\u2705 evet' : '\u274c hay\u0131r'],
-    ['docType',       m.docType || '\u2014'],
+    ['rotation',      m.detectedRotation + '\u00b0'],
     ['mrzFound',      m.mrzFound ? '\u2705 evet' : '\u274c hay\u0131r'],
     ['source',        m.sourceUsedForMrz],
-    ['regions',       String(m.regionCount)],
-    m.mrzBox ? ['mrzBox', 'y=' + m.mrzBox.y + ' h=' + m.mrzBox.h + ' lines=' + m.mrzBox.lines] : null,
-    ['detectMs',      m.detectMs + 'ms'],
-    ['warpMs',        m.warpMs + 'ms'],
-    ['mrzLocateMs',   m.mrzLocateMs + 'ms'],
-    ['total',         m.totalMs + 'ms'],
+    ['why',           m.selectedWhy],
+    ['score',         m.selectedScore !== undefined ? m.selectedScore.toFixed(3) : '\u2014'],
+    ['quadFound',     m.quadFound ? '\u2705' : '\u274c'],
+    m.docType ? ['docType', m.docType] : null,
+    m.mrzBox  ? ['mrzBox',  'y=' + m.mrzBox.y + ' h=' + m.mrzBox.h] : null,
+    origR ? ['origScore', origR.score.toFixed(3) + ' y=' + origR.y + ' h=' + origR.h] : null,
+    warpR ? ['warpScore', warpR.score.toFixed(3) + ' y=' + warpR.y + ' h=' + warpR.h] : null,
+    ['analyzeMs',     m.analyzeMs + 'ms'],
+    ['totalMs',       m.totalMs   + 'ms'],
   ].filter(Boolean);
 
   fields.forEach(function(f) {
@@ -407,12 +352,11 @@ function visionRenderPanel(containerEl, vd) {
   containerEl.appendChild(panel);
 }
 
-// ── TOGGLE HANDLER (called from batch table button onclick) ───────────────
+// ── TOGGLE HANDLER ────────────────────────────────────────────────────────
 
 function toggleVisionPanel(rowIdx, btnEl) {
   var rowEl = btnEl.closest('tr');
   var nextEl = rowEl.nextElementSibling;
-  // Toggle off if panel already open
   if (nextEl && nextEl.classList.contains('vision-panel-row')) {
     nextEl.remove();
     return;
@@ -420,7 +364,6 @@ function toggleVisionPanel(rowIdx, btnEl) {
   var entry = batchVisionCache.get(rowIdx);
   if (!entry) return;
 
-  // Lazy analysis: only run on first click
   if (!entry.vd) {
     var prevText = btnEl.textContent;
     btnEl.disabled = true;
@@ -436,11 +379,10 @@ function toggleVisionPanel(rowIdx, btnEl) {
     btnEl.textContent = prevText;
   }
 
-  // Insert panel row after current row
   var panelTr = document.createElement('tr');
   panelTr.className = 'vision-panel-row';
   var td = document.createElement('td');
-  td.colSpan = 99; // büyük değer — tüm sütunları kapsar
+  td.colSpan = 99;
   visionRenderPanel(td, entry.vd);
   panelTr.appendChild(td);
   rowEl.after(panelTr);
