@@ -82,34 +82,41 @@
     // İsim satırlarında rakam→harf düzeltme uygula
     if (kind === 'TD3_L1' || kind === 'TD1_L3') return applyNameFixes(s, kind);
 
-    const map = {'B':'8','O':'0','D':'0','S':'5','G':'6',
-                 'Z':'2','I':'1','L':'1','Q':'0','U':'0'};
-    const fix = c => map[c] ?? c;
+    // Full map — positions that MUST be digits (check digits, DOB, EXP)
+    const digitMap = {'B':'8','O':'0','D':'0','S':'5','G':'6',
+                      'Z':'2','I':'1','L':'1','Q':'0','U':'0'};
+    // Restricted map — alphanumeric positions (doc number, personal no)
+    // Only fix letters visually identical to digits in OCR-B font
+    const alphaMap = {'O':'0','I':'1','L':'1','Q':'0'};
+    const fixD = c => digitMap[c] ?? c;
+    const fixA = c => alphaMap[c] ?? c;
     const a = s.split('');
 
     if (kind === 'TD1_L1') {
-      a[14] = fix(a[14]);  // doc no check
-      a[29] = fix(a[29]);  // composite check
+      // positions 5–13: doc no — alphanumeric (D is a valid letter)
+      for (let i=5;i<=13;i++) a[i] = fixA(a[i]);
+      a[14] = fixD(a[14]);  // doc no check — must be digit
+      a[29] = fixD(a[29]);  // composite check — must be digit
     }
 
     if (kind === 'TD1_L2') {
-      for (let i=0;i<=5;i++)  a[i] = fix(a[i]);   // DOB
-      a[6]  = fix(a[6]);                            // DOB check
-      for (let i=8;i<=13;i++) a[i] = fix(a[i]);    // EXP
-      a[14] = fix(a[14]);                           // EXP check
-      a[29] = fix(a[29]);                           // composite check
+      for (let i=0;i<=5;i++)  a[i] = fixD(a[i]);   // DOB — all digits
+      a[6]  = fixD(a[6]);                            // DOB check
+      for (let i=8;i<=13;i++) a[i] = fixD(a[i]);    // EXP — all digits
+      a[14] = fixD(a[14]);                           // EXP check
+      a[29] = fixD(a[29]);                           // composite check
     }
 
     if (kind === 'TD3_L2') {
-      for (let i=0;i<=8;i++)   a[i] = fix(a[i]);   // passport no
-      a[9]  = fix(a[9]);                            // passport no check
-      for (let i=13;i<=18;i++) a[i] = fix(a[i]);   // DOB
-      a[19] = fix(a[19]);                           // DOB check
-      for (let i=21;i<=26;i++) a[i] = fix(a[i]);   // EXP
-      a[27] = fix(a[27]);                           // EXP check
-      for (let i=28;i<=41;i++) a[i] = fix(a[i]);   // personal no
-      a[42] = fix(a[42]);                           // personal no check
-      a[43] = fix(a[43]);                           // composite check
+      for (let i=0;i<=8;i++)   a[i] = fixA(a[i]);  // passport no — alphanumeric
+      a[9]  = fixD(a[9]);                            // passport no check
+      for (let i=13;i<=18;i++) a[i] = fixD(a[i]);  // DOB — all digits
+      a[19] = fixD(a[19]);                           // DOB check
+      for (let i=21;i<=26;i++) a[i] = fixD(a[i]);  // EXP — all digits
+      a[27] = fixD(a[27]);                           // EXP check
+      for (let i=28;i<=41;i++) a[i] = fixA(a[i]);  // personal no — alphanumeric
+      a[42] = fixD(a[42]);                           // personal no check
+      a[43] = fixD(a[43]);                           // composite check
     }
 
     return a.join('');

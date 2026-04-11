@@ -10,6 +10,8 @@
 
   // Maximum Tesseract calls per image — hard cap
   const MAX_OCR = 8;
+  // Maximum check-digit positions allowed to be corrected in a single result
+  const MAX_CORRECTIONS = 3;
 
   // ── CANVAS UTILITIES ──────────────────────────────────────────────────────
 
@@ -339,6 +341,26 @@
     return longest * 2 + chevrons + lineBonus;
   }
 
+  // ── CHECK-DIGIT CORRECTION HELPERS ───────────────────────────────────────
+
+  // Count changes ONLY at check-digit positions (not data fields).
+  // TD3  L2 check positions: 9, 19, 27, 42, 43
+  // TD1  L1 check positions: 14, 29
+  // TD1  L2 check positions: 6, 14, 29
+  function countCheckDigitChanges(type, origLines, corrLines) {
+    let count = 0;
+    if (type === 'TD3') {
+      const o = origLines[1] || '', c = corrLines[1] || '';
+      for (const p of [9, 19, 27, 42, 43]) if (o[p] !== c[p]) count++;
+    } else if (type === 'TD1') {
+      const o1 = origLines[0] || '', c1 = corrLines[0] || '';
+      const o2 = origLines[1] || '', c2 = corrLines[1] || '';
+      for (const p of [14, 29])   if (o1[p] !== c1[p]) count++;
+      for (const p of [6, 14, 29]) if (o2[p] !== c2[p]) count++;
+    }
+    return count;
+  }
+
   // ── BATCH OCR LOOP ────────────────────────────────────────────────────────
 
   // Multi-crop → global scoring → top-MAX_OCR OCR pipeline.
@@ -427,10 +449,16 @@
             // First parseable result → candidate for rescue
             if (!globalBestMRZ) globalBestMRZ = result;
             if (validateMRZ(result).valid) {
+              // Normalize check-digit positions (fixes e.g. 'C' at composite check)
+              const corrLines = correctCheckDigits(result.type, result.lines);
+              const correctionCount = countCheckDigitChanges(result.type, result.lines, corrLines);
+              const corrected = correctionCount > 0 && correctionCount <= MAX_CORRECTIONS;
+              const finalResult = corrected ? { type: result.type, lines: corrLines } : result;
               return {
-                extracted: result, diag: diagnoseMRZ(text), attempts: ocrAttempt,
+                extracted: finalResult, diag: diagnoseMRZ(text), attempts: ocrAttempt,
                 longestLine: longest, chevronCount: chevs, rawOcrText: text,
-                selectedBand: 'rot' + deg + '/' + label, corrected: false,
+                selectedBand: 'rot' + deg + '/' + label,
+                corrected, correctionCount,
               };
             }
             // Better-scoring parse: update rescue candidate
@@ -446,15 +474,19 @@
     // ── Phase 2: check digit rescue (0 OCR calls) ─────────────────────────
     if (globalBestMRZ) {
       try {
-        const corrLines  = correctCheckDigits(globalBestMRZ.type, globalBestMRZ.lines);
-        const corrResult = { type: globalBestMRZ.type, lines: corrLines };
-        if (validateMRZ(corrResult).valid) {
-          const longest = globalBestText ? longestOCRLine(globalBestText) : 0;
-          return {
-            extracted: corrResult, diag: lastDiag, attempts: ocrAttempt,
-            longestLine: longest, chevronCount: countChevrons(globalBestText || ''),
-            rawOcrText: globalBestText, selectedBand: 'checkdigit-corrected', corrected: true,
-          };
+        const corrLines      = correctCheckDigits(globalBestMRZ.type, globalBestMRZ.lines);
+        const correctionCount = countCheckDigitChanges(globalBestMRZ.type, globalBestMRZ.lines, corrLines);
+        if (correctionCount > 0 && correctionCount <= MAX_CORRECTIONS) {
+          const corrResult = { type: globalBestMRZ.type, lines: corrLines };
+          if (validateMRZ(corrResult).valid) {
+            const longest = globalBestText ? longestOCRLine(globalBestText) : 0;
+            return {
+              extracted: corrResult, diag: lastDiag, attempts: ocrAttempt,
+              longestLine: longest, chevronCount: countChevrons(globalBestText || ''),
+              rawOcrText: globalBestText, selectedBand: 'checkdigit-corrected',
+              corrected: true, correctionCount,
+            };
+          }
         }
       } catch (_) {}
     }
@@ -539,7 +571,8 @@
       extracted:  ocr.extracted,
       parsed:     parseResult(ocr.extracted),
       validation: validateMRZ(ocr.extracted),
-      meta:       { selectedBand: ocr.selectedBand, attempts: ocr.attempts, corrected: ocr.corrected || false },
+      meta:       { selectedBand: ocr.selectedBand, attempts: ocr.attempts,
+                    corrected: ocr.corrected || false, correctionCount: ocr.correctionCount || 0 },
     };
   }
 
