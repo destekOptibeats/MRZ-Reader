@@ -6,7 +6,10 @@
   'use strict';
 
   // mrz-core.js must be loaded first — destructure needed functions
-  const { extractMRZ, clean, validateMRZ, diagnoseMRZ, parseResult } = window.MRZCore;
+  const { extractMRZ, clean, validateMRZ, diagnoseMRZ, parseResult, correctCheckDigits } = window.MRZCore;
+
+  // Maximum Tesseract calls per image — hard cap
+  const MAX_OCR = 8;
 
   // ── CANVAS UTILITIES ──────────────────────────────────────────────────────
 
@@ -85,8 +88,6 @@
     }
 
     // Otsu threshold, but never below 140 (the proven minimum for document text).
-    // Otsu improves binarization when it produces a HIGHER threshold (brighter paper),
-    // but going below 140 drops ink pixels and reduces OCR accuracy on colored cards.
     const thresh = Math.max(140, computeOtsuThreshold(gray));
 
     // Detect inverted image: if >65% of pixels are darker than threshold → flip
@@ -116,7 +117,7 @@
   // ── HORIZONTAL DENSITY PROJECTION ────────────────────────────────────────
 
   // Analyse a binarised canvas: find dense text bands near the bottom.
-  // Returns { score, cropY, cropH } — score > 0.1 means promising MRZ location.
+  // Returns { score, cropY, cropH, smooth } — score > 0.1 means promising MRZ location.
   function scoreMRZPresence(binaryCanvas) {
     const ctx = binaryCanvas.getContext('2d');
     const w = binaryCanvas.width, h = binaryCanvas.height;
@@ -133,14 +134,15 @@
     }
 
     // 5-row box-filter smooth
-    const smooth = density.slice();
+    const smooth = new Float32Array(h);
+    for (let y = 0; y < h; y++) smooth[y] = density[y];
     for (let y = 2; y < h - 2; y++) {
       smooth[y] = (density[y - 2] + density[y - 1] + density[y] + density[y + 1] + density[y + 2]) / 5;
     }
 
-    // Search bottom 75% of image — covers centered compositions and distance shots
-    const searchStart = Math.floor(h * 0.25);
-    const TEXT_THRESH = 0.05;  // lowered from 0.08 to catch sparse text in distance shots
+    // Search bottom 65% of image — avoids false bands in upper area
+    const searchStart = Math.floor(h * 0.35);
+    const TEXT_THRESH = 0.07;  // 0.07 is robust against noise while catching sparse MRZ text
 
     // Find contiguous dark-pixel bands
     const bands = [];
@@ -162,7 +164,7 @@
 
     const defaultY = Math.floor(h * 0.45);
     const defaultH = h - defaultY;
-    if (bands.length === 0) return { score: 0, cropY: defaultY, cropH: defaultH };
+    if (bands.length === 0) return { score: 0, cropY: defaultY, cropH: defaultH, smooth };
 
     // Score pairs/triples (consistent band heights = MRZ characteristic)
     let bestScore = 0, bestY = defaultY, bestH = defaultH;
@@ -205,7 +207,83 @@
       }
     }
 
-    return { score: bestScore, cropY: bestY, cropH: bestH };
+    return { score: bestScore, cropY: bestY, cropH: bestH, smooth };
+  }
+
+  // ── REGION DENSITY SCORING ────────────────────────────────────────────────
+
+  // Score a sub-range of the already-computed smooth density array.
+  // O(N), zero pixel reads. Same band pair/triple logic as scoreMRZPresence.
+  function scoreRegionDensity(smooth, startY, endY) {
+    const THRESH = 0.07;
+    const bands = [];
+    let inBand = false, bs = 0, bSum = 0;
+    for (let y = startY; y < endY; y++) {
+      const d = smooth[y];
+      if (!inBand && d > THRESH) { inBand = true; bs = y; bSum = d; }
+      else if (inBand) {
+        if (d > THRESH) bSum += d;
+        else {
+          if (y - bs >= 3) bands.push({ y: bs, h: y - bs, avg: bSum / (y - bs) });
+          inBand = false;
+        }
+      }
+    }
+    if (inBand && endY - bs >= 3) bands.push({ y: bs, h: endY - bs, avg: bSum / (endY - bs) });
+
+    let best = 0;
+    for (let i = 0; i < bands.length; i++) {
+      best = Math.max(best, bands[i].avg * 0.5);
+      if (i + 1 < bands.length) {
+        const c2 = Math.min(bands[i].h, bands[i + 1].h) / Math.max(bands[i].h, bands[i + 1].h);
+        best = Math.max(best, (bands[i].avg + bands[i + 1].avg) / 2 * (1 + c2));
+      }
+      if (i + 2 < bands.length) {
+        const c3 = Math.min(bands[i].h, bands[i + 1].h, bands[i + 2].h) /
+                   Math.max(bands[i].h, bands[i + 1].h, bands[i + 2].h);
+        best = Math.max(best, (bands[i].avg + bands[i + 1].avg + bands[i + 2].avg) / 3 * (1 + c3) * 1.3);
+      }
+    }
+    return best;
+  }
+
+  // ── CROP CANDIDATE GENERATION ─────────────────────────────────────────────
+
+  // Generate diverse crop candidates for a single rotation using the smooth density array.
+  // Returns sorted array of { y, h, score, label }. No canvas creation, no OCR.
+  function generateCropCandidates(imgH, smooth, projCropY, projCropH) {
+    const raw = [];
+
+    // 1. Density-projected crop (pre-vetted by band detection) — 2× score bonus
+    raw.push({
+      y: projCropY, h: projCropH, label: 'proj',
+      score: scoreRegionDensity(smooth, projCropY, projCropY + projCropH) * 2,
+    });
+
+    // 2. Sliding bottom windows — scored independently
+    for (const pct of [0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50, 0.65]) {
+      const ch = Math.round(imgH * pct);
+      const cy = imgH - ch;
+      raw.push({
+        y: cy, h: ch, label: 'bot' + Math.round(pct * 100),
+        score: scoreRegionDensity(smooth, cy, imgH),
+      });
+    }
+
+    // 3. Full image (last resort)
+    raw.push({ y: 0, h: imgH, label: 'full', score: 0 });
+
+    // Sort descending, dedup within same rotation (overlap > 90% → keep higher-scored)
+    raw.sort((a, b) => b.score - a.score);
+    const kept = [];
+    for (const c of raw) {
+      const dominated = kept.some(k => {
+        const inter = Math.min(c.y + c.h, k.y + k.h) - Math.max(c.y, k.y);
+        return inter > 0 && inter / Math.min(c.h, k.h) > 0.90;
+      });
+      if (!dominated) kept.push(c);
+    }
+    return kept;
   }
 
   // Upscale small crop canvases to at least 600px tall for reliable Tesseract recognition
@@ -263,105 +341,132 @@
 
   // ── BATCH OCR LOOP ────────────────────────────────────────────────────────
 
-  // Pipeline:
-  //  Phase 0: score all 4 rotations via density projection (no OCR)
-  //  Phase 1: projection-detected crop on all 4 rotations (best-first) — early exit on success
-  //  Phase 2: bottom-75% fallback on all 4 rotations (best-first)    — early exit on success
-  //  Max OCR calls: 8 (vs. 12 before). Speed: ~8-20s vs ~36s.
+  // Multi-crop → global scoring → top-MAX_OCR OCR pipeline.
+  //
+  // Phase 0: Generate crop candidates across 4 rotations using density scoring (no OCR).
+  //          40 raw candidates → deduped → globally ranked → top MAX_OCR selected.
+  // Phase 1: OCR each top candidate in rank order — early exit on valid MRZ.
+  //          Track best parseable MRZ as rescue candidate even when checksum fails.
+  // Phase 2: Check digit rescue — recompute expected check digits from field data.
+  //          Returns corrected: true when this path fires.
+  // Phase 3: NO_PARSE return with best-effort metadata.
   async function fastBatchOCR(resized, timings, ocrWorker, fileName, fileIndex) {
     const wr = ocrWorker || worker;
-    const isFirstFile = (fileIndex === 0);
-
     timings.resizedSize = resized.width + 'x' + resized.height;
+
     if (window._mrzDebug) console.log('[MRZ] batch', fileName || '', resized.width + 'x' + resized.height);
 
-    // ── Phase 0: Rotation pre-selection (density projection, no OCR) ─────────
+    // ── Phase 0: generate all crop candidates across 4 rotations (no OCR) ──
     const t0 = performance.now();
-    const rotCandidates = [0, 90, 180, 270].map(deg => {
+    const allCandidates = [];
+
+    for (const deg of [0, 90, 180, 270]) {
       const rotated = rotateCanvas(resized, deg);
       const binary  = batchPreprocessMRZ(rotated);
-      const { score, cropY, cropH } = scoreMRZPresence(binary);
-      return { deg, rotated, score, cropY, cropH };
-    });
+      const { score: rotScore, cropY, cropH, smooth } = scoreMRZPresence(binary);
+
+      const crops = generateCropCandidates(rotated.height, smooth, cropY, cropH);
+      for (const c of crops) {
+        allCandidates.push({ deg, rotated, ...c, globalScore: c.score * (1 + rotScore * 0.2) });
+        if (window._mrzDebug) {
+          console.log('[MRZ candidates] rot=' + deg, 'y=' + c.y, 'h=' + c.h,
+            'score=' + c.score.toFixed(3), 'globalScore=' + (c.score * (1 + rotScore * 0.2)).toFixed(3),
+            'label=' + c.label);
+        }
+      }
+      if (window._mrzDebug) {
+        console.log('[MRZ] rot', deg + '°', 'rotScore:', rotScore.toFixed(3),
+          crops.length, 'candidates, top:', crops[0]?.label, crops[0]?.score.toFixed(3));
+      }
+    }
     timings.crop = Math.round(performance.now() - t0);
 
-    // Sort: highest density score first (but try ALL 4 rotations in both phases)
-    rotCandidates.sort((a, b) => b.score - a.score);
+    // Global sort + take top MAX_OCR
+    allCandidates.sort((a, b) => b.globalScore - a.globalScore);
+    const topCandidates = allCandidates.slice(0, MAX_OCR);
 
-    if (window._mrzDebug && isFirstFile) {
-      rotCandidates.forEach(r =>
-        console.log('[MRZ] rot', r.deg + '°', 'density:', r.score.toFixed(3),
-          'cropY:', r.cropY, 'cropH:', r.cropH));
+    if (window._mrzDebug) {
+      console.log('[MRZ top-' + MAX_OCR + ']',
+        topCandidates.map(c => 'rot' + c.deg + '/' + c.label + ' gs=' + c.globalScore.toFixed(3)).join(' | '));
     }
 
-    let lastDiag  = null;
-    let globalBestScore = -1, globalBestText = '', globalBestBand = -1;
-    let ocrAttempt = 0;
-    let t;
+    let globalBestScore = -1, globalBestText = '', globalBestMRZ = null;
+    let lastDiag = null, ocrAttempt = 0;
 
-    // Helper: run one OCR attempt on a canvas, update globals, return result or null
-    async function tryOCR(canvas, label) {
-      const ocrIn = batchUpscaleIfNeeded(batchPreprocessMRZ(canvas));
-      if (ocrIn.width <= 100 || ocrIn.height <= 100) return null;
+    // ── Phase 1: OCR top candidates in rank order ─────────────────────────
+    for (const { deg, rotated, y: cropY, h: cropH, label } of topCandidates) {
+      const padW = Math.round(rotated.width * 0.03);
+      const crop = document.createElement('canvas');
+      crop.width  = Math.max(1, rotated.width - 2 * padW);
+      crop.height = Math.max(1, cropH);
+      crop.getContext('2d').drawImage(rotated, padW, cropY, crop.width, cropH, 0, 0, crop.width, cropH);
+
+      const ocrIn = batchUpscaleIfNeeded(batchPreprocessMRZ(crop));
+      if (ocrIn.width <= 100 || ocrIn.height <= 100) continue;
+
       ocrAttempt++;
       const key = 'ocr' + ocrAttempt;
-      t = performance.now();
+      const t = performance.now();
       try {
         const { data: { text } } = await wr.recognize(ocrIn);
-        const score   = scoreMRZText(text);
-        const longest = longestOCRLine(text);
-        const chevs   = countChevrons(text);
         timings[key] = Math.round(performance.now() - t);
         timings['sz' + ocrAttempt] = ocrIn.width + 'x' + ocrIn.height;
-        if (window._mrzDebug && isFirstFile)
-          console.log('[MRZ]', label, 'longest:', longest, 'score:', score);
+
+        const ocrScore = scoreMRZText(text);
+        const longest  = longestOCRLine(text);
+        const chevs    = countChevrons(text);
         if (text) lastDiag = diagnoseMRZ(text);
+        if (window._mrzDebug) console.log('[MRZ] rot' + deg + '/' + label,
+          'longest:', longest, 'ocrScore:', ocrScore);
+
+        if (ocrScore > globalBestScore) { globalBestScore = ocrScore; globalBestText = text; }
+
         if (longest >= 28) {
           const result = extractMRZ(clean(text));
-          if (result && validateMRZ(result).valid)
-            return { extracted: result, diag: diagnoseMRZ(text), attempts: ocrAttempt,
-              longestLine: longest, chevronCount: chevs, rawOcrText: text, selectedBand: label };
+          if (result) {
+            // First parseable result → candidate for rescue
+            if (!globalBestMRZ) globalBestMRZ = result;
+            if (validateMRZ(result).valid) {
+              return {
+                extracted: result, diag: diagnoseMRZ(text), attempts: ocrAttempt,
+                longestLine: longest, chevronCount: chevs, rawOcrText: text,
+                selectedBand: 'rot' + deg + '/' + label, corrected: false,
+              };
+            }
+            // Better-scoring parse: update rescue candidate
+            if (ocrScore >= globalBestScore) globalBestMRZ = result;
+          }
         }
-        if (score > globalBestScore) {
-          globalBestScore = score; globalBestText = text; globalBestBand = ocrAttempt - 1;
-        }
-      } catch(e) {
+      } catch (e) {
         timings[key] = Math.round(performance.now() - t);
-        if (window._mrzDebug) console.warn('[MRZ]', label, 'error:', e.message);
+        if (window._mrzDebug) console.warn('[MRZ] rot' + deg + '/' + label, 'error:', e.message);
       }
-      return null;
     }
 
-    // ── Phase 1: projection-detected crop + 3% horizontal padding ────────────
-    for (const { deg, rotated, cropY, cropH } of rotCandidates) {
-      const padW  = Math.round(rotated.width * 0.03);
-      const canvA = document.createElement('canvas');
-      canvA.width  = rotated.width - 2 * padW;
-      canvA.height = cropH;
-      canvA.getContext('2d').drawImage(rotated, padW, cropY, canvA.width, cropH, 0, 0, canvA.width, cropH);
-      const hit = await tryOCR(canvA, 'rot' + deg + '/proj');
-      if (hit) return hit;
+    // ── Phase 2: check digit rescue (0 OCR calls) ─────────────────────────
+    if (globalBestMRZ) {
+      try {
+        const corrLines  = correctCheckDigits(globalBestMRZ.type, globalBestMRZ.lines);
+        const corrResult = { type: globalBestMRZ.type, lines: corrLines };
+        if (validateMRZ(corrResult).valid) {
+          const longest = globalBestText ? longestOCRLine(globalBestText) : 0;
+          return {
+            extracted: corrResult, diag: lastDiag, attempts: ocrAttempt,
+            longestLine: longest, chevronCount: countChevrons(globalBestText || ''),
+            rawOcrText: globalBestText, selectedBand: 'checkdigit-corrected', corrected: true,
+          };
+        }
+      } catch (_) {}
     }
 
-    // ── Phase 2: bottom-75% fallback on all 4 rotations ─────────────────────
-    for (const { deg, rotated } of rotCandidates) {
-      const croppedB = cropBottom(rotated, 0.75);
-      const hit = await tryOCR(croppedB, 'rot' + deg + '/fallback75');
-      if (hit) return hit;
-    }
-
-    // ── Phase 3: full image (no crop) for top-2 rotations ────────────────────
-    for (const { deg, rotated } of rotCandidates.slice(0, 2)) {
-      const hit = await tryOCR(rotated, 'rot' + deg + '/full');
-      if (hit) return hit;
-    }
-
+    // ── Phase 3: NO_PARSE ─────────────────────────────────────────────────
     const failLongest  = globalBestText ? longestOCRLine(globalBestText) : 0;
     const failChevrons = globalBestText ? countChevrons(globalBestText)  : 0;
-    return { extracted: null, diag: lastDiag, attempts: ocrAttempt,
+    return {
+      extracted: null, diag: lastDiag, attempts: ocrAttempt,
       longestLine: failLongest, chevronCount: failChevrons,
-      rawOcrText: globalBestText,
-      selectedBand: globalBestBand >= 0 ? 'attempt' + (globalBestBand + 1) : '—' };
+      rawOcrText: globalBestText, selectedBand: '—',
+    };
   }
 
   // ── WORKER FACTORY ────────────────────────────────────────────────────────
@@ -434,7 +539,7 @@
       extracted:  ocr.extracted,
       parsed:     parseResult(ocr.extracted),
       validation: validateMRZ(ocr.extracted),
-      meta:       { selectedBand: ocr.selectedBand, attempts: ocr.attempts },
+      meta:       { selectedBand: ocr.selectedBand, attempts: ocr.attempts, corrected: ocr.corrected || false },
     };
   }
 
