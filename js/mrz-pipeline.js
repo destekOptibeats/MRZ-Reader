@@ -288,10 +288,12 @@
     return kept;
   }
 
-  // Upscale small crop canvases to at least 600px tall for reliable Tesseract recognition
+  // Upscale small crop canvases for reliable Tesseract recognition.
+  // Very small crops (<150px) get a higher target to preserve detail in distance shots.
   function batchUpscaleIfNeeded(canvas) {
-    if (canvas.height >= 600) return canvas;
-    const factor = Math.max(2, Math.ceil(600 / canvas.height));
+    const targetH = canvas.height < 150 ? 1200 : 900;
+    if (canvas.height >= targetH) return canvas;
+    const factor = Math.max(2, Math.ceil(targetH / canvas.height));
     const c = document.createElement('canvas');
     c.width = canvas.width * factor;
     c.height = canvas.height * factor;
