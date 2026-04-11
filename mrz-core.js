@@ -467,6 +467,33 @@
     };
   }
 
+  // ── CHECK-DIGIT-GUIDED DOC NUMBER RESCUE ─────────────────────────────
+  // When the OCR-read doc check digit does NOT match chk(docNo), the check
+  // may be correct for the REAL character while the doc no char is mis-read.
+  // Try single-char substitutions from the OCR-B confusion set and accept
+  // only if exactly 1 unique substitution satisfies the original check.
+  // Conservative set — excludes pairs already handled by alphaMap (O/I/L/Q)
+  // and excludes D↔0 which creates ambiguity on typical doc numbers.
+  const DOC_CONFUSION = {
+    'K': ['X'], 'X': ['K'],
+    'F': ['E'], 'E': ['F'],
+    'B': ['8'], '8': ['B'],
+  };
+  function tryDocNoRescue(docNo, origCheck) {
+    if (chk(docNo) === origCheck) return null;  // already consistent — no rescue needed
+    const candidates = [];
+    for (let pos = 0; pos < docNo.length; pos++) {
+      const alts = DOC_CONFUSION[docNo[pos]];
+      if (!alts) continue;
+      for (const alt of alts) {
+        const modified = docNo.substring(0, pos) + alt + docNo.substring(pos + 1);
+        if (chk(modified) === origCheck) candidates.push(modified);
+      }
+    }
+    const unique = [...new Set(candidates)];
+    return unique.length === 1 ? unique[0] : null;  // only accept unambiguous rescue
+  }
+
   // ── CHECK DIGIT AUTO-CORRECTION ──────────────────────────────────────
   // Rescue layer: after extractMRZ finds structure but validateMRZ fails,
   // compute the deterministic expected check digit from each field and substitute.
@@ -477,7 +504,16 @@
     const [l1, l2, l3] = lines;
     if (type === 'TD3') {
       const a = l2.split('');
-      a[9]  = String(chk(l2.substring(0, 9)));                   // docNo check
+      // Doc number rescue: try before recomputing check —
+      // if OCR misread one char but got the check right (for the REAL char),
+      // we can recover the original character.
+      const rescuedDocNo = tryDocNoRescue(l2.substring(0, 9), +l2[9]);
+      if (rescuedDocNo) {
+        for (let i = 0; i < 9; i++) a[i] = rescuedDocNo[i];
+        // a[9] stays as l2[9] — original check is correct for rescued doc no
+      } else {
+        a[9] = String(chk(l2.substring(0, 9)));                   // docNo check (normal path)
+      }
       a[19] = String(chk(l2.substring(13, 19)));                  // dob check
       a[27] = String(chk(l2.substring(21, 27)));                  // exp check
       // composite must use CORRECTED values (a[] not l2) so that a fixed docNo check
@@ -488,7 +524,14 @@
     }
     if (type === 'TD1') {
       const a1 = l1.split(''), a2 = l2.split('');
-      a1[14] = String(chk(l1.substring(5, 14)));                  // docNo check (L1)
+      // Doc number rescue for TD1 (doc no is L1[5:14], check at L1[14])
+      const rescuedDocNo1 = tryDocNoRescue(l1.substring(5, 14), +l1[14]);
+      if (rescuedDocNo1) {
+        for (let i = 0; i < 9; i++) a1[5 + i] = rescuedDocNo1[i];
+        // a1[14] stays as l1[14] — original check is correct for rescued doc no
+      } else {
+        a1[14] = String(chk(l1.substring(5, 14)));                // docNo check (normal path)
+      }
       a2[6]  = String(chk(l2.substring(0, 6)));                   // dob check
       a2[14] = String(chk(l2.substring(8, 14)));                  // exp check
       // composite must use CORRECTED values (a1[], a2[] not l1/l2 strings)
