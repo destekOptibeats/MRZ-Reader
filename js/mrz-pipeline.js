@@ -443,6 +443,16 @@
         if (window._mrzDebug) console.log('[MRZ] rot' + deg + '/' + label,
           'longest:', longest, 'ocrScore:', ocrScore);
 
+        // TEMP DEBUG — img_1914/1924/1925 L2 root cause investigation
+        if (['img_1914','img_1924','img_1925'].some(id => (fileName||'').includes(id))) {
+          const lines = text.split('\n');
+          console.log('[DBG]', JSON.stringify({
+            rot: deg, label,
+            lengths: lines.map(l => l.length),
+            lines: lines.slice(0, 5),
+          }));
+        }
+
         if (ocrScore > globalBestScore) { globalBestScore = ocrScore; globalBestText = text; }
 
         if (longest >= 28) {

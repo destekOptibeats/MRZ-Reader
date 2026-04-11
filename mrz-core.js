@@ -22,17 +22,17 @@
     if (!s) return null;
 
     if (s.length > targetLen && s.length - targetLen <= 5) {
-      // TD1_L3: pick position with most trailing '<' (best alignment)
+      // TD1_L3: pick first clean match (minimum skip) — name lines print left-to-right
+      // "most trailing <" was wrong: biases toward shorter surnames with more padding
       if (kind === 'TD1_L3') {
-        let bestL3 = null, bestTrailing = -1;
+        let bestL3 = null;
         for (let skip = 0; skip <= s.length - targetLen; skip++) {
           const c = s.substring(skip, skip + targetLen);
-          if (!c.includes('<<')) continue;
+          // Must contain '<<' (name separator) and be at least 25 chars of real content
+          if (!c.includes('<<') || c.length < 25) continue;
           const clean = /^[A-Z<]+$/.test(c);
-          let trailing = 0;
-          for (let t = c.length - 1; t >= 0 && c[t] === '<'; t--) trailing++;
-          // Prefer clean (no digits), then most trailing '<'
-          if (clean && trailing > bestTrailing) { bestTrailing = trailing; bestL3 = c; }
+          // First clean match wins — don't continue searching
+          if (clean && bestL3 === null) { bestL3 = c; break; }
         }
         if (bestL3) return applyNameFixes(bestL3, kind);
         // Relaxed: allow digits → convert to letters
