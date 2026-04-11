@@ -446,11 +446,11 @@
         // TEMP DEBUG — img_1914/1924/1925 L2 root cause investigation
         if (['img_1914','img_1924','img_1925'].some(id => (fileName||'').includes(id))) {
           const lines = text.split('\n');
-          console.log('[DBG]', JSON.stringify({
-            rot: deg, label,
+          const entry = { rot: deg, label, fileName,
             lengths: lines.map(l => l.length),
-            lines: lines.slice(0, 5),
-          }));
+            lines: lines.slice(0, 5) };
+          if (!window._dbgData) window._dbgData = [];
+          window._dbgData.push(entry);
         }
 
         if (ocrScore > globalBestScore) { globalBestScore = ocrScore; globalBestText = text; }
