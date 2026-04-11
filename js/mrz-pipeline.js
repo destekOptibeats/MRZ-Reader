@@ -444,7 +444,7 @@
           'longest:', longest, 'ocrScore:', ocrScore);
 
         // TEMP DEBUG — img_1914/1924/1925 L2 root cause investigation
-        if (['img_1914','img_1924','img_1925'].some(id => (fileName||'').includes(id))) {
+        if (['1914','1924','1925'].some(id => (fileName||'').includes(id))) {
           const lines = text.split('\n');
           const entry = { rot: deg, label, fileName,
             lengths: lines.map(l => l.length),
