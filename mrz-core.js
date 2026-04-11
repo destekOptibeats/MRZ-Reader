@@ -240,7 +240,8 @@
         if (!l1f || !isL1_TD3(l1f)) continue;
         for (let l2len = 43; l2len <= 45 && i + l1len + l2len <= rawFlat.length; l2len++) {
           const l2raw = rawFlat.substring(i + l1len, i + l1len + l2len);
-          if ((l2raw.match(/</g) || []).length < 1) continue;  // at least 1 chevron
+          // No chevron guard on L2 — personal number may be fully alphanumeric (no <)
+          // isL2_TD3 (DOB + EXP digit format validation) is sufficient guard
           const l2f = fixLine(l2raw, { targetLen: 44, kind: 'TD3_L2' });
           if (l2f && isL2_TD3(l2f)) return { type: 'TD3', lines: [l1f, l2f] };
         }
