@@ -75,7 +75,17 @@
     }
 
     if (s.length === targetLen) return applyDigitFixes(s, kind);
-    if (s.length === targetLen - 1) return null;
+
+    // 1-char-short: pad and try — OCR occasionally drops the last character
+    // Name lines: pad with '<' (trailing filler in ICAO format)
+    // Data lines: pad with '0' (placeholder — correctCheckDigits will recompute check digit)
+    if (s.length === targetLen - 1) {
+      if (kind === 'TD3_L1' || kind === 'TD1_L3') return applyNameFixes(s + '<', kind);
+      if (kind === 'TD3_L2' || kind === 'TD1_L2' || kind === 'TD1_L1') {
+        return applyDigitFixes(s + '0', kind);
+      }
+    }
+
     return null;
   }
 
