@@ -190,6 +190,7 @@ function renderPendingRows() {
       '<td>' + escapeHtml(c.description || '') + '</td>' +
       '<td><span class="badge skip">⏭ Bekliyor</span></td>' +
       '<td>—</td>' +
+      '<td>—</td>' +
       '<td>—</td>';
     tbody.appendChild(tr);
   }
@@ -231,6 +232,11 @@ function updateRow(caseId, outcome, subtype, diffs, timingMs) {
   tr.cells[2].innerHTML = '<span class="badge ' + cls + '">' + label + '</span>' + subtypeHtml;
   tr.cells[3].innerHTML = timeHtml;
   tr.cells[4].innerHTML = issueHtml;
+
+  const visionBtn = (typeof batchVisionCache !== 'undefined' && batchVisionCache.has(caseId))
+    ? '<button class="btn-vision" onclick="toggleVisionPanel(\'' + caseId + '\',this)">🔍 Vision</button>'
+    : '—';
+  if (tr.cells[5]) tr.cells[5].innerHTML = visionBtn;
 }
 
 function updateSummary() {
@@ -265,6 +271,7 @@ async function runAllTests() {
   if (running || !regressionWorker) return;
   running = true;
   results = [];
+  if (typeof batchVisionCache !== 'undefined') batchVisionCache.clear();
 
   const runBtn    = document.getElementById('run-btn');
   const exportBtn = document.getElementById('export-btn');
@@ -326,6 +333,21 @@ async function runAllTests() {
     }
 
     results.push({ id: c.id, outcome, subtype, diffs, timingMs, timings: timingsDetail, meta });
+
+    // Capture canvas for Vision debug panel (all non-SKIPPED rows)
+    if (file && outcome !== 'SKIPPED' && typeof batchVisionCache !== 'undefined') {
+      try {
+        const bmp = await createImageBitmap(file);
+        const vW = Math.min(800, bmp.width);
+        const vH = Math.round(bmp.height * vW / bmp.width);
+        const vCanvas = document.createElement('canvas');
+        vCanvas.width = vW; vCanvas.height = vH;
+        vCanvas.getContext('2d').drawImage(bmp, 0, 0, vW, vH);
+        if (bmp.close) bmp.close();
+        batchVisionCache.set(c.id, { imgCanvas: vCanvas, vd: null });
+      } catch (_) {}
+    }
+
     updateRow(c.id, outcome, subtype, diffs, timingMs);
   }
 

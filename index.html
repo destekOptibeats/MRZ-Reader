@@ -228,6 +228,21 @@ textarea::placeholder{color:var(--muted);letter-spacing:0;font-family:inherit;fo
 .batch-summary{margin-top:12px;font-size:.85rem;color:var(--muted);text-align:center;}
 .batch-reason{font-size:.7rem;color:var(--red);margin-top:2px;}
 
+/* ── vision debug panel ── */
+.btn-vision{background:rgba(59,130,246,.12);border:1px solid #3b82f6;color:#60a5fa;padding:2px 7px;border-radius:5px;cursor:pointer;font-size:.68rem;margin-left:4px;}
+.btn-vision:hover{background:rgba(59,130,246,.25);}
+.btn-vision:disabled{opacity:.5;cursor:default;}
+.vision-panel-row>td{background:#0d1117;padding:12px 14px;border-bottom:1px solid var(--border);}
+.vision-panel{display:flex;flex-direction:column;gap:10px;}
+.vision-images{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;}
+.vision-img-slot{display:flex;flex-direction:column;align-items:center;gap:4px;}
+.vision-slot-label{font-size:.62rem;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;font-weight:600;}
+.vision-slot-dim{font-size:.6rem;color:#475569;}
+.vision-img-slot canvas{border:1px solid #1e293b;border-radius:4px;display:block;max-width:280px;}
+.vision-img-null{width:200px;height:60px;border:1px dashed #1e293b;border-radius:4px;display:flex;align-items:center;justify-content:center;color:#334155;font-size:.7rem;}
+.vision-meta{display:flex;gap:10px;flex-wrap:wrap;font-size:.65rem;color:#64748b;font-family:monospace;}
+.vision-meta span b{color:#94a3b8;font-weight:500;}
+
 /* ── cam toast ── */
 #cam-toast{
   position:absolute;top:12px;left:50%;transform:translateX(-50%);
@@ -618,6 +633,7 @@ input[type="text"] {
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="mrz-core.js"></script>
 <script src="js/mrz-pipeline.js"></script>
+<script src="js/vision-debug.js"></script>
 <script>
 const {
   chk, clean, cleanLine, fixLine, applyDigitFixes,
@@ -2381,6 +2397,7 @@ async function startBatchTest(files) {
   const rows = [];
   let successCount = 0;
   let totalTime = 0;
+  batchVisionCache.clear();
 
   try {
     for (let i = 0; i < files.length; i++) {
@@ -2475,6 +2492,15 @@ async function startBatchTest(files) {
         if (window._mrzDebug) console.log('[MRZ] batch row', i, row);
         rows.push(row);
       }
+      // Vision debug: canvas tüm satırlar için saklanır (max 800px, lazy analiz)
+      if (resized && typeof batchVisionCache !== 'undefined') {
+        const vW = Math.min(800, resized.width);
+        const vH = Math.round(resized.height * vW / resized.width);
+        const vCanvas = document.createElement('canvas');
+        vCanvas.width = vW; vCanvas.height = vH;
+        vCanvas.getContext('2d').drawImage(resized, 0, 0, vW, vH);
+        batchVisionCache.set(rows.length - 1, { imgCanvas: vCanvas, vd: null });
+      }
     }
   } finally {
     // Always terminate and clear the dedicated batch worker
@@ -2511,7 +2537,9 @@ async function startBatchTest(files) {
       '<td style="font-size:.72rem">' + (pf.surname || '—') + '</td>' +
       '<td>' + (r.durationMs || 0) + 'ms</td>' +
       '<td style="font-size:.72rem;color:var(--muted)">' + (r.comment || '') + '</td>' +
-      '<td><button onclick="copyToClipboard(formatResultForCopy(batchReportData[' + idx + ']))" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--muted);cursor:pointer;font-size:.7rem">📋</button></td>' +
+      '<td><button onclick="copyToClipboard(formatResultForCopy(batchReportData[' + idx + ']))" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--muted);cursor:pointer;font-size:.7rem">📋</button>' +
+      (batchVisionCache.has(idx) ? ' <button class="btn-vision" onclick="toggleVisionPanel(' + idx + ',this)">🔍 Vision</button>' : '') +
+      '</td>' +
       '</tr>' + (r.timing ? '<tr><td colspan="13" style="font-size:.65rem;color:var(--muted);padding:2px 6px">' + r.timing + '</td></tr>' : '');
     }).join('') +
     '</tbody></table>' +
