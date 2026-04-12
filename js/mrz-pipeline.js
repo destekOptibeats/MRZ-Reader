@@ -866,37 +866,48 @@
       } catch (_) {}
     }
 
-    // ── Phase 2.95: proj-crop safety net (untried rotations) ─────────────
-    // All prior phases failed. Try proj crops from rotations not yet OCR'd in Phase 1.
-    // This guarantees deg=0/proj is attempted even if density scoring ranked it below top-8.
-    // Priority order: [0, 90, 270, 180] — 0° first (most likely correct orientation).
-    // Max 3 extra OCR calls; only untried proj degs; no duplicate OCR.
+    // ── Phase 2.95: adaptive geometric bottom-crop safety net ────────────
+    // All prior phases failed. The density scorer often produces full-image crops
+    // when the MRZ zone has low density (OCR-B '<' fillers). This phase bypasses
+    // the scorer entirely, cutting a geometric bottom band from the stored rotated
+    // canvas for each rotation. Adaptive: starts from the density scorer's top pick
+    // (bestDeg), then tries +90° and +180° offsets with progressively deeper bands.
+    // Max 3 extra OCR calls; triedProjDegs is intentionally ignored here.
     {
-      const PROJ_FALLBACK_ORDER = [0, 90, 270, 180];
-      const MAX_PROJ_FALLBACK   = 3;
-      let projFallbackCount = 0;
+      const bestDeg = topCandidates[0]?.deg ?? 0;   // density scorer's top pick
+      const PHASE295_ATTEMPTS = [
+        { deg: bestDeg,                frac: 0.16 },  // scorer's choice, narrow band
+        { deg: (bestDeg + 90)  % 360,  frac: 0.22 },  // +90° alternative
+        { deg: (bestDeg + 180) % 360,  frac: 0.30 },  // opposite rotation, deep band
+      ];
+      const MAX_P295_CALLS = 3;
+      let p295count = 0;
 
-      for (const fallbackDeg of PROJ_FALLBACK_ORDER) {
-        if (projFallbackCount >= MAX_PROJ_FALLBACK) break;
-        if (triedProjDegs.has(fallbackDeg)) continue;   // already tried in Phase 1 — skip
+      for (const { deg: fallbackDeg, frac } of PHASE295_ATTEMPTS) {
+        if (p295count >= MAX_P295_CALLS) break;
         const pcd = projByDeg[fallbackDeg];
         if (!pcd) continue;
 
-        // Recreate crop canvas the same way Phase 1 does
-        const padW = Math.round(pcd.rotated.width * 0.03);
+        const rh     = pcd.rotated.height;
+        const botH   = Math.round(rh * frac);
+        const topPad = Math.round(rh * 0.02);                              // 2% buffer above MRZ
+        const botY   = Math.max(0, rh - botH - topPad);                   // guard: no negative Y
+        const padW   = Math.min(20, Math.round(pcd.rotated.width * 0.03)); // guard: small images
+
         const fbCrop = document.createElement('canvas');
         fbCrop.width  = Math.max(1, pcd.rotated.width - 2 * padW);
-        fbCrop.height = Math.max(1, pcd.h);
+        fbCrop.height = Math.max(1, botH);
         fbCrop.getContext('2d').drawImage(
-          pcd.rotated, padW, pcd.y, fbCrop.width, pcd.h, 0, 0, fbCrop.width, pcd.h
+          pcd.rotated, padW, botY, fbCrop.width, botH, 0, 0, fbCrop.width, botH
         );
 
         const fbOcrIn = batchUpscaleIfNeeded(batchPreprocessMRZ(fbCrop));
-        if (fbOcrIn.width <= 80 || fbOcrIn.height <= 40) continue;
+        if (fbOcrIn.height < 24) continue;   // only height guard; width varies after upscale
 
         ocrAttempt++;
-        projFallbackCount++;
-        const bandLabel = 'rot' + fallbackDeg + '/proj-fallback';
+        p295count++;
+        const pct       = Math.round(frac * 100);
+        const bandLabel = 'rot' + fallbackDeg + '/bot' + pct + '-fallback';
 
         try {
           const { data: { text: fbText } } = await wr.recognize(fbOcrIn);
@@ -904,13 +915,15 @@
           // Debug log for problem images
           if (['1914', '1780'].some(id => (fileName || '').includes(id))) {
             const fl = fbText.split('\n');
-            const entry = {
-              label: 'proj-fallback', deg: fallbackDeg, fileName,
+            if (!window._dbgData) window._dbgData = [];
+            window._dbgData.push({
+              label: bandLabel, deg: fallbackDeg, frac, fileName,
+              cropHeight: botH,
               allLengths: fl.map(l => l.length),
               mrzCandidates: fl.filter(l => l.length >= 28),
-            };
-            if (!window._dbgData) window._dbgData = [];
-            window._dbgData.push(entry);
+              chevronCount: (fbText.match(/</g) || []).length,
+              mrzScore: scoreMRZText(fbText),
+            });
           }
 
           const fbResult = extractMRZ(clean(fbText));
@@ -925,7 +938,7 @@
                   longestLine: failLongest, chevronCount: failChevrons,
                   rawOcrText: fbText, selectedBand: bandLabel,
                   corrected: corrCount > 0, correctionCount: corrCount,
-                  recoveryMode: 'proj-fallback',
+                  recoveryMode: bandLabel,
                 };
               }
             }
