@@ -300,14 +300,27 @@ function visionAnalyzeImage(srcCanvas) {
   var mrzCropY, mrzCropH;
 
   if (useWarp) {
-    // Known-position extraction: docType defines exact MRZ position in warped document.
-    // Much more reliable than scoreMRZPresence on a perspective-corrected image.
-    var stripRatio = best.docType === 'TD1' ? 0.36 : 0.28;
     var wH = best.warpCanvas.height;
-    mrzCropH = Math.round(wH * stripRatio);
-    mrzCropY = wH - mrzCropH;
+    var warpP = best.warpPresence; // scoreMRZPresence result on the warped canvas
+
+    // Prefer scoreMRZPresence crop when it found a tight band (score > 0.15 and height < 35% of warp).
+    // This gives image-specific crop position instead of always using a fixed bottom percentage.
+    // Fall back to docType-based strip when the density scorer fails (warpPresence covers full image).
+    var stripRatio = best.docType === 'TD1' ? 0.36 : 0.28;
+    var fixedH = Math.round(wH * stripRatio);
+
+    if (warpP && warpP.score > 0.15 && warpP.cropH < wH * 0.35) {
+      // Density scorer found a real band — use its coordinates directly
+      mrzCropY = warpP.cropY;
+      mrzCropH = warpP.cropH;
+      selectedWhy += '+warp_density(' + best.docType + ')';
+    } else {
+      // Fallback: docType-based fixed bottom strip
+      mrzCropH = fixedH;
+      mrzCropY = wH - mrzCropH;
+      selectedWhy += '+doctype_pos(' + best.docType + ')';
+    }
     try { mrzCrop = visionCropRegion(best.warpCanvas, mrzCropY, mrzCropH); } catch(e) {}
-    selectedWhy += '+doctype_pos(' + best.docType + ')';
   } else {
     var p    = best.origPresence;
     var imgH = best.rotated.height;
