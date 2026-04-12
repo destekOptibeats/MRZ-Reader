@@ -183,6 +183,7 @@ function visionWarpDocument(srcCanvas, corners, docType) {
 function visionAnalyzeImage(srcCanvas) {
   var t0 = performance.now();
   var ROTATIONS = [0, 90, 180, 270];
+  var srcIsLandscape = srcCanvas.width >= srcCanvas.height;
   var best = null; // { deg, rotated, origScore, warpCanvas, warpScore, effectiveScore, origPresence, warpPresence, quad, docType }
 
   for (var ri = 0; ri < ROTATIONS.length; ri++) {
@@ -215,6 +216,14 @@ function visionAnalyzeImage(srcCanvas) {
 
     var effectiveScore = Math.max(origScore, warpScore);
 
+    // Landscape belge her zaman landscape çıkmalı.
+    // srcCanvas landscape → 0°/180° tercih et (rotPreserves = true olanlar).
+    // srcCanvas portrait  → 90°/270° tercih et (rotPreserves = false olanlar).
+    var rotPreserves = (deg === 0 || deg === 180);
+    var orientBonus  = (srcIsLandscape === rotPreserves) ? 1.25 : 1.0;
+    var noFlipBonus  = (deg === 0) ? 1.10 : 1.0;   // 0° > 180° (ters çevirme önleme)
+    effectiveScore   = effectiveScore * orientBonus * noFlipBonus;
+
     if (!best || effectiveScore > best.effectiveScore) {
       best = { deg, rotated, binary, origPresence, origScore, quad, docType,
                warpCanvas, warpBinary, warpPresence, warpScore, effectiveScore };
@@ -245,12 +254,23 @@ function visionAnalyzeImage(srcCanvas) {
     try { mrzCrop = visionCropRegion(best.warpCanvas, mrzCropY, mrzCropH); } catch(e) {}
     selectedWhy += '+doctype_pos(' + best.docType + ')';
   } else {
-    // No warp: use scoreMRZPresence result, but cap height to max 40% of image
-    // to prevent full-image crops when bands are not clearly detected.
-    var p = best.origPresence;
-    var maxH = Math.round(best.rotated.height * 0.40);
-    mrzCropH = Math.min(p.cropH, maxH);
-    mrzCropY = p.cropY;
+    var p    = best.origPresence;
+    var imgH = best.rotated.height;
+
+    if (best.origScore <= 0.05) {
+      // Band bulunamadı → sabit alt %22
+      mrzCropY = Math.round(imgH * 0.78);
+      mrzCropH = Math.round(imgH * 0.22);
+    } else {
+      var maxH = Math.round(imgH * 0.25);          // 40% → 25%
+      mrzCropH = Math.min(p.cropH, maxH);
+      mrzCropY = p.cropY;
+      var minY = Math.round(imgH * 0.50);          // Alt yarıda zorla
+      if (mrzCropY < minY) {
+        mrzCropY = minY;
+        mrzCropH = Math.min(mrzCropH, imgH - mrzCropY);
+      }
+    }
     try { mrzCrop = visionCropRegion(best.rotated, mrzCropY, mrzCropH); } catch(e) {}
   }
 
