@@ -878,7 +878,7 @@
       const PHASE295_ATTEMPTS = [
         { deg: bestDeg,                frac: 0.16 },  // scorer's choice, narrow band
         { deg: (bestDeg + 90)  % 360,  frac: 0.22 },  // +90° alternative
-        { deg: (bestDeg + 180) % 360,  frac: 0.30 },  // opposite rotation, deep band
+        { deg: (bestDeg + 180) % 360,  frac: 0.40 },  // opposite rotation, deep band
       ];
       const MAX_P295_CALLS = 3;
       let p295count = 0;
