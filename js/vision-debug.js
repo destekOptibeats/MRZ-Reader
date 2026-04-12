@@ -220,9 +220,17 @@ function visionAnalyzeImage(srcCanvas) {
     // srcCanvas landscape → 0°/180° tercih et (rotPreserves = true olanlar).
     // srcCanvas portrait  → 90°/270° tercih et (rotPreserves = false olanlar).
     var rotPreserves = (deg === 0 || deg === 180);
-    var orientBonus  = (srcIsLandscape === rotPreserves) ? 1.25 : 1.0;
-    var noFlipBonus  = (deg === 0) ? 1.10 : 1.0;   // 0° > 180° (ters çevirme önleme)
-    effectiveScore   = effectiveScore * orientBonus * noFlipBonus;
+    var orientationMatches = (srcIsLandscape === rotPreserves);
+
+    // HARD penalty for wrong orientation — warp bonus cannot override this
+    if (!orientationMatches) {
+      effectiveScore *= 0.6;
+    }
+
+    // prefer 0° over 180° (avoid upside-down)
+    if (deg === 0) {
+      effectiveScore *= 1.10;
+    }
 
     if (!best || effectiveScore > best.effectiveScore) {
       best = { deg, rotated, binary, origPresence, origScore, quad, docType,
