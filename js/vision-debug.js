@@ -197,10 +197,8 @@ function visionAnalyzeImage(srcCanvas) {
       origPresence = window.MRZPipeline.scoreMRZPresence(binary);
     } catch(e) { continue; }
 
-    // Bottom-half bonus: MRZ should be in lower portion of image
-    var mrzCenter = origPresence.cropY + origPresence.cropH / 2;
-    var bottomBonus = (mrzCenter > rotated.height * 0.40) ? 1.15 : 1.0;
-    origScore = origPresence.score * bottomBonus;
+    // origScore: raw density score, no bottom-half multiplier
+    origScore = origPresence.score;
 
     // Try document quad + full-document warp
     var quad = null, warpCanvas = null, warpBinary = null, warpPresence = null, warpScore = 0, docType = null;
@@ -211,40 +209,66 @@ function visionAnalyzeImage(srcCanvas) {
         warpCanvas = visionWarpDocument(rotated, quad.corners, docType);
         warpBinary = window.MRZPipeline.batchPreprocessMRZ(warpCanvas);
         warpPresence = window.MRZPipeline.scoreMRZPresence(warpBinary);
-        warpScore = warpPresence.score * 1.2; // warp advantage: perspective-corrected text scores better
+        warpScore = warpPresence.score * 1.2;
       }
     } catch(e) { warpCanvas = null; warpScore = 0; }
 
-    var effectiveScore = Math.max(origScore, warpScore);
+    // Document-canonical tier scoring.
+    // Tier 1: quad found (document is landscape in this rotation) + MRZ is in lower half of warp
+    // Tier 2: quad found + warp exists but MRZ placement uncertain
+    // Tier 3: no quad + density detected MRZ in lower half of rotated canvas
+    // Tier 4: fallback — just raw density
+    //
+    // Tie-breaker: 0° gets +3 (very slight preference for no-rotation over 180° upside-down).
+    // srcIsLandscape is NOT used for decision — document geometry decides.
 
-    // Landscape belge her zaman landscape çıkmalı.
-    // srcCanvas landscape → 0°/180° tercih et (rotPreserves = true olanlar).
-    // srcCanvas portrait  → 90°/270° tercih et (rotPreserves = false olanlar).
-    var rotPreserves = (deg === 0 || deg === 180);
-    var orientationMatches = (srcIsLandscape === rotPreserves);
+    var rotH = (deg === 90 || deg === 270) ? srcCanvas.width : srcCanvas.height;
+    var warpAspect = warpCanvas ? (warpCanvas.width / warpCanvas.height) : 0;
+    // warpAspect must be in [1.1, 2.2]: excludes portrait warps (wrong rotation)
+    // and implausibly wide shapes; covers TD1 (1.59), TD2 (1.38), TD3 (1.42) comfortably.
+    var warpQuadOk = !!(quad && warpAspect >= 1.1 && warpAspect <= 2.2);
 
-    // HARD penalty for wrong orientation — warp bonus cannot override this
-    if (!orientationMatches) {
-      effectiveScore *= 0.6;
+    var warpMrzBR = 0;
+    if (warpPresence && warpCanvas) {
+      warpMrzBR = (warpPresence.cropY + warpPresence.cropH) / warpCanvas.height;
     }
+    var origMrzBR = (origPresence.cropY + origPresence.cropH) / rotH;
 
-    // prefer 0° over 180° (avoid upside-down)
-    if (deg === 0) {
-      effectiveScore *= 1.10;
+    var effectiveScore;
+    if (warpQuadOk && warpMrzBR >= 0.50) {
+      // Tier 1: warp confirms document orientation + MRZ at bottom
+      effectiveScore = 100 + (warpPresence ? warpPresence.score * 40 : 0);
+    } else if (warpQuadOk) {
+      // Tier 2: warp found but MRZ not confirmed at bottom
+      effectiveScore = 60 + (warpPresence ? warpPresence.score * 30 : 0);
+    } else if (origMrzBR >= 0.50) {
+      // Tier 3: no warp, density found MRZ in lower half
+      effectiveScore = 40 + origPresence.score * 25;
+    } else {
+      // Tier 4: raw fallback
+      effectiveScore = origPresence.score * 15;
     }
+    // Slight tie-breaker: prefer 0° (already upright) over upside-down (180°)
+    if (deg === 0) effectiveScore += 3;
+
+    var tier = effectiveScore >= 100 ? 1 : effectiveScore >= 60 ? 2 : effectiveScore >= 40 ? 3 : 4;
 
     rotationScores.push({
-      deg:          deg,
-      origScore:    origScore,
-      warpScore:    warpScore,
+      deg:            deg,
+      origScore:      origScore,
+      warpScore:      warpScore,
       effectiveScore: effectiveScore,
-      orientMatch:  orientationMatches,
-      quadFound:    !!quad
+      warpAspect:     warpAspect ? Math.round(warpAspect * 100) / 100 : null,
+      warpMrzBR:      Math.round(warpMrzBR * 100) / 100,
+      origMrzBR:      Math.round(origMrzBR * 100) / 100,
+      tier:           tier,
+      quadFound:      !!quad
     });
 
     if (!best || effectiveScore > best.effectiveScore) {
       best = { deg, rotated, binary, origPresence, origScore, quad, docType,
-               warpCanvas, warpBinary, warpPresence, warpScore, effectiveScore };
+               warpCanvas, warpBinary, warpPresence, warpScore, effectiveScore,
+               warpMrzBR: warpMrzBR, origMrzBR: origMrzBR, tier: tier };
     }
   }
 
@@ -263,10 +287,9 @@ function visionAnalyzeImage(srcCanvas) {
   var selectedWhy = useWarp ? 'warp_score_higher' : 'orig_score_higher';
 
   // Build human-readable selection reason for debug panel
-  var winnerOrientPreserves = (best.deg === 0 || best.deg === 180);
-  var winnerOrientMatch     = (srcIsLandscape === winnerOrientPreserves);
   var selectionReason = 'rot=' + best.deg + '\u00b0'
-    + ' orient=' + (winnerOrientMatch ? 'ok' : 'MISMATCH\u26a0')
+    + ' tier=' + best.tier
+    + ' warpMrzBR=' + (best.warpMrzBR !== undefined ? best.warpMrzBR.toFixed(2) : '\u2014')
     + ' orig=' + best.origScore.toFixed(3)
     + ' warp=' + (best.warpScore > 0 ? best.warpScore.toFixed(3) : '\u2014')
     + ' eff=' + best.effectiveScore.toFixed(3)
@@ -407,13 +430,12 @@ function visionRenderPanel(containerEl, vd) {
   var origR = m.mrzOrigRegions;
   var warpR = m.mrzWarpRegions;
 
-  // Compact per-rotation summary: "0°:0.28 | 90°:0.46✓(⚠) | 180°:0.19 | 270°:0.31"
+  // Compact per-rotation summary: "➤90°:T1:125.9■ | 0°:T3:50.5 | 270°:T1:110.7■ | 180°:T3:47.2"
   var rotSummary = '';
   if (m.rotationScores && m.rotationScores.length) {
     rotSummary = m.rotationScores.map(function(r) {
-      var label = r.deg + '\u00b0:' + r.effectiveScore.toFixed(2);
+      var label = r.deg + '\u00b0:T' + (r.tier || '?') + ':' + r.effectiveScore.toFixed(1);
       if (r.deg === m.detectedRotation) label = '\u27a4' + label;
-      if (!r.orientMatch)               label += '\u26a0';
       if (r.quadFound)                  label += '\u25a0';
       return label;
     }).join(' \u2502 ');
