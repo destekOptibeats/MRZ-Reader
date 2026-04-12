@@ -89,7 +89,6 @@ html,body{
 /* ── video — MOBİL KRİTİK ── */
 #s-scan {
   justify-content: flex-start;
-  padding: 8px;
   padding-top: max(env(safe-area-inset-top, 0px), 8px);
   padding-bottom: max(env(safe-area-inset-bottom, 0px), 8px);
   gap: 6px;
@@ -97,7 +96,6 @@ html,body{
   height: -webkit-fill-available;
   min-height: unset;
   overflow: hidden;
-  align-items: stretch;
 }
 #s-scan .title { font-size:1.1rem; flex-shrink:0; }
 #s-scan .tabs  { flex-shrink:0; }
@@ -105,37 +103,20 @@ html,body{
 #video-wrap{
   position:relative;
   width:100%;
-  max-width:none;
+  max-width:460px;
   border-radius:14px;
   overflow:hidden;
   background:#000;
-  flex: 0 0 auto;
-  min-height: 200px;
-  aspect-ratio: 4/3;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 video{
   width:100%;
   height:100%;
   position:absolute;
   top:0; left:0;
-  object-fit: contain;
+  object-fit: fill;
   display:block;
-  background:#000;
-}
-/* Tüm mobil cihazlarda video tam alanı kaplar */
-@media (hover:none) and (pointer:coarse){
-  video { object-fit: cover; }
-}
-/* Yatay kilit ekranı */
-#landscape-blocker{
-  display:none;
-  position:fixed;inset:0;z-index:99999;
-  background:#000;
-  flex-direction:column;align-items:center;justify-content:center;
-  gap:18px;color:#fff;text-align:center;padding:24px;
-}
-@media (hover:none) and (pointer:coarse) and (orientation:landscape){
-  #landscape-blocker { display:flex; }
 }
 #cam-overlay{
   position:absolute;
@@ -196,64 +177,6 @@ textarea::placeholder{color:var(--muted);letter-spacing:0;font-family:inherit;fo
 .cam-hint.hint-warn { color:#f59e0b; font-size:0.95rem; }
 .cam-hint.hint-ok   { color:#10b981; font-size:0.95rem; }
 
-/* ── scan flash overlay ── */
-#scan-flash{
-  position:absolute;inset:0;z-index:90;pointer-events:none;
-  opacity:0;transition:opacity .15s;border-radius:14px;
-}
-#scan-flash.flash-green{background:rgba(16,185,129,.35);opacity:1;}
-#scan-flash.flash-orange{background:rgba(245,158,11,.35);opacity:1;}
-@keyframes bounce-up{
-  0%{transform:translateY(0);opacity:1;}
-  30%{transform:translateY(-12px);opacity:.7;}
-  60%{transform:translateY(-4px);opacity:1;}
-  100%{transform:translateY(0);opacity:1;}
-}
-.stat-bounce{animation:bounce-up .4s ease;}
-
-/* ── serial stats bar ── */
-#serial-stats{
-  display:flex;justify-content:center;gap:14px;flex-wrap:wrap;
-  font-size:.78rem;color:var(--muted);padding:2px 0;
-}
-#serial-stats span{white-space:nowrap;}
-#serial-stats .stat-val{color:var(--text);font-weight:700;}
-
-/* ── batch test ── */
-.batch-table{width:100%;max-width:600px;border-collapse:collapse;font-size:.78rem;}
-.batch-table th{text-align:left;padding:8px 6px;border-bottom:2px solid var(--border);color:var(--muted);font-size:.7rem;text-transform:uppercase;}
-.batch-table td{padding:7px 6px;border-bottom:1px solid var(--border);vertical-align:top;}
-.batch-table .bt-ok{color:var(--green);}
-.batch-table .bt-fail{color:var(--red);}
-.batch-summary{margin-top:12px;font-size:.85rem;color:var(--muted);text-align:center;}
-.batch-reason{font-size:.7rem;color:var(--red);margin-top:2px;}
-
-/* ── vision debug panel ── */
-.btn-vision{background:rgba(59,130,246,.12);border:1px solid #3b82f6;color:#60a5fa;padding:2px 7px;border-radius:5px;cursor:pointer;font-size:.68rem;margin-left:4px;}
-.btn-vision:hover{background:rgba(59,130,246,.25);}
-.btn-vision:disabled{opacity:.5;cursor:default;}
-.vision-panel-row>td{background:#0d1117;padding:12px 14px;border-bottom:1px solid var(--border);}
-.vision-panel{display:flex;flex-direction:column;gap:10px;}
-.vision-images{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;}
-.vision-img-slot{display:flex;flex-direction:column;align-items:center;gap:4px;}
-.vision-slot-label{font-size:.62rem;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;font-weight:600;}
-.vision-slot-dim{font-size:.6rem;color:#475569;}
-.vision-img-slot canvas{border:1px solid #1e293b;border-radius:4px;display:block;max-width:280px;}
-.vision-img-null{width:200px;height:60px;border:1px dashed #1e293b;border-radius:4px;display:flex;align-items:center;justify-content:center;color:#334155;font-size:.7rem;}
-.vision-meta{display:flex;gap:10px;flex-wrap:wrap;font-size:.65rem;color:#64748b;font-family:monospace;}
-.vision-meta span b{color:#94a3b8;font-weight:500;}
-
-/* ── cam toast ── */
-#cam-toast{
-  position:absolute;top:12px;left:50%;transform:translateX(-50%);
-  z-index:100;padding:8px 16px;border-radius:10px;
-  background:rgba(0,0,0,.85);backdrop-filter:blur(6px);
-  color:#f59e0b;font-size:0.82rem;font-weight:600;
-  text-align:center;white-space:nowrap;
-  opacity:0;transition:opacity .3s;pointer-events:none;
-}
-#cam-toast.show{opacity:1;}
-
 /* ── serial scan rows ── */
 .serial-row{
   display:flex;align-items:center;gap:8px;
@@ -263,15 +186,11 @@ textarea::placeholder{color:var(--muted);letter-spacing:0;font-family:inherit;fo
 .serial-row .sr-name{flex:1;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .serial-row .sr-docno{color:var(--muted);font-size:0.76rem;white-space:nowrap;}
 .serial-row .sr-flag{font-size:1.1rem;flex-shrink:0;}
-.serial-row .sr-count{
-  background:#f59e0b;color:#000;font-size:0.68rem;font-weight:700;
-  padding:2px 6px;border-radius:6px;flex-shrink:0;min-width:22px;text-align:center;
-}
 
 /* ── Tab cam content — tam genişlik ── */
 #tab-cam-content {
   width: 100%;
-  max-width: none;
+  max-width: 460px;
   gap: 6px;
   align-items: stretch;
 }
@@ -406,33 +325,15 @@ input[type="text"] {
   font-size: 16px; /* 16px altı Safari'de zoom yapar */
 }
 .version-tag{
-  position:fixed;bottom:8px;left:10px;z-index:9999;
-  background:rgba(255,255,255,.12);color:var(--text);
-  font-size:.78rem;padding:4px 10px;border-radius:6px;
-  pointer-events:none;opacity:.7;font-weight:600;
-  border:1px solid rgba(255,255,255,.08);
+  position:fixed;bottom:6px;left:10px;z-index:9999;
+  background:rgba(255,255,255,.06);color:var(--muted);
+  font-size:.65rem;padding:2px 7px;border-radius:5px;
+  pointer-events:none;opacity:.5;
 }
 </style>
-<script>window.APP_BUILD = '2026-04-12T19:51';</script>
 </head>
 <body>
-<!-- Yatay mod engeli — CSS media query ile otomatik gösterilir/gizlenir -->
-<div id="landscape-blocker">
-  <span style="font-size:3.5rem">📱</span>
-  <span style="font-size:1.15rem;font-weight:600;line-height:1.5">Lütfen telefonunuzu<br><strong>dikey</strong> tutun</span>
-</div>
-<div class="version-tag" id="version-tag">v2.1.85</div>
-<script>
-  (function(){
-    var el = document.getElementById('version-tag');
-    if(el && window.APP_BUILD) {
-      var d = new Date(window.APP_BUILD);
-      var pad = function(n){ return n < 10 ? '0'+n : n; };
-      var str = d.getFullYear()+'.'+pad(d.getMonth()+1)+'.'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes());
-      el.textContent = el.textContent + ' · ' + str;
-    }
-  })();
-</script>
+<div class="version-tag">v1.2.0</div>
 
 <!-- cache status pill -->
 <div id="cache-pill"><div class="pill-dot"></div><span id="pill-txt">Yükleniyor…</span></div>
@@ -457,8 +358,7 @@ input[type="text"] {
   <button class="btn blue" onclick="startSerialScan()" id="serial-btn">
     🚀 Seri Tarama Başlat
   </button>
-  <button class="btn ghost" onclick="document.getElementById('batch-file-in').click()">🧪 Batch Test</button>
-  <input type="file" id="batch-file-in" accept="image/*" multiple style="display:none" onchange="startBatchTest(this.files)">
+  <button class="btn ghost" onclick="goScreen('s-add')">⌨️ Elle Gir</button>
   <div style="width:100%;max-width:460px;margin-top:8px;">
     <button onclick="toggleList()" id="list-toggle-btn"
       style="width:100%;background:var(--card);border:1px solid var(--border);
@@ -482,7 +382,6 @@ input[type="text"] {
   <div class="tabs">
     <button class="tab active" id="tab-cam" onclick="setTab('cam')">📷 Kamera</button>
     <button class="tab" id="tab-img" onclick="setTab('img')">🖼️ Fotoğraf</button>
-    <button class="tab" id="tab-bulk" onclick="setTab('bulk')" style="display:none">📁 Toplu</button>
   </div>
 
   <!-- Camera tab -->
@@ -490,18 +389,11 @@ input[type="text"] {
     <div id="video-wrap">
       <video id="video" autoplay playsinline muted></video>
       <canvas id="cam-overlay"></canvas>
-      <div id="cam-toast"></div>
-      <div id="scan-flash"></div>
     </div>
     <div id="cam-hint" class="cam-hint">MRZ'yi kutuya hizalayın</div>
     <!-- Serial scan results panel -->
     <div id="serial-panel" style="display:none;flex-direction:column;gap:4px;width:100%;overflow-y:auto;flex:0 1 auto;max-height:30vh;">
-      <div id="serial-stats">
-        <span>📷 Toplam Çekim: <span class="stat-val" id="serial-total-shots">0</span></span>
-        <span>📄 Belge: <span class="stat-val" id="serial-counter">0</span></span>
-        <span>⏱ <span class="stat-val" id="serial-timer">00:00</span></span>
-        <span>📊 Ort: <span class="stat-val" id="serial-avg">0.0s</span></span>
-      </div>
+      <div id="serial-counter" style="font-size:0.85rem;font-weight:600;color:var(--green);text-align:center;padding:2px 0;">0 belge okundu</div>
       <div id="serial-list" style="display:flex;flex-direction:column;gap:4px;"></div>
     </div>
     <button class="btn green" id="serial-finish-btn" onclick="finishSerialScan()" style="display:none;flex-shrink:0;">✓ Bitir</button>
@@ -531,21 +423,6 @@ input[type="text"] {
     <input type="file" id="file-in" accept="image/*" style="display:none" onchange="onFile(event)">
     <button class="btn ghost" onclick="stopScan()">✕ İptal</button>
   </div>
-
-  <!-- Bulk upload tab (serial mode only) -->
-  <div id="tab-bulk-content" style="display:none;width:100%;max-width:460px;flex-direction:column;gap:12px;align-items:center;">
-    <div class="upload-zone" onclick="document.getElementById('bulk-file-in').click()">
-      <div style="font-size:2.4rem;margin-bottom:10px">📁</div>
-      <h3 style="font-size:1rem;margin-bottom:5px">Toplu Fotoğraf Seç</h3>
-      <p style="color:var(--muted);font-size:0.82rem">Birden fazla belge fotoğrafı seçin</p>
-    </div>
-    <input type="file" id="bulk-file-in" accept="image/*" multiple style="display:none" onchange="startBulkSerialScan(this.files)">
-    <div id="bulk-progress" style="display:none;width:100%;">
-      <div class="prog-wrap"><div class="prog" id="bulk-prog" style="width:0%"></div></div>
-      <div class="sub" id="bulk-status" style="margin-top:6px;"></div>
-    </div>
-    <button class="btn ghost" onclick="stopScan()">✕ İptal</button>
-  </div>
 </div>
 
 <!-- S3: İŞLENİYOR -->
@@ -560,15 +437,6 @@ input[type="text"] {
 <!-- S4: SONUÇ -->
 <div class="screen" id="s-result">
   <div class="banner" id="res-banner"><span id="res-icon">✅</span><span id="res-txt"></span></div>
-  <!-- Belge fotoğrafı -->
-  <div id="doc-photo-wrap" style="display:none;width:100%;max-width:460px;cursor:pointer;" onclick="toggleFullPhoto()">
-    <img id="doc-photo" style="width:100%;border-radius:12px;border:1px solid var(--border);display:block;">
-  </div>
-  <!-- Tam ekran fotoğraf -->
-  <div id="photo-fullscreen" onclick="toggleFullPhoto()" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.92);align-items:center;justify-content:center;cursor:pointer;">
-    <img id="doc-photo-full" style="max-width:95vw;max-height:90vh;object-fit:contain;border-radius:8px;">
-    <div style="position:absolute;top:max(env(safe-area-inset-top,12px),12px);right:14px;color:#fff;font-size:1.5rem;font-weight:700;">✕</div>
-  </div>
   <div class="card" style="max-width:460px">
     <div style="font-size:0.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:10px">
       ✏️ İsim alanları — gerekirse düzeltin
@@ -597,6 +465,27 @@ input[type="text"] {
   </div>
 </div>
 
+<!-- S5: ELLE GİR -->
+<div class="screen" id="s-add">
+  <div class="title">Elle Gir</div>
+  <div class="sub">Her satır tam 44 karakter</div>
+  <textarea id="l1" rows="2" maxlength="44"
+    placeholder="Satır 1 — P ile başlar"
+    oninput="onTA(this,'c1')"></textarea>
+  <div class="char-row">
+    <span style="font-size:.74rem;color:var(--muted)">A-Z · 0-9 · &lt;</span>
+    <span class="cnt" id="c1">0 / 44</span>
+  </div>
+  <textarea id="l2" rows="2" maxlength="44"
+    placeholder="Satır 2 — pasaport no ile başlar"
+    oninput="onTA(this,'c2')"></textarea>
+  <div class="char-row">
+    <span style="font-size:.74rem;color:var(--muted)">A-Z · 0-9 · &lt;</span>
+    <span class="cnt" id="c2">0 / 44</span>
+  </div>
+  <button class="btn green" onclick="addManual()">💾 Kaydet</button>
+  <button class="btn ghost" onclick="goHome()">← Geri</button>
+</div>
 
 <!-- S6: HATA -->
 <div class="screen" id="s-error">
@@ -608,45 +497,16 @@ input[type="text"] {
   <button class="btn blue" onclick="goHome()">← Ana Ekran</button>
 </div>
 
-<!-- S-BATCH: BATCH TEST -->
-<div class="screen" id="s-batch">
-  <div class="title">🧪 Batch Test</div>
-  <div class="sub">Birden fazla belge fotoğrafı seçin, toplu OCR testi yapın</div>
-  <button class="btn blue" onclick="document.getElementById('batch-file-in').click()">📁 Resimleri Seç</button>
-  <div id="batch-progress" style="display:none;width:100%;max-width:600px;">
-    <div class="prog-wrap"><div class="prog" id="batch-prog" style="width:0%"></div></div>
-    <div class="sub" id="batch-status" style="margin-top:6px;"></div>
-  </div>
-  <div id="batch-results" style="width:100%;max-width:600px;overflow-x:auto;"></div>
-  <button class="btn ghost" onclick="goHome()" style="margin-top:10px">← Ana Ekran</button>
-</div>
-
-<!-- S-SERIAL-REPORT: SERİ TARAMA RAPORU -->
-<div class="screen" id="s-serial-report">
-  <div class="title">📊 Seri Tarama Raporu</div>
-  <div id="serial-report-body" style="width:100%;max-width:600px;overflow-x:auto;"></div>
-  <button class="btn blue" onclick="leaveSerialReport()">← Ana Ekrana Dön</button>
-</div>
-
 <canvas id="main-canvas" style="display:none"></canvas>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="mrz-core.js"></script>
-<script src="js/mrz-pipeline.js"></script>
-<script src="js/vision-debug.js"></script>
 <script>
 const {
   chk, clean, cleanLine, fixLine, applyDigitFixes,
   isL1_TD1, isL2_TD1, isL3_TD1, isL1_TD3, isL2_TD3,
-  extractMRZ, getChecksums_TD3, parseResult,
-  validateMRZ, diagnoseMRZ, validateNationalId
+  extractMRZ, getChecksums_TD3, parseResult
 } = window.MRZCore;
-
-const {
-  cropBottom, resizeForOCR, batchPreprocessMRZ, batchUpscaleIfNeeded,
-  rotateCanvas, longestOCRLine, countChevrons, scoreMRZText,
-  fastBatchOCR, createBatchWorker,
-} = window.MRZPipeline;
 
 let worker       = null;
 let workerReady  = false;
@@ -714,176 +574,59 @@ function toggleList() {
 let serialMode = false;
 let serialCount = 0;
 let serialScannedIds = [];
-let toastTimer = null;
-let serialTotalShots = 0;
-let serialStartTime = 0;
-let serialTimerInterval = null;
-let serialEntries = [];       // {docId, name, type, readCount, firstReadTime}
-let serialCooldown = false;
-let serialCooldownTimer = null;
-
-function showCamToast(msg, duration) {
-  duration = duration || 2500;
-  const el = document.getElementById('cam-toast');
-  if (!el) return;
-  el.textContent = msg;
-  el.classList.add('show');
-  if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), duration);
-}
-
-function flashScan(type) {
-  const el = document.getElementById('scan-flash');
-  if (!el) return;
-  el.className = '';
-  void el.offsetWidth; // reflow
-  el.classList.add(type === 'dup' ? 'flash-orange' : 'flash-green');
-  setTimeout(() => el.className = '', 300);
-}
-
-function bounceStat(id) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  el.classList.remove('stat-bounce');
-  void el.offsetWidth;
-  el.classList.add('stat-bounce');
-}
-
-function updateSerialStats() {
-  const elapsed = Math.floor((Date.now() - serialStartTime) / 1000);
-  const mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
-  const ss = String(elapsed % 60).padStart(2, '0');
-  document.getElementById('serial-timer').textContent = mm + ':' + ss;
-  if (serialTotalShots > 0) {
-    document.getElementById('serial-avg').textContent = (elapsed / serialTotalShots).toFixed(1) + 's';
-  }
-}
 
 function startSerialScan() {
   serialMode = true;
   serialCount = 0;
   serialScannedIds = [];
-  serialEntries = [];
-  serialTotalShots = 0;
-  serialStartTime = Date.now();
-  serialCooldown = false;
-  if (serialCooldownTimer) { clearTimeout(serialCooldownTimer); serialCooldownTimer = null; }
   document.getElementById('serial-panel').style.display = 'flex';
   document.getElementById('serial-finish-btn').style.display = 'flex';
-  document.getElementById('serial-counter').textContent = '0';
-  document.getElementById('serial-total-shots').textContent = '0';
-  document.getElementById('serial-timer').textContent = '00:00';
-  document.getElementById('serial-avg').textContent = '0.0s';
+  document.getElementById('serial-counter').textContent = '0 belge okundu';
   document.getElementById('serial-list').innerHTML = '';
   document.getElementById('cam-cancel-btn').style.display = 'none';
-  document.getElementById('tab-bulk').style.display = '';
-  if (serialTimerInterval) clearInterval(serialTimerInterval);
-  serialTimerInterval = setInterval(updateSerialStats, 1000);
   goScreen('s-scan');
   setTimeout(() => startCamera(), 100);
 }
 
-function makeSerialKey(parsed) {
-  return [
-    (parsed.passNo || '').replace(/</g,'').trim(),
-    (parsed.surname || '').trim(),
-    (parsed.given || '').trim(),
-    (parsed.dob || '').trim()
-  ].join('|');
-}
-
-// ocrMeta: { ocrText, bandIdx, ocrAttempts } — optional, for analysis
-function addSerialResult(mrzResult, ocrMeta) {
-  ocrMeta = ocrMeta || {};
-  const _wrap = document.getElementById('video-wrap');
-
+function addSerialResult(mrzResult) {
   const parsed = parseResult(mrzResult);
   const docId = (parsed.passNo || '').replace(/</g,'').trim();
-  const compositeKey = makeSerialKey(parsed);
-  const readTime = Date.now();
 
-  // OCR analysis fields — captured at accept time
-  const ocrText = ocrMeta.ocrText || '';
-  const longest = longestOCRLine(ocrText);
-  const chevrons = countChevrons(ocrText);
-  const bandLabel = ocrMeta.bandIdx != null ? 'band' + (ocrMeta.bandIdx + 1) : '—';
-  const attempts = ocrMeta.ocrAttempts || 1;
-
-  // Her okumada toplam çekim artır
-  serialTotalShots++;
-  document.getElementById('serial-total-shots').textContent = serialTotalShots;
-  bounceStat('serial-total-shots');
-
-  // Duplicate: still show toast + flash, but also add as analysis entry
-  const isDuplicate = serialScannedIds.includes(docId);
-  if (isDuplicate) {
-    const dupName = (parsed.surname || '') + (parsed.given ? ' ' + parsed.given : '');
-    showCamToast('⚠️ Tekrar okundu: ' + dupName, 2000);
-    flashScan('dup');
-    const countEl = document.getElementById('sr-count-' + docId);
-    if (countEl) {
-      let c = parseInt(countEl.textContent) || 1;
-      countEl.textContent = (c + 1) + 'x';
-    }
-  } else {
-    flashScan('new');
-    // Save to localStorage only for first occurrence
-    const photo = captureDocPhoto();
-    const entry = {
-      id: 'pp_' + Date.now(),
-      line1: mrzResult.lines[0],
-      line2: mrzResult.lines[1],
-      line3: mrzResult.lines[2] || '',
-      type:  mrzResult.type,
-      name:  parsed.surname + (parsed.given ? ', ' + parsed.given : ''),
-      nation: parsed.nation,
-      photo: photo || '',
-      addedAt: readTime
-    };
-    const saved = loadPassports();
-    saved.push(entry);
-    savePassports(saved);
-    serialScannedIds.push(docId);
+  // Duplicate kontrolü
+  if (serialScannedIds.includes(docId)) {
+    setHint('Bu belge zaten tarandı', 'warn');
+    lastFrameHash = 0; lastL2 = null; l2Count = 0; checksumPassed = false;
+    return;
   }
 
-  // Always add analysis entry (every scan = separate row in report)
+  // localStorage'a kaydet
+  const entry = {
+    id: 'pp_' + Date.now(),
+    line1: mrzResult.lines[0],
+    line2: mrzResult.lines[1],
+    line3: mrzResult.lines[2] || '',
+    type:  mrzResult.type,
+    name:  parsed.surname + (parsed.given ? ', ' + parsed.given : ''),
+    nation: parsed.nation,
+    addedAt: Date.now()
+  };
+  const saved = loadPassports();
+  saved.push(entry);
+  savePassports(saved);
+
+  // Duplicate listesine ekle
+  serialScannedIds.push(docId);
   serialCount++;
-  serialEntries.push({
-    docId,
-    compositeKey,
-    name: parsed.surname + (parsed.given ? ' ' + parsed.given : ''),
-    type: mrzResult.type === 'TD1' ? 'TC Kimlik' : 'Pasaport',
-    readCount: 1,
-    firstReadTime: readTime,
-    isDuplicate,
-    // OCR analysis fields
-    selectedBand: bandLabel,
-    longestLine: longest,
-    chevronCount: chevrons,
-    ocrAttempts: attempts,
-    rawOcrText: ocrText,
-    // Parsed fields for consistency comparison
-    parsedFields: {
-      documentNumber: docId || null,
-      birthDate: parsed.dob || null,
-      surname: parsed.surname || null,
-      givenNames: parsed.given || null,
-      nationalId: parsed.nationalId || null,
-      nationalIdValid: parsed.nationalIdValid || false,
-    }
-  });
 
   // UI güncelle
-  document.getElementById('serial-counter').textContent = serialCount;
-  bounceStat('serial-counter');
+  document.getElementById('serial-counter').textContent = serialCount + ' belge okundu';
 
   const displayName = (parsed.surname || '') + (parsed.given ? ' ' + parsed.given : '');
   const row = document.createElement('div');
   row.className = 'serial-row';
   row.innerHTML = '<span class="sr-flag">' + flag(parsed.nation) + '</span>' +
     '<span class="sr-name">' + displayName + '</span>' +
-    '<span class="sr-docno">' + docId + '</span>' +
-    '<span class="sr-count" id="sr-count-' + docId + '">1x</span>';
+    '<span class="sr-docno">' + docId + '</span>';
   const listEl = document.getElementById('serial-list');
   listEl.insertBefore(row, listEl.firstChild);
   document.getElementById('serial-panel').scrollTop = 0;
@@ -897,194 +640,15 @@ function addSerialResult(mrzResult, ocrMeta) {
   // Kısa görsel geri bildirim
   setHint('✓ ' + displayName + ' okundu', 'ok');
   drawOverlayState('accepted');
-  setTimeout(() => { drawOverlayState('searching'); }, 800);
-
-
-  // Cooldown başlat
-  startSerialCooldown();
-}
-
-function startSerialCooldown() {
-  if (!serialMode) return;
-  serialCooldown = true;
-  if (serialCooldownTimer) clearTimeout(serialCooldownTimer);
-  setHint('Sonraki belge için hazır...', 'warn');
-  serialCooldownTimer = setTimeout(() => {
-    serialCooldown = false;
-    serialCooldownTimer = null;
-    if (serialMode) {
-      setHint('📏 MRZ satırlarını çerçeveye hizalayın', '');
-      drawOverlayState('searching');
-      if (!scanning) {
-        // Kamera yanlışlıkla durduysa yeniden başlat
-        startCamera();
-      }
-    }
-  }, 1000);
+  setTimeout(() => { if (scanning) drawOverlayState('searching'); }, 800);
 }
 
 function finishSerialScan() {
   serialMode = false;
   stopCamera();
-  serialCooldown = false;
-  if (serialCooldownTimer) { clearTimeout(serialCooldownTimer); serialCooldownTimer = null; }
-  if (serialTimerInterval) { clearInterval(serialTimerInterval); serialTimerInterval = null; }
   document.getElementById('serial-panel').style.display = 'none';
   document.getElementById('serial-finish-btn').style.display = 'none';
   document.getElementById('cam-cancel-btn').style.display = '';
-  document.getElementById('tab-bulk').style.display = 'none';
-
-  // Show report (don't go home yet — session data preserved)
-  showSerialReport();
-}
-
-// ── REPORT HELPERS ─────────────────────────────────────────────────────
-function classifyFailure(opts) {
-  // opts: { parseOk, checksumOk, longestLine, isBlurry, chevrons }
-  if (opts.isBlurry) return 'BLURRY_FRAME';
-  if (!opts.longestLine || opts.longestLine < 10) return 'MRZ_NOT_FOUND';
-  if (opts.longestLine < 28) return 'LINES_TOO_SHORT';
-  if ((!opts.chevrons || opts.chevrons < 3) && opts.longestLine < 35) return 'LOW_CHEVRON_COUNT';
-  if (!opts.parseOk) return 'PARSE_FAILED';
-  if (!opts.checksumOk) return 'CHECKSUM_FAILED';
-  return 'UNKNOWN_ERROR';
-}
-
-const RESULT_COMMENTS = {
-  BLURRY_FRAME: 'Görüntü bulanık',
-  MRZ_NOT_FOUND: 'MRZ bulunamadı',
-  LINES_TOO_SHORT: 'Satırlar çok kısa',
-  LOW_CHEVRON_COUNT: 'MRZ deseni yetersiz',
-  PARSE_FAILED: 'MRZ bulundu ama parse edilemedi',
-  CHECKSUM_FAILED: 'Checksum geçmedi',
-  NO_STABLE_FRAME: 'Kararlı kare yakalanamadı',
-  DOCUMENT_TOO_FAR: 'Belge çok uzak',
-  UNKNOWN_ERROR: 'Bilinmeyen hata',
-  SUCCESS: 'Okuma başarılı',
-};
-
-function getResultComment(reason) {
-  return RESULT_COMMENTS[reason] || RESULT_COMMENTS.UNKNOWN_ERROR;
-}
-
-function formatResultForCopy(r) {
-  const lines = [
-    'Belge: ' + (r.name || '—'),
-    'Tip: ' + (r.docType || '—'),
-    'Sonuç: ' + (r.finalResult || '—'),
-    'Süre: ' + (r.durationMs != null ? r.durationMs + 'ms' : (r.durationSec != null ? r.durationSec + 's' : '—')),
-    'Band: ' + (r.selectedBand || '—'),
-    'OCR Deneme: ' + (r.ocrAttempts || '—'),
-    'En Uzun Satır: ' + (r.longestLine || '—'),
-    'Chevron (<): ' + (r.chevronCount != null ? r.chevronCount : '—'),
-    'Parse: ' + (r.parseOk ? 'OK' : 'FAIL'),
-    'Checksum: ' + (r.checksumOk ? 'OK' : 'FAIL'),
-    'Sebep: ' + (r.failReason || '—'),
-    'Yorum: ' + (r.comment || '—'),
-  ];
-  if (r.parsedFields) {
-    const pf = r.parsedFields;
-    lines.push('--- Parsed Fields ---');
-    lines.push('Belge No: ' + (pf.documentNumber || '—'));
-    lines.push('Doğum Tarihi: ' + (pf.birthDate || '—'));
-    lines.push('Soyad: ' + (pf.surname || '—'));
-    lines.push('Ad: ' + (pf.givenNames || '—'));
-    if (pf.nationalId) lines.push('TC Kimlik No: ' + pf.nationalId + (pf.nationalIdValid ? ' ✓' : ' ⚠ Geçersiz'));
-  }
-  if (r.rawOcrText) {
-    lines.push('--- Raw OCR ---');
-    lines.push(r.rawOcrText.substring(0, 300));
-  }
-  return lines.join('\n');
-}
-
-function formatAllResultsForCopy(results, summary) {
-  let md = '| # | Belge | Tip | Sonuç | Süre | Band | Deneme | Uzun Satır | <Count | DocNo | DOB | Soyad | Ad | Yorum |\n';
-  md += '|---|-------|-----|-------|------|------|--------|------------|--------|-------|-----|-------|----|---------|\n';
-  results.forEach((r, i) => {
-    const pf = r.parsedFields || {};
-    md += '| ' + (i+1) + ' | ' + (r.name||'—') + ' | ' + (r.docType||'—') + ' | ' + (r.finalResult||'—') +
-      ' | ' + (r.durationMs != null ? r.durationMs+'ms' : (r.durationSec != null ? r.durationSec+'s' : '—')) +
-      ' | ' + (r.selectedBand||'—') + ' | ' + (r.ocrAttempts||'—') +
-      ' | ' + (r.longestLine||'—') + ' | ' + (r.chevronCount != null ? r.chevronCount : '—') +
-      ' | ' + (pf.documentNumber||'—') + ' | ' + (pf.birthDate||'—') + ' | ' + (pf.surname||'—') + ' | ' + (pf.givenNames||'—') +
-      ' | ' + (r.comment||'—') + ' |\n';
-  });
-  if (summary) md += '\n' + summary;
-  return md;
-}
-
-function copyToClipboard(text) {
-  navigator.clipboard?.writeText(text).then(
-    () => showCamToast ? showCamToast('📋 Kopyalandı', 1500) : null,
-    () => {}
-  );
-}
-
-function showSerialReport() {
-  const totalSec = Math.round((Date.now() - serialStartTime) / 1000);
-  const mm = String(Math.floor(totalSec / 60)).padStart(2, '0');
-  const ss = String(totalSec % 60).padStart(2, '0');
-  const uniqueDocs = new Set(serialEntries.map(e => e.docId)).size;
-  const avgSec = serialEntries.length > 0 ? (totalSec / serialEntries.length).toFixed(1) : '0.0';
-  const summaryText = '📷 ' + serialEntries.length + ' tarama · 📄 ' + uniqueDocs + ' benzersiz belge · ⏱ ' + mm + ':' + ss + ' · Ort: ' + avgSec + 's/tarama';
-
-  // Build structured results — every scan is a separate row
-  const structuredResults = serialEntries.map((e) => ({
-    name: e.name,
-    docType: e.type,
-    finalResult: 'SUCCESS',
-    durationSec: Math.round((e.firstReadTime - serialStartTime) / 1000),
-    selectedBand: e.selectedBand || '—',
-    ocrAttempts: e.ocrAttempts || 1,
-    longestLine: e.longestLine || 0,
-    chevronCount: e.chevronCount != null ? e.chevronCount : 0,
-    parseOk: true,
-    checksumOk: true,
-    failReason: null,
-    comment: e.isDuplicate ? 'Tekrar okuma' : getResultComment('SUCCESS'),
-    docId: e.docId,
-    isDuplicate: e.isDuplicate || false,
-    parsedFields: e.parsedFields || null,
-    rawOcrText: e.rawOcrText || '',
-  }));
-
-  let html = '<table class="batch-table"><thead><tr>' +
-    '<th>#</th><th>Ad Soyad</th><th>Belge No</th><th>Band</th><th>Uzun</th><th>&lt;</th><th>DOB</th><th>Süre</th><th>Yorum</th><th></th>' +
-    '</tr></thead><tbody>';
-
-  structuredResults.forEach((r, i) => {
-    const pf = r.parsedFields || {};
-    const dupStyle = r.isDuplicate ? 'opacity:.6;' : '';
-    html += '<tr style="' + dupStyle + '">' +
-      '<td>' + (i+1) + '</td>' +
-      '<td>' + r.name + '</td>' +
-      '<td style="font-family:monospace;font-size:.75rem">' + r.docId + '</td>' +
-      '<td>' + r.selectedBand + '</td>' +
-      '<td>' + r.longestLine + '</td>' +
-      '<td>' + r.chevronCount + '</td>' +
-      '<td style="font-size:.75rem">' + (pf.birthDate || '—') + '</td>' +
-      '<td>' + r.durationSec + 's</td>' +
-      '<td style="font-size:.72rem;color:var(--muted)">' + r.comment + '</td>' +
-      '<td><button onclick="copyToClipboard(formatResultForCopy(serialReportData[' + i + ']))" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--muted);cursor:pointer;font-size:.7rem">📋</button></td>' +
-      '</tr>';
-  });
-
-  html += '</tbody></table>';
-  html += '<div class="batch-summary">' + summaryText + '</div>';
-  html += '<div style="text-align:center;margin-top:10px"><button class="btn ghost btn-sm" onclick="copyToClipboard(formatAllResultsForCopy(serialReportData,\'' + summaryText.replace(/'/g,'') + '\'))">📋 Tüm Sonuçları Kopyala</button></div>';
-
-  window.serialReportData = structuredResults;
-  document.getElementById('serial-report-body').innerHTML = html;
-  goScreen('s-serial-report');
-}
-
-function leaveSerialReport() {
-  // Reset session data only when leaving report
-  serialEntries = [];
-  serialScannedIds = [];
-  serialCount = 0;
-  serialTotalShots = 0;
   renderList();
   goScreen('s-home');
 }
@@ -1146,11 +710,9 @@ function deleteCurrent() {
 
 // ── TABS ────────────────────────────────────────────────────────────────
 function setTab(t) {
-  ['cam','img','bulk'].forEach(x => {
-    const tab = document.getElementById('tab-'+x);
-    const content = document.getElementById('tab-'+x+'-content');
-    if (tab) tab.classList.toggle('active', x===t);
-    if (content) content.style.display = x===t ? 'flex' : 'none';
+  ['cam','img'].forEach(x => {
+    document.getElementById('tab-'+x).classList.toggle('active', x===t);
+    document.getElementById('tab-'+x+'-content').style.display = x===t ? 'flex' : 'none';
   });
   if (t === 'cam') startCamera();
   else stopCamera();
@@ -1247,8 +809,6 @@ function updatePill(state) {
 }
 
 // ── CAMERA ──────────────────────────────────────────────────────────────
-// Debug mode: set window._mrzDebug = true in console to enable verbose logging
-
 async function startCamera() {
   if (stream) return;
   try {
@@ -1262,30 +822,17 @@ async function startCamera() {
     video.srcObject = stream;
     await new Promise(r => video.onloadedmetadata = r);
     video.play();
-
-    // Robust readiness: wait for readyState >= 3 + valid dimensions
-    await new Promise((resolve) => {
-      let attempts = 0;
+    await new Promise(r => {
       const check = () => {
-        attempts++;
-        if (video.readyState >= 3 && video.videoWidth > 0 && video.videoHeight > 0) {
-          resolve();
-        } else if (attempts > 30) {
-          // Fallback after 3s: accept readyState >= 2
-          if (video.readyState >= 2 && video.videoWidth > 0) resolve();
-          else resolve(); // give up waiting, let scanLoop handle it
-        } else {
-          setTimeout(check, 100);
-        }
+        if (video.readyState >= 2 && video.videoWidth >= 100 && video.videoHeight >= 100) r();
+        else { video.addEventListener('canplay', r, {once:true}); setTimeout(r, 3000); }
       };
       check();
     });
-    await new Promise(r => setTimeout(r, 200));
+    await new Promise(r => setTimeout(r, 300));
 
-    if (window._mrzDebug) console.log('[MRZ] camera ready', video.videoWidth + 'x' + video.videoHeight, 'state:', video.readyState);
-
-    // Safe delayed overlay sizing after layout settles
-    requestAnimationFrame(() => resizeOverlay());
+    // Overlay canvas boyutunu video görsel boyutuna eşitle
+    resizeOverlay();
 
     scanning = true;
     lastFrameHash = 0;
@@ -1300,46 +847,14 @@ async function startCamera() {
   }
 }
 
-// Sync canvas drawing resolution to container — always update, no shrink guard
 function resizeOverlay() {
   const wrap = document.getElementById('video-wrap');
   const w = wrap.offsetWidth;
   const h = wrap.offsetHeight;
-  if (w < 50 || h < 50) return; // reject truly invalid
-  // Only update if size actually changed (avoid unnecessary canvas clear)
-  if (camOvl.width !== w || camOvl.height !== h) {
+  if (w > 0 && h > 0) {
     camOvl.width  = w;
     camOvl.height = h;
   }
-}
-
-// Calculate where the video actually displays inside the container.
-// Handles object-fit:contain (letterbox) and object-fit:cover (fill+clip).
-function getVideoDisplayRect() {
-  const wrap = document.getElementById('video-wrap');
-  const cw = wrap.offsetWidth, ch = wrap.offsetHeight;
-  const vw = video.videoWidth, vh = video.videoHeight;
-  if (!cw || !ch || !vw || !vh) return null;
-
-  // Cover mode: tüm mobil cihazlar (fiziksel kısa kenar ≤768px)
-  const isCover = Math.min(window.innerWidth, window.innerHeight) <= 768;
-  let dw, dh, dx, dy;
-  if (isCover) {
-    // scale = en büyük faktör → container tamamen dolar, taşan kısım kırpılır
-    const scale = Math.max(cw / vw, ch / vh);
-    dw = vw * scale; dh = vh * scale;
-    dx = (cw - dw) / 2; dy = (ch - dh) / 2;
-  } else {
-    const containerAR = cw / ch, videoAR = vw / vh;
-    if (videoAR > containerAR) {
-      // Video wider → letterbox top/bottom
-      dw = cw; dh = cw / videoAR; dx = 0; dy = (ch - dh) / 2;
-    } else {
-      // Video taller → letterbox left/right
-      dh = ch; dw = ch * videoAR; dx = (cw - dw) / 2; dy = 0;
-    }
-  }
-  return { dx, dy, dw, dh, sx: dw / vw, sy: dh / vh };
 }
 
 function stopCamera() {
@@ -1351,100 +866,14 @@ function stopCamera() {
 function stopScan() {
   serialMode = false;
   stopCamera();
-  serialCooldown = false;
-  if (serialCooldownTimer) { clearTimeout(serialCooldownTimer); serialCooldownTimer = null; }
-  if (serialTimerInterval) { clearInterval(serialTimerInterval); serialTimerInterval = null; }
   document.getElementById('serial-panel').style.display = 'none';
   document.getElementById('serial-finish-btn').style.display = 'none';
   document.getElementById('cam-cancel-btn').style.display = '';
-  document.getElementById('tab-bulk').style.display = 'none';
   renderList();
   goScreen('s-home');
 }
 
-// ── MRZ BAND — single source of truth for overlay + OCR crop ───────────
-function getMRZBandSize(vh) {
-  const isMobile = Math.min(window.innerWidth, window.innerHeight) <= 768;
-  // Mobil: daha kompakt band (yükseklik azaltıldı)
-  const hRatio = isMobile ? 0.15 : 0.22;
-  const minH   = isMobile ? 80   : 120;
-  return Math.max(Math.round(vh * hRatio), minH);
-}
-
-function getMRZBand(vw, vh) {
-  const isMobile = Math.min(window.innerWidth, window.innerHeight) <= 768;
-  const h = getMRZBandSize(vh);
-  let w, x, y;
-
-  if (isMobile) {
-    // Cover modu: kamera her zaman landscape frame üretir (örn. 1280×720).
-    // Ekranda gerçekten görünen video piksel bölgesini hesapla.
-    const wrap = document.getElementById('video-wrap');
-    const cw = wrap ? wrap.offsetWidth  : window.innerWidth;
-    const ch = wrap ? wrap.offsetHeight : window.innerHeight;
-    const scale     = Math.max(cw / vw, ch / vh);
-    const visStartX = Math.max(0, (vw - cw / scale) / 2); // yatayda kırpılan başlangıç
-    const visW      = cw / scale;                          // görünen video piksel genişliği
-    const visStartY = Math.max(0, (vh - ch / scale) / 2); // dikeyde kırpılan başlangıç
-    const visH      = ch / scale;                          // görünen video piksel yüksekliği
-
-    const margin = 0.04; // her yanda %4 boşluk
-    w = Math.round(visW * (1 - 2 * margin));
-    x = Math.round(visStartX + visW * margin);
-    // MRZ bandı görünen alanın alt %25'inde
-    y = Math.round(visStartY + visH * 0.75 - h / 2);
-  } else {
-    // Desktop: %85 genişlik, band merkezi %78'de (daha aşağıda)
-    w = Math.round(vw * 0.85);
-    x = Math.round((vw - w) / 2);
-    y = Math.round(vh * 0.78 - h / 2);
-  }
-
-  // Sınır güvenliği
-  if (x < 0) x = 0;
-  if (y < 0) y = 0;
-  if (x + w > vw) w = vw - x;
-  if (y + h > vh) y = vh - h;
-  return { x, y, w, h };
-}
-
-// 3 candidate bands at different vertical positions for adaptive detection
-function getMRZBandCandidates(vw, vh) {
-  const isMobile = Math.min(window.innerWidth, window.innerHeight) <= 768;
-  const h = getMRZBandSize(vh);
-  let baseX, baseW, visStartY, visH;
-
-  if (isMobile) {
-    const wrap = document.getElementById('video-wrap');
-    const cw = wrap ? wrap.offsetWidth  : window.innerWidth;
-    const ch = wrap ? wrap.offsetHeight : window.innerHeight;
-    const scale     = Math.max(cw / vw, ch / vh);
-    const visStartX = Math.max(0, (vw - cw / scale) / 2);
-    const visW      = cw / scale;
-    visStartY       = Math.max(0, (vh - ch / scale) / 2);
-    visH            = ch / scale;
-    baseW = Math.round(visW * 0.96);
-    baseX = Math.round(visStartX + visW * 0.02);
-  } else {
-    visStartY = 0; visH = vh;
-    baseW = Math.round(vw * 0.85);
-    baseX = Math.round((vw - baseW) / 2);
-  }
-
-  // 3 aday: görünen alanın alt bölgesinde kaydırmalı pozisyonlar
-  const positions = isMobile ? [0.65, 0.75, 0.85] : [0.60, 0.72, 0.82];
-  return positions.map(p => {
-    let x = baseX, w = baseW;
-    let y = Math.round(visStartY + visH * p - h / 2);
-    if (x < 0) x = 0;
-    if (y < 0) y = 0;
-    if (x + w > vw) w = vw - x;
-    if (y + h > vh) y = vh - h;
-    return { x, y, w, h };
-  });
-}
-
-// Legacy — kept for getFrameHash compatibility (uses wider zone for motion detect)
+// ── SCAN ZONE ───────────────────────────────────────────────────────────
 function getScanZone(vw, vh) {
   const h = Math.round(vh * 0.55), w = Math.round(vw * 0.99);
   return { x: Math.round((vw-w)/2), y: vh-h-Math.round(vh*0.03), w, h };
@@ -1496,12 +925,11 @@ function upscaleCanvas(srcCanvas, factor) {
 }
 
 // ── OVERLAY ─────────────────────────────────────────────────────────────
-function drawCorners(x, y, w, h, color, size, lineW) {
-  lineW = lineW || 3;
+function drawCorners(x, y, w, h, color, size) {
   [[x,y,1,1],[x+w,y,-1,1],[x,y+h,1,-1],[x+w,y+h,-1,-1]].forEach(([cx,cy,ox,oy]) => {
     camCtx.beginPath();
     camCtx.strokeStyle = color;
-    camCtx.lineWidth = lineW;
+    camCtx.lineWidth = 3;
     camCtx.moveTo(cx+ox*size, cy);
     camCtx.lineTo(cx, cy);
     camCtx.lineTo(cx, cy+oy*size);
@@ -1515,297 +943,123 @@ function drawOverlayState(state) {
     found:      '#f59e0b',
     confirming: '#f59e0b',
     accepted:   '#10b981',
-    blurry:     '#ef4444',
   };
   const hints = {
-    searching:  '📏 MRZ satırlarını çerçeveye hizalayın',
-    found:      '✋ Sabit tutun…',
-    confirming: '✓ Sabit tutun...',
-    accepted:   '✅ Okundu!',
-    blurry:     '✋ Sabit tutun',
+    searching:  'MRZ satırlarını kutuya hizalayın',
+    found:      'Sabit tutun…',
+    confirming: 'Doğrulanıyor…',
+    accepted:   '✓ Okundu',
   };
 
-  // Always sync canvas to current container size for responsive behavior
+  // Canvas boyutunu video-wrap ile senkronize et
   resizeOverlay();
-  const ovlW = camOvl.width, ovlH = camOvl.height;
-  if (!ovlW || !ovlH || !video.videoWidth || !video.videoHeight) return;
 
-  const vdr = getVideoDisplayRect();
-  if (!vdr) return;
+  const vw = camOvl.width, vh = camOvl.height;
+  if (!vw || !vh) return;
 
-  // Dark overlay over entire canvas
-  camCtx.clearRect(0, 0, ovlW, ovlH);
-  camCtx.fillStyle = 'rgba(0,0,0,0.50)';
-  camCtx.fillRect(0, 0, ovlW, ovlH);
+  camCtx.clearRect(0, 0, vw, vh);
+  camCtx.fillStyle = 'rgba(0,0,0,0.45)';
+  camCtx.fillRect(0, 0, vw, vh);
 
-  // MRZ band — mapped from video pixel space to display space via letterbox offset
-  const band = getMRZBand(video.videoWidth, video.videoHeight);
-  const bx = vdr.dx + band.x * vdr.sx;
-  const by = vdr.dy + band.y * vdr.sy;
-  const bw = band.w * vdr.sx;
-  const bh = band.h * vdr.sy;
+  // object-fit:fill — video tam container'ı kaplar, birebir oran
+  const sx = vw / video.videoWidth;
+  const sy = vh / video.videoHeight;
+  const z = getScanZone(video.videoWidth, video.videoHeight);
+  const dx  = z.x * sx;
+  const dy  = z.y * sy;
+  const ddw = z.w * sx;
+  const ddh = z.h * sy;
 
-  const color = colors[state] || colors.searching;
+  camCtx.clearRect(dx, dy, ddw, ddh);
 
-  // Clear MRZ region (transparent window)
-  camCtx.clearRect(bx, by, bw, bh);
+  const bandH = ddh * 0.40;
+  const bandY = dy + ddh - bandH;
+  const color = colors[state];
 
-  // Frame border
-  const lineW = state === 'accepted' ? 3 : 2;
+  camCtx.fillStyle   = color + '22';
+  camCtx.fillRect(dx, bandY, ddw, bandH);
   camCtx.strokeStyle = color;
-  camCtx.lineWidth = lineW;
-  camCtx.strokeRect(bx, by, bw, bh);
+  camCtx.lineWidth   = 2;
+  camCtx.strokeRect(dx, bandY, ddw, bandH);
 
-  // Corner marks
-  const cornerW = state === 'accepted' ? 5 : 3;
-  const cornerSize = state === 'accepted' ? 22 : 16;
-  drawCorners(bx, by, bw, bh, color, cornerSize, cornerW);
+  drawCorners(dx, dy, ddw, ddh, color, 18);
 
-  // Accepted pulse
-  if (state === 'accepted') {
-    camCtx.strokeStyle = color + '55';
-    camCtx.lineWidth = 1.5;
-    camCtx.strokeRect(bx - 3, by - 3, bw + 6, bh + 6);
-  }
-
-  // "MRZ ALANI" label — ABOVE the frame, not inside
-  const labelFontSize = Math.max(9, Math.round(bw * 0.032));
-  camCtx.font = '600 ' + labelFontSize + 'px -apple-system, sans-serif';
-  camCtx.textAlign = 'center';
-  camCtx.textBaseline = 'bottom';
-  const labelText = 'MRZ ALANI';
-  const lw = camCtx.measureText(labelText).width + 14;
-  const lh = labelFontSize + 8;
-  const lx = bx + bw / 2 - lw / 2;
-  const ly = by - 6;
-  camCtx.fillStyle = 'rgba(0,0,0,0.65)';
-  camCtx.beginPath();
-  camCtx.roundRect(lx, ly - lh, lw, lh, 4);
-  camCtx.fill();
-  camCtx.fillStyle = color;
-  camCtx.fillText(labelText, bx + bw / 2, ly - 3);
-
-  // Hint
   const hintType = state === 'accepted' ? 'ok' : state === 'searching' ? '' : 'warn';
-  setHint(hints[state] || hints.searching, hintType);
+  setHint(hints[state], hintType);
 }
-
-// ── SHADOW DETECTION ────────────────────────────────────────────────────
-function measureBrightness(canvas) {
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-  let sum = 0;
-  const count = data.length / 4;
-  for (let i = 0; i < data.length; i += 4) {
-    sum += 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
-  }
-  return count > 0 ? sum / count : 128;
-}
-
-function shadowPreprocess(canvas) {
-  const w = canvas.width, h = canvas.height;
-  const c = document.createElement('canvas');
-  c.width = w; c.height = h;
-  const ctx = c.getContext('2d');
-  ctx.drawImage(canvas, 0, 0, w, h, 0, 0, w, h);
-  const imgData = ctx.getImageData(0, 0, w, h);
-  const d = imgData.data;
-
-  // Grayscale + find min/max
-  const gray = new Uint8Array(w * h);
-  let min = 255, max = 0;
-  for (let i = 0; i < w * h; i++) {
-    const g = Math.round(0.299 * d[i*4] + 0.587 * d[i*4+1] + 0.114 * d[i*4+2]);
-    gray[i] = g;
-    if (g < min) min = g;
-    if (g > max) max = g;
-  }
-
-  // Histogram stretch (brightness normalize) + contrast boost
-  const range = max - min;
-  const stretch = range > 20;
-  for (let i = 0; i < w * h; i++) {
-    let v = gray[i];
-    if (stretch) v = Math.round(((v - min) / range) * 255);
-    // Light threshold: push toward black/white
-    v = v > 140 ? Math.min(255, v + 40) : Math.max(0, v - 40);
-    d[i*4] = d[i*4+1] = d[i*4+2] = v;
-    d[i*4+3] = 255;
-  }
-  ctx.putImageData(imgData, 0, 0);
-  return c;
-}
-
-let _lastShadowHintTime = 0;
 
 // ── SCAN LOOP ───────────────────────────────────────────────────────────
 const SCAN_INTERVAL = 250;
 
 async function scanLoop() {
   if (!scanning || !workerReady) return;
-  // Serial cooldown — skip OCR but keep camera running
-  if (serialCooldown) { setTimeout(scanLoop, 300); return; }
   const vw = video.videoWidth, vh = video.videoHeight;
-  if (!vw || !vh) {
-    setHint('Kamera hazırlanıyor...', 'warn');
-    setTimeout(scanLoop, 500); return;
-  }
-
-  // Frame hash uses wider zone for motion detection
+  if (!vw || !vh) { setTimeout(scanLoop, 500); return; }
   const z = getScanZone(vw, vh);
+
   const hash = getFrameHash(z);
   if (Math.abs(hash - lastFrameHash) < 5000 && !checksumPassed) {
     setTimeout(scanLoop, SCAN_INTERVAL); return;
   }
   lastFrameHash = hash;
 
-  // Adaptive multi-band: try 3 vertical positions, stop early on strong result
-  const candidates = getMRZBandCandidates(vw, vh);
-  const dbg = !!window._mrzDebug;
+  const cropH = Math.round(z.h * 0.40);
+  const cropY = z.y + z.h - cropH;
+  const scale = z.w < 600 ? 2 : 1;
+  mainC.width  = z.w * scale;
+  mainC.height = cropH * scale;
+  mainCtx.filter = 'grayscale(1) contrast(1.4)';
+  mainCtx.drawImage(video, z.x, cropY, z.w, cropH, 0, 0, mainC.width, mainC.height);
+  mainCtx.filter = 'none';
 
-  let bestText = '', bestResult = null, bestScore = -1, bestBandIdx = -1;
-
-  for (let bi = 0; bi < candidates.length; bi++) {
-    const band = candidates[bi];
-
-    // Scale OCR input
-    let ocrW = band.w, ocrH = band.h;
-    if (ocrW < 600) { ocrW *= 2; ocrH *= 2; }
-    if (ocrW > 1200) { const ds = 1200 / ocrW; ocrH = Math.round(ocrH * ds); ocrW = 1200; }
-
-    mainC.width = ocrW;
-    mainC.height = ocrH;
-    mainCtx.filter = 'grayscale(1) contrast(1.4)';
-    mainCtx.drawImage(video, band.x, band.y, band.w, band.h, 0, 0, ocrW, ocrH);
-    mainCtx.filter = 'none';
-
-    // Sharpness check on first band only
-    if (bi === 0 && !isSharpEnough(mainC)) {
-      if (dbg) console.log('[MRZ] blurry — skip');
-      drawOverlayState('blurry');
-      setTimeout(scanLoop, SCAN_INTERVAL); return;
-    }
-
-    let text;
-    try { text = (await worker.recognize(mainC)).data.text; }
-    catch(e) {
-      if (dbg) console.warn('[MRZ] OCR error band' + (bi+1), e);
-      continue;
-    }
-
-    const longest = longestOCRLine(text);
-    const score = scoreMRZText(text);
-
-    if (dbg) console.log('[MRZ] band' + (bi+1), '{y:' + band.y + ' h:' + band.h + '}', 'longest:', longest, 'score:', score);
-
-    // Priority 1: parse + checksum success → immediate accept
-    const result = extractMRZ(clean(text));
-    if (result) {
-      const validation = validateMRZ(result);
-      if (validation.valid) {
-        if (dbg) console.log('[MRZ] band' + (bi+1), 'checksum OK score:' + validation.score);
-
-        checksumPassed = true;
-        const l2 = result.lines[1];
-        if (l2 === lastL2) l2Count++; else { lastL2 = l2; l2Count = 1; }
-
-        if (l2Count >= 2) {
-          drawOverlayState('accepted');
-          const diag = diagnoseMRZ(text);
-          addLog('ok', `${result.type} → KABUL`, [`L2: ${l2}`], null, validation.checksums, diag);
-          if (serialMode) { addSerialResult(result, { ocrText: text, bandIdx: bi, ocrAttempts: bi + 1 }); setTimeout(scanLoop, 500); return; }
-          setTimeout(() => { stopCamera(); saveAndShow(result); }, 250);
-          return;
-        }
-
-        drawOverlayState('confirming');
-        setTimeout(scanLoop, SCAN_INTERVAL);
-        return;
-      }
-    }
-
-    // Track best
-    if (score > bestScore) { bestScore = score; bestText = text; bestResult = result; bestBandIdx = bi; }
-
-    // Early exit: longest > 35 → no need to try more bands
-    if (longest > 35) {
-      if (dbg) console.log('[MRZ] early exit band' + (bi+1));
-      break;
-    }
+  if (!isSharpEnough(mainC)) {
+    setHint('Belgeyi sabit ve net tutun', 'warn');
+    setTimeout(scanLoop, SCAN_INTERVAL); return;
   }
 
-  // Shadow fallback: if no strong result AND MRZ area is dark, retry with shadow preprocess
-  const bestLongest = longestOCRLine(bestText);
-  const noStrongResult = !bestResult || !validateMRZ(bestResult).valid;
-  if (noStrongResult && bestLongest < 28 && bestBandIdx >= 0) {
-    const brightness = measureBrightness(mainC);
-    if (dbg) console.log('[MRZ] brightness:', Math.round(brightness), 'shadow:', brightness < 80);
+  let text;
+  try { text = (await worker.recognize(mainC)).data.text; }
+  catch(e) { setTimeout(scanLoop, SCAN_INTERVAL); return; }
 
-    if (brightness < 80) {
-      // Show shadow hint (throttled: max once per 3s)
-      const now = Date.now();
-      if (now - _lastShadowHintTime > 3000) {
-        _lastShadowHintTime = now;
-        setHint('Gölgeyi azaltın — belgeyi ışığa çevirin', 'warn');
-      }
-
-      // Retry OCR on best band with shadow preprocessing
-      const band = candidates[bestBandIdx];
-      let ocrW = band.w, ocrH = band.h;
-      if (ocrW < 600) { ocrW *= 2; ocrH *= 2; }
-      if (ocrW > 1200) { const ds = 1200 / ocrW; ocrH = Math.round(ocrH * ds); ocrW = 1200; }
-
-      mainC.width = ocrW;
-      mainC.height = ocrH;
-      mainCtx.drawImage(video, band.x, band.y, band.w, band.h, 0, 0, ocrW, ocrH);
-      const shadowCanvas = shadowPreprocess(mainC);
-
-      try {
-        const { data: { text: shadowText } } = await worker.recognize(shadowCanvas);
-        const shadowLongest = longestOCRLine(shadowText);
-        const shadowScore = scoreMRZText(shadowText);
-        if (dbg) console.log('[MRZ] shadow: longest:', shadowLongest, 'score:', shadowScore);
-
-        // Use shadow result if better
-        if (shadowScore > bestScore) {
-          const shadowResult = extractMRZ(clean(shadowText));
-          if (shadowResult) {
-            const sv = validateMRZ(shadowResult);
-            if (sv.valid) {
-              // Shadow result is valid — accept it
-              checksumPassed = true;
-              const l2 = shadowResult.lines[1];
-              if (l2 === lastL2) l2Count++; else { lastL2 = l2; l2Count = 1; }
-              if (l2Count >= 2) {
-                drawOverlayState('accepted');
-                const diag = diagnoseMRZ(shadowText);
-                addLog('ok', `${shadowResult.type} → KABUL (shadow)`, [`L2: ${l2}`], null, sv.checksums, diag);
-                if (serialMode) { addSerialResult(shadowResult, { ocrText: shadowText, bandIdx: bestBandIdx, ocrAttempts: candidates.length + 1 }); setTimeout(scanLoop, 500); return; }
-                setTimeout(() => { stopCamera(); saveAndShow(shadowResult); }, 250);
-                return;
-              }
-              drawOverlayState('confirming');
-              setTimeout(scanLoop, SCAN_INTERVAL);
-              return;
-            }
-            bestResult = shadowResult;
-            bestText = shadowText;
-            bestScore = shadowScore;
-          }
-        }
-      } catch(e) { /* shadow OCR failed, continue with best */ }
-    }
-  }
-
-  // Process best result
-  if (bestResult) {
-    const l2 = bestResult.lines[1];
-    if (l2 === lastL2) l2Count++; else { lastL2 = l2; l2Count = 1; }
-    drawOverlayState('found');
-  } else {
+  const result = extractMRZ(clean(text));
+  if (!result) {
     drawOverlayState('searching');
+    setTimeout(scanLoop, SCAN_INTERVAL); return;
   }
 
+  const confirmCanvas = upscaleCanvas(mainC, 2);
+  let confirmText;
+  try { confirmText = (await worker.recognize(confirmCanvas)).data.text; }
+  catch(e) { confirmText = ''; }
+  const confirmed = extractMRZ(clean(confirmText));
+  const l2Match = confirmed && confirmed.lines[1] === result.lines[1];
+  if (l2Match) { lastL2 = result.lines[1]; l2Count = 2; }
+
+  const l2 = result.lines[1];
+  const cs = result.type === 'TD1'
+    ? { passOk: chk(result.lines[0].substring(5,14)) === +result.lines[0][14],
+        dobOk:  chk(l2.substring(0,6)) === +l2[6],
+        expOk:  chk(l2.substring(8,14)) === +l2[14] }
+    : getChecksums_TD3(l2);
+  if (cs.passOk || (cs.dobOk && cs.expOk)) checksumPassed = true;
+
+  if (!l2Match) {
+    if (l2 === lastL2) l2Count++; else { lastL2 = l2; l2Count = 1; }
+  }
+
+  if (checksumPassed && l2Count >= 2) {
+    drawOverlayState('accepted');
+    addLog('ok', `${result.type} → KABUL`, [`L2: ${l2}`], null, cs);
+    if (serialMode) {
+      addSerialResult(result);
+      setTimeout(scanLoop, 500);
+      return;
+    }
+    setTimeout(() => { stopCamera(); saveAndShow(result); }, 250);
+    return;
+  }
+
+  drawOverlayState(checksumPassed ? 'confirming' : 'found');
   setTimeout(scanLoop, SCAN_INTERVAL);
 }
 
@@ -1888,6 +1142,16 @@ function makeCanvas(img, deg) {
   ctx.restore(); return c;
 }
 
+// Alt bölgeyi crop et
+function cropBottom(srcCanvas, ratio) {
+  const cropH = Math.round(srcCanvas.height * ratio);
+  const c = document.createElement('canvas');
+  c.width = srcCanvas.width; c.height = cropH;
+  c.getContext('2d').drawImage(srcCanvas,
+    0, srcCanvas.height - cropH, srcCanvas.width, cropH,
+    0, 0, srcCanvas.width, cropH);
+  return c;
+}
 
 // Grayscale + contrast + sharpen ön işleme
 function preprocessForOCR(srcCanvas) {
@@ -1931,7 +1195,14 @@ async function tryRecognize(canvas) {
   try {
     const { data: { text } } = await worker.recognize(canvas);
     const result = extractMRZ(clean(text));
-    if (result && validateMRZ(result).valid) return result;
+    if (result) {
+      const l2 = result.lines[1];
+      const cs = result.type === 'TD1'
+        ? { passOk: chk(result.lines[0].substring(5,14)) === +result.lines[0][14],
+            dobOk: chk(l2.substring(0,6)) === +l2[6], expOk: chk(l2.substring(8,14)) === +l2[14] }
+        : getChecksums_TD3(l2);
+      if (cs.passOk || (cs.dobOk && cs.expOk)) return result;
+    }
   } catch(e) { /* devam */ }
   return null;
 }
@@ -1983,20 +1254,8 @@ async function processImage(img) {
 }
 
 // ── SAVE & SHOW ─────────────────────────────────────────────────────────
-function captureDocPhoto() {
-  try {
-    if (!video || !video.videoWidth) return null;
-    const c = document.createElement('canvas');
-    c.width = Math.min(video.videoWidth, 800);
-    c.height = Math.round(c.width * video.videoHeight / video.videoWidth);
-    c.getContext('2d').drawImage(video, 0, 0, c.width, c.height);
-    return c.toDataURL('image/jpeg', 0.6);
-  } catch(e) { return null; }
-}
-
 function saveAndShow(mrzResult) {
   const parsed = parseResult(mrzResult);
-  const photo = captureDocPhoto();
   const entry = {
     id: 'pp_' + Date.now(),
     line1: mrzResult.lines[0],
@@ -2005,7 +1264,6 @@ function saveAndShow(mrzResult) {
     type:  mrzResult.type,
     name:  parsed.surname + (parsed.given ? ', ' + parsed.given : ''),
     nation: parsed.nation,
-    photo: photo || '',
     addedAt: Date.now()
   };
   const saved = loadPassports();
@@ -2016,11 +1274,6 @@ function saveAndShow(mrzResult) {
   showParsed(parsed, entry, true);
 }
 
-function toggleFullPhoto() {
-  const fs = document.getElementById('photo-fullscreen');
-  fs.style.display = fs.style.display === 'flex' ? 'none' : 'flex';
-}
-
 function showParsed(p, entry, isNew) {
   const cs = p.cs || {};
   function ck(v) {
@@ -2028,39 +1281,17 @@ function showParsed(p, entry, isNew) {
     return `<span class="${v?'ok':'fail'}">${v?'✓':'✗'}</span>`;
   }
 
-  // Belge fotoğrafı göster
-  const photoWrap = document.getElementById('doc-photo-wrap');
-  const photoEl = document.getElementById('doc-photo');
-  const photoFull = document.getElementById('doc-photo-full');
-  if (entry.photo) {
-    photoEl.src = entry.photo;
-    photoFull.src = entry.photo;
-    photoWrap.style.display = 'block';
-  } else {
-    photoWrap.style.display = 'none';
-  }
-  document.getElementById('photo-fullscreen').style.display = 'none';
-
   document.getElementById('edit-surname').value = p.surname || '';
   document.getElementById('edit-given').value   = p.given   || '';
 
-  const rows = [
+  document.getElementById('res-fields').innerHTML = [
     ['Belge Tipi',     p.docType  || '—', ''],
     ['Pasaport/Doc No',p.passNo   || '—', ck(cs.passOk)],
     ['Uyruk',          p.nation   || '—', ''],
     ['Doğum Tarihi',   fmtDate(p.dob),    ck(cs.dobOk)],
     ['Cinsiyet',       p.sex==='M'?'Erkek':p.sex==='F'?'Kadın':(p.sex||'—'), ''],
     ['Son Geçerlilik', fmtDate(p.expiry), ck(cs.expOk)],
-  ];
-  // TC Kimlik No — only for TD1
-  if (p.nationalId) {
-    const nidValid = p.nationalIdValid;
-    const nidBadge = nidValid
-      ? '<span class="ok">✓</span>'
-      : '<span class="fail">⚠ Geçersiz</span>';
-    rows.push(['TC Kimlik No', p.nationalId, nidBadge]);
-  }
-  document.getElementById('res-fields').innerHTML = rows.map(([l,v,b]) => `
+  ].map(([l,v,b]) => `
     <div class="row">
       <div class="rl">${l}</div>
       <div class="rv">${v}${b}</div>
@@ -2110,6 +1341,29 @@ function fmtDate(d) {
   return `${dd}/${mm}/${year}`;
 }
 
+function addManual() {
+  const l1 = document.getElementById('l1').value.trim();
+  const l2 = document.getElementById('l2').value.trim();
+  const isTD3 = l1.length === 44 && l2.length === 44;
+  const isTD1 = l1.length === 30 && l2.length === 30;
+  if (!isTD3 && !isTD1) {
+    showError(`TD3 (pasaport): 2×44 karakter\nTD1 (kimlik): 2×30 karakter\nSatır 1: ${l1.length}, Satır 2: ${l2.length}`);
+    return;
+  }
+  document.getElementById('l1').value = '';
+  document.getElementById('l2').value = '';
+  if (isTD3) saveAndShow({ type:'TD3', lines:[l1, l2] });
+  else        saveAndShow({ type:'TD1', lines:[l1, l2, ''] });
+}
+
+function onTA(el, cId) {
+  el.value = el.value.toUpperCase().replace(/[^A-Z0-9<]/g,'');
+  const n  = el.value.length;
+  const c  = document.getElementById(cId);
+  c.textContent = n + ' / 44';
+  c.classList.toggle('full', n===44);
+  el.style.borderColor = n===44 ? 'var(--green)' : n>0 ? 'var(--blue)' : 'var(--border)';
+}
 
 function showError(msg) {
   document.getElementById('err-msg').textContent = msg;
@@ -2119,38 +1373,13 @@ function showError(msg) {
 window.addEventListener('offline', () => updatePill('offline'));
 window.addEventListener('online',  () => workerReady && updatePill('ready'));
 
-// Ekran döndürme ve resize'da overlay'i yeniden çiz (debounced)
-let _resizeTimer = null;
-function onVideoResize() {
-  if (_resizeTimer) clearTimeout(_resizeTimer);
-  _resizeTimer = setTimeout(() => {
-    if (scanning) { resizeOverlay(); drawOverlayState('searching'); }
-  }, 100);
-}
-window.addEventListener('resize', onVideoResize);
-window.addEventListener('orientationchange', () => setTimeout(onVideoResize, 200));
-
-// Yatay modda kamerayı durdur, portre dönüşünde yeniden başlat
-(function() {
-  function handleOrientationLock() {
-    const isMobile = Math.min(window.innerWidth, window.innerHeight) <= 768;
-    if (!isMobile) return;
-    const isLandscape = window.innerWidth > window.innerHeight;
-    if (isLandscape && scanning && !serialMode) {
-      stopCamera();
-      window._cameraStoppedForLandscape = true;
-    } else if (!isLandscape && window._cameraStoppedForLandscape) {
-      window._cameraStoppedForLandscape = false;
-      // Kamera ekranındaysak yeniden başlat
-      const scanScreen = document.getElementById('s-scan');
-      if (scanScreen && scanScreen.classList.contains('active')) {
-        setTimeout(startCamera, 400);
-      }
-    }
-  }
-  window.addEventListener('resize', handleOrientationLock);
-  window.addEventListener('orientationchange', () => setTimeout(handleOrientationLock, 300));
-})();
+// Ekran döndürme ve resize'da overlay'i yeniden çiz
+window.addEventListener('resize', () => {
+  if (scanning) { resizeOverlay(); drawOverlayState('searching'); }
+});
+window.addEventListener('orientationchange', () => {
+  setTimeout(() => { if (scanning) { resizeOverlay(); drawOverlayState('searching'); } }, 200);
+});
 
 // ── LOG SİSTEMİ ────────────────────────────────────────────────────────
 const MAX_LOGS = 20;
@@ -2172,10 +1401,10 @@ function toggleFullscreen() {
 
 function clearLog() { logEntries = []; scanCounter = 0; renderLog(); }
 
-function addLog(type, main, details = [], mrz = null, cs = null, diag = null) {
+function addLog(type, main, details = [], mrz = null, cs = null) {
   scanCounter++;
   const time = new Date().toTimeString().slice(0,8);
-  logEntries.unshift({ type, time, scan: scanCounter, main, details, cs, diag });
+  logEntries.unshift({ type, time, scan: scanCounter, main, details, cs });
   if (logEntries.length > MAX_LOGS) logEntries.pop();
   renderLog();
 }
@@ -2194,35 +1423,16 @@ function renderLog() {
     const csBadges = e.cs ? `<div class="log-cs">
       ${['passOk','dobOk','expOk'].map(k => {
         const lbl = {passOk:'Pass',dobOk:'DOB',expOk:'EXP'}[k];
-        const exp = e.cs[k.replace('Ok','Expected')];
-        const fnd = e.cs[k.replace('Ok','Found')];
-        const detail = (exp !== undefined && fnd !== undefined) ? ` (${exp}/${fnd})` : '';
-        return `<span class="cs-badge ${e.cs[k]?'cs-ok-badge':'cs-fail-badge'}">${lbl}${e.cs[k]?'✓':'✗'}${detail}</span>`;
+        return `<span class="cs-badge ${e.cs[k]?'cs-ok-badge':'cs-fail-badge'}">${lbl}${e.cs[k]?'✓':'✗'}</span>`;
       }).join('')}</div>` : '';
     const details = e.details.map(d =>
       `<div class="log-detail">${d.replace(/</g,'&lt;')}</div>`).join('');
-    // Diagnosis details
-    let diagHtml = '';
-    if (e.diag) {
-      const d = e.diag;
-      const parts = [];
-      if (d.rawText) parts.push('<div class="log-detail" style="color:var(--muted)">RAW: ' + d.rawText.substring(0,120).replace(/</g,'&lt;').replace(/\n/g,' ↵ ') + '</div>');
-      if (d.extracted) parts.push('<div class="log-detail">Lines: ' + d.extracted.lines.map(l => l.replace(/</g,'&lt;')).join(' | ') + '</div>');
-      if (d.parseResult) {
-        const pr = d.parseResult;
-        parts.push('<div class="log-detail" style="color:var(--green)">→ ' + (pr.surname||'') + ' ' + (pr.given||'') + ' | ' + (pr.passNo||'') + ' | ' + (pr.nation||'') + '</div>');
-      }
-      if (d.failureReasons && d.failureReasons.length) {
-        parts.push('<div class="log-detail" style="color:var(--red)">⚠ ' + d.failureReasons.join('; ') + '</div>');
-      }
-      diagHtml = parts.join('');
-    }
     return `<div class="log-row" onclick="copyEntry(${idx})">
       <div class="log-col-time">${e.time}</div>
       <div class="log-col-icon">${icons[e.type]||'•'}</div>
       <div class="log-col-body">
         <div class="log-main ${cc}">[#${e.scan}] ${e.main}</div>
-        ${details}${csBadges}${diagHtml}
+        ${details}${csBadges}
       </div>
     </div>`;
   }).join('');
@@ -2247,306 +1457,6 @@ function exportLog() {
   a.href = URL.createObjectURL(new Blob([data], {type:'application/json'}));
   a.download = `mrz-log-${new Date().toISOString().slice(0,16).replace(/[T:]/g,'-')}.json`;
   a.click();
-}
-
-// ── BULK SERIAL SCAN ───────────────────────────────────────────────────
-async function startBulkSerialScan(files) {
-  if (!files || !files.length || !workerReady) return;
-  if (!serialMode) startSerialScan();
-  await new Promise(r => setTimeout(r, 200));
-  stopCamera();
-  setTab('bulk');
-
-  const prog = document.getElementById('bulk-prog');
-  const status = document.getElementById('bulk-status');
-  document.getElementById('bulk-progress').style.display = 'block';
-
-  for (let i = 0; i < files.length; i++) {
-    prog.style.width = ((i / files.length) * 100) + '%';
-    status.textContent = (i+1) + '/' + files.length + ': ' + files[i].name;
-
-    let imgData = null;
-    try { imgData = await loadImageFast(files[i]); }
-    catch(e) { continue; }
-
-    const resized = resizeForOCR(imgData.img, 1400);
-    imgData.cleanup();
-
-    const timings = {};
-    const ocrResult = await fastBatchOCR(resized, timings, null, files[i].name, i);
-    if (ocrResult.extracted) {
-      addSerialResult(ocrResult.extracted);
-    }
-    await new Promise(r => setTimeout(r, 300));
-  }
-
-  prog.style.width = '100%';
-  status.textContent = '✅ ' + files.length + ' fotoğraf işlendi';
-  document.getElementById('bulk-file-in').value = '';
-}
-
-// ── BATCH HELPERS ──────────────────────────────────────────────────────
-
-// HEIC detection
-function isHEIC(file) {
-  const name = (file.name || '').toLowerCase();
-  const type = (file.type || '').toLowerCase();
-  return name.endsWith('.heic') || name.endsWith('.heif') || type.includes('heic') || type.includes('heif');
-}
-
-// Lazy-load heic2any — returns promise, caches result
-let _heic2anyPromise = null;
-function ensureHeic2any() {
-  if (window.heic2any) return Promise.resolve(true);
-  if (_heic2anyPromise) return _heic2anyPromise;
-  _heic2anyPromise = new Promise((resolve) => {
-    const s = document.createElement('script');
-    s.src = 'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js';
-    s.onload = () => resolve(!!window.heic2any);
-    s.onerror = () => resolve(false);
-    document.head.appendChild(s);
-  });
-  return _heic2anyPromise;
-}
-
-// Convert HEIC file to JPEG blob
-async function convertHEIC(file) {
-  const loaded = await ensureHeic2any();
-  if (!loaded) throw new Error('heic2any yüklenemedi');
-  const blob = await window.heic2any({ blob: file, toType: 'image/jpeg', quality: 0.8 });
-  return Array.isArray(blob) ? blob[0] : blob;
-}
-
-// Load image via HTMLImageElement + objectURL (reliable, works everywhere)
-function loadImageElement(blob) {
-  const objectURL = URL.createObjectURL(blob);
-  return new Promise((resolve, reject) => {
-    const im = new Image();
-    im.onload = () => {
-      if (im.naturalWidth > 50 && im.naturalHeight > 50) {
-        resolve({ img: im, cleanup: () => URL.revokeObjectURL(objectURL) });
-      } else {
-        URL.revokeObjectURL(objectURL);
-        reject(new Error('Image too small: ' + im.naturalWidth + 'x' + im.naturalHeight));
-      }
-    };
-    im.onerror = () => { URL.revokeObjectURL(objectURL); reject(new Error('Image decode failed')); };
-    im.src = objectURL;
-  });
-}
-
-// Fast image loading: createImageBitmap (validated) > HTMLImageElement fallback
-async function loadImageFast(file) {
-  let blob = file;
-
-  // HEIC conversion
-  if (isHEIC(file)) {
-    try {
-      blob = await convertHEIC(file);
-      // Validate converted blob
-      if (!blob || blob.size < 100) throw new Error('Converted blob too small');
-    } catch(e) { throw new Error('HEIC dönüştürülemedi: ' + e.message); }
-  }
-
-  // Try createImageBitmap first — validate dimensions before accepting
-  if (typeof createImageBitmap === 'function') {
-    try {
-      const bmp = await createImageBitmap(blob);
-      if (bmp.width > 50 && bmp.height > 50) {
-        return { img: bmp, cleanup: () => {} };
-      }
-      // Dimensions invalid, close bitmap and fall through
-      bmp.close();
-    } catch(e) { /* fallback to HTMLImageElement */ }
-  }
-
-  // Fallback: HTMLImageElement + objectURL
-  return loadImageElement(blob);
-}
-
-// ── BATCH TEST ─────────────────────────────────────────────────────────
-async function startBatchTest(files) {
-  if (!files || !files.length) return;
-  if (!workerReady) {
-    alert('OCR motoru henüz hazır değil, lütfen bekleyin.');
-    return;
-  }
-  goScreen('s-batch');
-  const prog = document.getElementById('batch-prog');
-  const status = document.getElementById('batch-status');
-  const results = document.getElementById('batch-results');
-  document.getElementById('batch-progress').style.display = 'block';
-  results.innerHTML = '';
-
-  // Create dedicated batch worker (isolated from global worker)
-  let batchWorker = null;
-  const batchT0 = performance.now();
-  let workerInitTime = 0;
-
-  try {
-    status.textContent = 'Batch OCR worker başlatılıyor…';
-    const wiT = performance.now();
-    batchWorker = await createBatchWorker();
-    workerInitTime = Math.round(performance.now() - wiT);
-  } catch(e) {
-    results.innerHTML = '<div class="batch-reason">Batch worker oluşturulamadı: ' + e.message + '</div>';
-    document.getElementById('batch-file-in').value = '';
-    return;
-  }
-
-  const rows = [];
-  let successCount = 0;
-  let totalTime = 0;
-  batchVisionCache.clear();
-
-  try {
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      prog.style.width = ((i / files.length) * 100) + '%';
-      status.textContent = (i+1) + '/' + files.length + ' işleniyor: ' + file.name;
-
-      const timings = { decode: 0, resize: 0, crop: 0, ocr1: 0, ocr2: 0, total: 0 };
-      const t0 = performance.now();
-
-      // Fast image loading
-      let imgData = null;
-      let t = performance.now();
-      try {
-        imgData = await loadImageFast(file);
-        timings.decode = Math.round(performance.now() - t);
-      } catch(e) {
-        rows.push({ name: file.name, ok: false, type: '—', cs: '—', time: 0, timing: '', reason: (isHEIC(file) ? 'HEIC: ' : '') + e.message });
-        continue;
-      }
-
-      // Debug: source image dimensions
-      const srcW = imgData.img.width || imgData.img.naturalWidth || 0;
-      const srcH = imgData.img.height || imgData.img.naturalHeight || 0;
-      timings.srcSize = srcW + 'x' + srcH;
-
-      // Resize to max 1400px long side
-      t = performance.now();
-      const resized = resizeForOCR(imgData.img, 1400);
-      timings.resize = Math.round(performance.now() - t);
-
-      // Cleanup objectURL
-      imgData.cleanup();
-
-      // Validate resized canvas
-      if (!resized || resized.width <= 50 || resized.height <= 50) {
-        rows.push({ name: file.name, ok: false, type: '—', cs: '—', time: Math.round(performance.now() - t0), timing: 'src:' + timings.srcSize, reason: 'Resize failed: invalid dimensions' });
-        continue;
-      }
-
-      // Fast OCR with dedicated batch worker (max 3 attempts)
-      const ocrResult = await fastBatchOCR(resized, timings, batchWorker, file.name, i);
-
-      timings.total = Math.round(performance.now() - t0);
-      totalTime += timings.total;
-      const timingStr = 'src:' + timings.srcSize + ' rs:' + (timings.resizedSize||'?') +
-        (timings.sz1 ? ' a1:' + timings.sz1 : '') + (timings.sz2 ? ' a2:' + timings.sz2 : '') + (timings.sz3 ? ' a3:' + timings.sz3 : '') +
-        ' D:' + timings.decode + ' R:' + timings.resize + ' C:' + (timings.crop||0) +
-        ' O1:' + (timings.ocr1||0) + (timings.ocr2 ? ' O2:' + timings.ocr2 : '') + (timings.ocr3 ? ' O3:' + timings.ocr3 : '') + ' T:' + timings.total + 'ms';
-
-      if (ocrResult.extracted) {
-        successCount++;
-        const v = validateMRZ(ocrResult.extracted);
-        const parsed = parseResult(ocrResult.extracted);
-        const csStr = ['Pass','DOB','EXP'].map((k, idx) => {
-          const key = ['passOk','dobOk','expOk'][idx];
-          return k + (v.checksums[key] ? '✓' : '✗');
-        }).join(' ');
-        const row = {
-          name: file.name, ok: true, docType: ocrResult.extracted.type, cs: csStr,
-          finalResult: 'SUCCESS', durationMs: timings.total, timing: timingStr,
-          selectedBand: ocrResult.selectedBand || '—', ocrAttempts: ocrResult.attempts || 1,
-          longestLine: ocrResult.longestLine || 0, chevronCount: ocrResult.chevronCount || 0,
-          parseOk: true, checksumOk: true,
-          failReason: null, comment: getResultComment('SUCCESS'), reason: '',
-          rawOcrText: ocrResult.rawOcrText || '',
-          parsedFields: {
-            documentNumber: (parsed.passNo || '').replace(/</g,'') || null,
-            birthDate: parsed.dob || null,
-            surname: parsed.surname || null,
-            givenNames: parsed.given || null,
-            nationalId: parsed.nationalId || null,
-            nationalIdValid: parsed.nationalIdValid || false,
-          }
-        };
-        if (window._mrzDebug) console.log('[MRZ] batch row', i, row);
-        rows.push(row);
-      } else {
-        const longest = ocrResult.longestLine || 0;
-        const chevrons = ocrResult.chevronCount || 0;
-        const failReason = classifyFailure({ parseOk: false, checksumOk: false, longestLine: longest, isBlurry: false, chevrons });
-        const row = {
-          name: file.name, ok: false, docType: '—', cs: '—',
-          finalResult: 'FAIL', durationMs: timings.total, timing: timingStr,
-          selectedBand: ocrResult.selectedBand || '—', ocrAttempts: ocrResult.attempts || 0,
-          longestLine: longest, chevronCount: chevrons,
-          parseOk: false, checksumOk: false,
-          failReason, comment: getResultComment(failReason), reason: getResultComment(failReason),
-          rawOcrText: ocrResult.rawOcrText || '',
-          parsedFields: null
-        };
-        if (window._mrzDebug) console.log('[MRZ] batch row', i, row);
-        rows.push(row);
-      }
-      // Vision debug: canvas tüm satırlar için saklanır (max 800px, lazy analiz)
-      if (resized && typeof batchVisionCache !== 'undefined') {
-        const vW = Math.min(800, resized.width);
-        const vH = Math.round(resized.height * vW / resized.width);
-        const vCanvas = document.createElement('canvas');
-        vCanvas.width = vW; vCanvas.height = vH;
-        vCanvas.getContext('2d').drawImage(resized, 0, 0, vW, vH);
-        batchVisionCache.set(rows.length - 1, { imgCanvas: vCanvas, vd: null });
-      }
-    }
-  } finally {
-    // Always terminate and clear the dedicated batch worker
-    if (batchWorker) {
-      try { await batchWorker.terminate(); } catch(_) {}
-      batchWorker = null;
-    }
-  }
-
-  const batchTotal = Math.round(performance.now() - batchT0);
-  prog.style.width = '100%';
-  status.textContent = 'Tamamlandı';
-  const avg = files.length > 0 ? Math.round(totalTime / files.length) : 0;
-
-  // Store for copy access
-  window.batchReportData = rows;
-  const batchSummaryText = successCount + '/' + files.length + ' başarılı, ort ' + avg + 'ms/dosya · Worker init: ' + workerInitTime + 'ms · Toplam: ' + batchTotal + 'ms';
-
-  results.innerHTML = '<table class="batch-table"><thead><tr>' +
-    '<th>Dosya</th><th>Sonuç</th><th>Tip</th><th>CS</th><th>Band</th><th>Uzun</th><th>&lt;</th><th>DocNo</th><th>DOB</th><th>Soyad</th><th>Süre</th><th>Yorum</th><th></th>' +
-    '</tr></thead><tbody>' +
-    rows.map((r, idx) => {
-      const pf = r.parsedFields || {};
-      return '<tr>' +
-      '<td>' + r.name + '</td>' +
-      '<td class="' + (r.ok ? 'bt-ok' : 'bt-fail') + '">' + (r.ok ? '✅' : '❌') + '</td>' +
-      '<td>' + (r.docType || '—') + '</td>' +
-      '<td style="font-size:.7rem">' + (r.cs || '—') + '</td>' +
-      '<td style="font-size:.7rem">' + (r.selectedBand || '—') + '</td>' +
-      '<td>' + (r.longestLine || 0) + '</td>' +
-      '<td>' + (r.chevronCount != null ? r.chevronCount : 0) + '</td>' +
-      '<td style="font-family:monospace;font-size:.72rem">' + (pf.documentNumber || '—') + '</td>' +
-      '<td style="font-size:.72rem">' + (pf.birthDate || '—') + '</td>' +
-      '<td style="font-size:.72rem">' + (pf.surname || '—') + '</td>' +
-      '<td>' + (r.durationMs || 0) + 'ms</td>' +
-      '<td style="font-size:.72rem;color:var(--muted)">' + (r.comment || '') + '</td>' +
-      '<td><button onclick="copyToClipboard(formatResultForCopy(batchReportData[' + idx + ']))" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--muted);cursor:pointer;font-size:.7rem">📋</button>' +
-      (batchVisionCache.has(idx) ? ' <button class="btn-vision" onclick="toggleVisionPanel(' + idx + ',this)">🔍 Vision</button>' : '') +
-      '</td>' +
-      '</tr>' + (r.timing ? '<tr><td colspan="13" style="font-size:.65rem;color:var(--muted);padding:2px 6px">' + r.timing + '</td></tr>' : '');
-    }).join('') +
-    '</tbody></table>' +
-    '<div class="batch-summary">' + batchSummaryText + '</div>' +
-    '<div style="text-align:center;margin-top:10px"><button class="btn ghost btn-sm" onclick="copyToClipboard(formatAllResultsForCopy(batchReportData,\'' + batchSummaryText.replace(/'/g,'') + '\'))">📋 Tüm Sonuçları Kopyala</button></div>';
-
-  document.getElementById('batch-file-in').value = '';
 }
 
 init();

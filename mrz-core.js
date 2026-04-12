@@ -21,6 +21,26 @@
   function fixLine(s, { targetLen, kind }) {
     if (!s) return null;
 
+    // ── TD1 over-read trim: +1..+6 chars, full validator gating ──────────
+    // Generates all targetLen-length substrings from the over-read string,
+    // applies fixes, validates with the relevant TD1 isL*_TD1 function.
+    // Returns first (earliest, least trim) valid candidate; falls through
+    // to existing logic if no valid candidate found.
+    // TD3 intentionally excluded — separate handling below.
+    if (s.length > targetLen && s.length <= targetLen + 6 &&
+        (kind === 'TD1_L1' || kind === 'TD1_L2' || kind === 'TD1_L3')) {
+      const overValid = [];
+      for (let skip = 0; skip <= s.length - targetLen; skip++) {
+        const c = s.substring(skip, skip + targetLen);
+        const f = (kind === 'TD1_L3') ? applyNameFixes(c, kind) : applyDigitFixes(c, kind);
+        if (kind === 'TD1_L1' && isL1_TD1(f)) overValid.push(f);
+        if (kind === 'TD1_L2' && isL2_TD1(f)) overValid.push(f);
+        if (kind === 'TD1_L3' && isL3_TD1(f)) overValid.push(f);
+      }
+      if (overValid.length >= 1) return overValid[0]; // earliest valid wins
+      // else: fall through to existing logic
+    }
+
     if (s.length > targetLen && s.length - targetLen <= 15) {
       // TD1_L3: two strategies based on leading char of OCR line
       //   s[0] !== '<' → padding extends at the END  → minimum skip (first valid non-<-starting)
