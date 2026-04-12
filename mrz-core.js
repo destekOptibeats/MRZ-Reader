@@ -86,6 +86,36 @@
       }
     }
 
+    // 1-char-long trim for TD1 only (TD3 untouched)
+    // Handles OCR adding one extra character at line start or end.
+    // Two candidates tried; accepted only if exactly ONE passes structural validation —
+    // ambiguous (both valid) or unresolvable (neither valid) cases fall through to null.
+    if (s.length === targetLen + 1 &&
+        (kind === 'TD1_L1' || kind === 'TD1_L2' || kind === 'TD1_L3')) {
+      const trimCandidates = [
+        s.substring(0, targetLen),      // trim last char
+        s.substring(1, targetLen + 1),  // trim first char
+      ];
+      const valid = [];
+      for (const c of trimCandidates) {
+        const f = applyDigitFixes(c, kind);
+        if (kind === 'TD1_L1' &&
+            /^[IAC][A-Z<]/.test(f) && /^[A-Z0-9<]{30}$/.test(f))
+          valid.push(f);
+        if (kind === 'TD1_L2' &&
+            /^\d{6}/.test(f) && /^\d{6}$/.test(f.substring(8, 14))) {
+          const mm = +f.slice(2, 4), dd = +f.slice(4, 6), em = +f.slice(10, 12);
+          if (mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31 && em >= 1 && em <= 12)
+            valid.push(f);
+        }
+        if (kind === 'TD1_L3' &&
+            f.includes('<<') && /^[A-Z]/.test(f) && /^[A-Z0-9<]{30}$/.test(f))
+          valid.push(f);
+      }
+      if (valid.length === 1) return valid[0];
+      // 0 valid → fall through to null; 2 valid (ambiguous) → fall through to null
+    }
+
     return null;
   }
 
