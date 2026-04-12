@@ -494,6 +494,14 @@
     }
     timings.crop = Math.round(performance.now() - t0);
 
+    // Collect one proj crop per rotation for Phase 2.95 safety net.
+    // Done BEFORE sort so each rotation's proj candidate is captured regardless of ranking.
+    const projByDeg = {};  // deg → { deg, rotated, y, h }
+    for (const c of allCandidates) {
+      if (c.label === 'proj' && !(c.deg in projByDeg))
+        projByDeg[c.deg] = { deg: c.deg, rotated: c.rotated, y: c.y, h: c.h };
+    }
+
     // Global sort + take top MAX_OCR
     allCandidates.sort((a, b) => b.globalScore - a.globalScore);
     const topCandidates = allCandidates.slice(0, MAX_OCR);
@@ -508,6 +516,7 @@
     const allFragmentLines = []; // Phase 2.5: accumulate candidate lines across OCR attempts
     let bestProjCropData = null;  // Phase 2.75: save best proj raw crop for hi-contrast fallback
     let hiContrastCanvas = null; // Phase 2.8:  reuse hi-contrast canvas across phases
+    const triedProjDegs = new Set(); // Phase 2.95: track proj degs tried in Phase 1
 
     // ── Phase 1: OCR top candidates in rank order ─────────────────────────
     for (const { deg, rotated, y: cropY, h: cropH, label } of topCandidates) {
@@ -519,6 +528,8 @@
 
       // Save first proj crop (raw, before preprocessing) for Phase 2.75 hi-contrast fallback
       if (label === 'proj' && !bestProjCropData) bestProjCropData = { crop, deg };
+      // Track which proj rotations are OCR'd in Phase 1 (for Phase 2.95 deduplication)
+      if (label === 'proj') triedProjDegs.add(deg);
 
       const ocrIn = batchUpscaleIfNeeded(batchPreprocessMRZ(crop));
       if (ocrIn.width <= 100 || ocrIn.height <= 100) continue;
@@ -853,6 +864,74 @@
           }
         }
       } catch (_) {}
+    }
+
+    // ── Phase 2.95: proj-crop safety net (untried rotations) ─────────────
+    // All prior phases failed. Try proj crops from rotations not yet OCR'd in Phase 1.
+    // This guarantees deg=0/proj is attempted even if density scoring ranked it below top-8.
+    // Priority order: [0, 90, 270, 180] — 0° first (most likely correct orientation).
+    // Max 3 extra OCR calls; only untried proj degs; no duplicate OCR.
+    {
+      const PROJ_FALLBACK_ORDER = [0, 90, 270, 180];
+      const MAX_PROJ_FALLBACK   = 3;
+      let projFallbackCount = 0;
+
+      for (const fallbackDeg of PROJ_FALLBACK_ORDER) {
+        if (projFallbackCount >= MAX_PROJ_FALLBACK) break;
+        if (triedProjDegs.has(fallbackDeg)) continue;   // already tried in Phase 1 — skip
+        const pcd = projByDeg[fallbackDeg];
+        if (!pcd) continue;
+
+        // Recreate crop canvas the same way Phase 1 does
+        const padW = Math.round(pcd.rotated.width * 0.03);
+        const fbCrop = document.createElement('canvas');
+        fbCrop.width  = Math.max(1, pcd.rotated.width - 2 * padW);
+        fbCrop.height = Math.max(1, pcd.h);
+        fbCrop.getContext('2d').drawImage(
+          pcd.rotated, padW, pcd.y, fbCrop.width, pcd.h, 0, 0, fbCrop.width, pcd.h
+        );
+
+        const fbOcrIn = batchUpscaleIfNeeded(batchPreprocessMRZ(fbCrop));
+        if (fbOcrIn.width <= 80 || fbOcrIn.height <= 40) continue;
+
+        ocrAttempt++;
+        projFallbackCount++;
+        const bandLabel = 'rot' + fallbackDeg + '/proj-fallback';
+
+        try {
+          const { data: { text: fbText } } = await wr.recognize(fbOcrIn);
+
+          // Debug log for problem images
+          if (['1914', '1780'].some(id => (fileName || '').includes(id))) {
+            const fl = fbText.split('\n');
+            const entry = {
+              label: 'proj-fallback', deg: fallbackDeg, fileName,
+              allLengths: fl.map(l => l.length),
+              mrzCandidates: fl.filter(l => l.length >= 28),
+            };
+            if (!window._dbgData) window._dbgData = [];
+            window._dbgData.push(entry);
+          }
+
+          const fbResult = extractMRZ(clean(fbText));
+          if (fbResult) {
+            const corrLines = correctCheckDigits(fbResult.type, fbResult.lines);
+            const corrCount = countCheckDigitChanges(fbResult.type, fbResult.lines, corrLines);
+            if (corrCount <= MAX_CORRECTIONS) {
+              const corrResult = { type: fbResult.type, lines: corrLines };
+              if (validateMRZ(corrResult).valid) {
+                return {
+                  extracted: corrResult, diag: lastDiag, attempts: ocrAttempt,
+                  longestLine: failLongest, chevronCount: failChevrons,
+                  rawOcrText: fbText, selectedBand: bandLabel,
+                  corrected: corrCount > 0, correctionCount: corrCount,
+                  recoveryMode: 'proj-fallback',
+                };
+              }
+            }
+          }
+        } catch (_) {}
+      }
     }
 
     // ── Phase 3: NO_PARSE ─────────────────────────────────────────────────
