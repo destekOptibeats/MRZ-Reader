@@ -369,6 +369,45 @@
     return c;
   }
 
+  // Rotate a canvas by an arbitrary angle (degrees) around its center.
+  // Output canvas is sized to contain the full rotated image; background is white.
+  // Used by Phase 2.9 micro-deskew search for small tilt correction (±12°).
+  function arbitraryRotateCanvas(srcCanvas, angleDeg) {
+    if (angleDeg === 0) return srcCanvas;
+    const rad = angleDeg * Math.PI / 180;
+    const cos = Math.abs(Math.cos(rad)), sin = Math.abs(Math.sin(rad));
+    const w = srcCanvas.width, h = srcCanvas.height;
+    const nw = Math.round(w * cos + h * sin);
+    const nh = Math.round(w * sin + h * cos);
+    const c = document.createElement('canvas');
+    c.width = nw; c.height = nh;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = 'white';
+    ctx.fillRect(0, 0, nw, nh);
+    ctx.translate(nw / 2, nh / 2);
+    ctx.rotate(rad);
+    ctx.drawImage(srcCanvas, -w / 2, -h / 2);
+    return c;
+  }
+
+  // Score a binarized (black-on-white) canvas for MRZ horizontal alignment
+  // using row-density variance. Higher variance = text rows are sharply separated
+  // from blank rows = better horizontal alignment. When MRZ is tilted, text smears
+  // across rows → variance drops. Used by Phase 2.9 to rank deskew angle candidates.
+  function scoreDeskewCandidate(binaryCanvas) {
+    const ctx = binaryCanvas.getContext('2d');
+    const { width: w, height: h } = binaryCanvas;
+    const data = ctx.getImageData(0, 0, w, h).data;
+    const densities = [];
+    for (let y = 0; y < h; y++) {
+      let dark = 0;
+      for (let x = 0; x < w; x++) if (data[(y * w + x) * 4] === 0) dark++;
+      densities.push(dark / w);
+    }
+    const mean = densities.reduce((a, b) => a + b, 0) / h;
+    return densities.reduce((s, d) => s + (d - mean) ** 2, 0) / h;  // variance
+  }
+
   // ── OCR SCORING HELPERS ───────────────────────────────────────────────────
 
   function longestOCRLine(text) {
@@ -745,6 +784,75 @@
         const r8 = await tryPsm('8');
         if (r8) return r8;
       }
+    }
+
+    // ── Phase 2.9: micro-deskew search (≤1 extra OCR call) ──────────────
+    // Tries small rotation offsets [-12…+12]° on the raw proj crop.
+    // Scores each via row-density variance (no OCR) — higher variance means
+    // text rows are sharply separated from blank rows = better alignment.
+    // Runs 1 OCR call only if a non-0° angle beats the 0° baseline by ≥3%.
+    if (bestProjCropData) {
+      try {
+        const DESKEW_ANGLES = [0, -4, 4, -8, 8, -12, 12]; // small angles first
+        let score0 = null, bestAngleScore = -1, bestRawCanvas = null, bestAngle = 0;
+        const angleScores = {};
+
+        for (const angle of DESKEW_ANGLES) {
+          const rotated   = arbitraryRotateCanvas(bestProjCropData.crop, angle); // raw color
+          const processed = hiContrastPreprocess(rotated);                       // binary — scoring only
+          const score     = scoreDeskewCandidate(processed);
+          angleScores[angle] = score;
+          if (angle === 0) { score0 = score; continue; } // baseline, skip as candidate
+          if (score > bestAngleScore) {
+            bestAngleScore = score;
+            bestRawCanvas  = rotated;   // store RAW canvas, not processed
+            bestAngle      = angle;
+          }
+          // Early break: angle is clearly superior, no need to check wider ones
+          if (score0 !== null && score > score0 * 1.10) break;
+        }
+
+        // Only proceed if a non-zero angle meaningfully outperforms 0° baseline (≥3%)
+        // RAW canvas used for OCR → single preprocessing, no double-processing artifacts
+        if (bestRawCanvas && score0 !== null && bestAngleScore > score0 * 1.03) {
+          const deskewOcrIn = batchUpscaleIfNeeded(hiContrastPreprocess(bestRawCanvas));
+          if (deskewOcrIn.width > 80 && deskewOcrIn.height > 40) {
+            ocrAttempt++;
+            const { data: { text: deskewText } } = await wr.recognize(deskewOcrIn);
+
+            // Debug log for problem images
+            if (['1914', '1780'].some(id => (fileName || '').includes(id))) {
+              const dl = deskewText.split('\n');
+              const entry = {
+                rot: bestProjCropData.deg, label: 'micro-deskew', fileName,
+                allLengths: dl.map(l => l.length),
+                mrzCandidates: dl.filter(l => l.length >= 28),
+                bestAngle, score0, bestAngleScore, angleScores,
+              };
+              if (!window._dbgData) window._dbgData = [];
+              window._dbgData.push(entry);
+            }
+
+            const deskewResult = extractMRZ(clean(deskewText));
+            if (deskewResult) {
+              const corrLines = correctCheckDigits(deskewResult.type, deskewResult.lines);
+              const corrCount = countCheckDigitChanges(deskewResult.type, deskewResult.lines, corrLines);
+              if (corrCount <= MAX_CORRECTIONS) {
+                const corrResult = { type: deskewResult.type, lines: corrLines };
+                if (validateMRZ(corrResult).valid) {
+                  return {
+                    extracted: corrResult, diag: lastDiag, attempts: ocrAttempt,
+                    longestLine: failLongest, chevronCount: failChevrons,
+                    rawOcrText: deskewText, selectedBand: 'micro-deskew',
+                    corrected: corrCount > 0, correctionCount: corrCount,
+                    recoveryMode: 'micro-deskew',
+                  };
+                }
+              }
+            }
+          }
+        }
+      } catch (_) {}
     }
 
     // ── Phase 3: NO_PARSE ─────────────────────────────────────────────────
