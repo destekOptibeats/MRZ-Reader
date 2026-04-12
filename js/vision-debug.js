@@ -228,24 +228,39 @@ function visionAnalyzeImage(srcCanvas) {
   var t1 = performance.now();
 
   // Select best source: warp beats original when warpScore > origScore
-  var useWarp = best.warpCanvas && (best.warpScore > best.origScore);
-  var detectSrc    = useWarp ? best.warpCanvas    : best.rotated;
-  var detectBinary = useWarp ? best.warpBinary    : best.binary;
-  var presence     = useWarp ? best.warpPresence  : best.origPresence;
-  var selectedWhy  = useWarp ? 'warp_score_higher' : 'orig_score_higher';
+  var useWarp = !!(best.warpCanvas && best.docType && (best.warpScore > best.origScore));
+  var selectedWhy = useWarp ? 'warp_score_higher' : 'orig_score_higher';
 
-  // MRZ crop: color + binary version
-  var mrzCrop = null, mrzBinary = null;
-  try { mrzCrop   = visionCropRegion(detectSrc,    presence.cropY, presence.cropH); } catch(e) {}
-  try { mrzBinary = visionCropRegion(detectBinary, presence.cropY, presence.cropH); } catch(e) {}
+  // MRZ crop extraction
+  var mrzCrop = null;
+  var mrzCropY, mrzCropH;
+
+  if (useWarp) {
+    // Known-position extraction: docType defines exact MRZ position in warped document.
+    // Much more reliable than scoreMRZPresence on a perspective-corrected image.
+    var stripRatio = best.docType === 'TD1' ? 0.36 : 0.28;
+    var wH = best.warpCanvas.height;
+    mrzCropH = Math.round(wH * stripRatio);
+    mrzCropY = wH - mrzCropH;
+    try { mrzCrop = visionCropRegion(best.warpCanvas, mrzCropY, mrzCropH); } catch(e) {}
+    selectedWhy += '+doctype_pos(' + best.docType + ')';
+  } else {
+    // No warp: use scoreMRZPresence result, but cap height to max 40% of image
+    // to prevent full-image crops when bands are not clearly detected.
+    var p = best.origPresence;
+    var maxH = Math.round(best.rotated.height * 0.40);
+    mrzCropH = Math.min(p.cropH, maxH);
+    mrzCropY = p.cropY;
+    try { mrzCrop = visionCropRegion(best.rotated, mrzCropY, mrzCropH); } catch(e) {}
+  }
 
   var t2 = performance.now();
 
   return {
     images: {
-      original:     best.rotated,     // rotation-normalized source
-      documentWarp: best.warpCanvas,  // full-document warp (null if quad not found)
-      mrzCrop:      mrzCrop           // horizontal MRZ strip (best source)
+      original:     best.rotated,    // rotation-normalized source
+      documentWarp: best.warpCanvas, // full-document warp (null if quad not found)
+      mrzCrop:      mrzCrop          // MRZ strip: known-pos from warp, or density-detected from rotated
     },
     meta: {
       detectedRotation:  best.deg,
@@ -257,7 +272,7 @@ function visionAnalyzeImage(srcCanvas) {
       mrzWarpRegions:    best.warpPresence
                            ? { y: best.warpPresence.cropY, h: best.warpPresence.cropH, score: best.warpScore }
                            : null,
-      mrzBox:            { y: presence.cropY, h: presence.cropH },
+      mrzBox:            { y: mrzCropY, h: mrzCropH },
       docType:           best.docType,
       quadFound:         !!best.quad,
       analyzeMs:         Math.round(t1 - t0),
@@ -315,7 +330,7 @@ function visionRenderPanel(containerEl, vd) {
   // Image slots
   var imgRow = document.createElement('div');
   imgRow.className = 'vision-images';
-  var origLabel = 'Original' + (m.detectedRotation ? ' (rot ' + m.detectedRotation + '\u00b0)' : '');
+  var origLabel = 'Original' + (m.detectedRotation > 0 ? ' (rot ' + m.detectedRotation + '\u00b0)' : '');
   imgRow.appendChild(makeSlot(origLabel,        vd.images.original));
   imgRow.appendChild(makeSlot('Document Warp',  vd.images.documentWarp));
   imgRow.appendChild(makeSlot('MRZ Crop ('      + m.sourceUsedForMrz + ')', vd.images.mrzCrop));
@@ -328,18 +343,18 @@ function visionRenderPanel(containerEl, vd) {
   var origR = m.mrzOrigRegions;
   var warpR = m.mrzWarpRegions;
   var fields = [
-    ['rotation',      m.detectedRotation + '\u00b0'],
-    ['mrzFound',      m.mrzFound ? '\u2705 evet' : '\u274c hay\u0131r'],
-    ['source',        m.sourceUsedForMrz],
-    ['why',           m.selectedWhy],
-    ['score',         m.selectedScore !== undefined ? m.selectedScore.toFixed(3) : '\u2014'],
-    ['quadFound',     m.quadFound ? '\u2705' : '\u274c'],
+    ['detectedRotation', m.detectedRotation + '\u00b0'],
+    ['mrzFound',         m.mrzFound ? '\u2705 evet' : '\u274c hay\u0131r'],
+    ['source',           m.sourceUsedForMrz],
+    ['why',              m.selectedWhy],
+    ['score',            m.selectedScore !== undefined ? m.selectedScore.toFixed(3) : '\u2014'],
+    ['quadFound',        m.quadFound ? '\u2705' : '\u274c'],
     m.docType ? ['docType', m.docType] : null,
     m.mrzBox  ? ['mrzBox',  'y=' + m.mrzBox.y + ' h=' + m.mrzBox.h] : null,
     origR ? ['origScore', origR.score.toFixed(3) + ' y=' + origR.y + ' h=' + origR.h] : null,
     warpR ? ['warpScore', warpR.score.toFixed(3) + ' y=' + warpR.y + ' h=' + warpR.h] : null,
-    ['analyzeMs',     m.analyzeMs + 'ms'],
-    ['totalMs',       m.totalMs   + 'ms'],
+    ['analyzeMs',        m.analyzeMs + 'ms'],
+    ['totalMs',          m.totalMs   + 'ms'],
   ].filter(Boolean);
 
   fields.forEach(function(f) {
