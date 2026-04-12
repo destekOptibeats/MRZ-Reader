@@ -185,6 +185,7 @@ function visionAnalyzeImage(srcCanvas) {
   var ROTATIONS = [0, 90, 180, 270];
   var srcIsLandscape = srcCanvas.width >= srcCanvas.height;
   var best = null; // { deg, rotated, origScore, warpCanvas, warpScore, effectiveScore, origPresence, warpPresence, quad, docType }
+  var rotationScores = []; // per-rotation debug data
 
   for (var ri = 0; ri < ROTATIONS.length; ri++) {
     var deg = ROTATIONS[ri];
@@ -232,6 +233,15 @@ function visionAnalyzeImage(srcCanvas) {
       effectiveScore *= 1.10;
     }
 
+    rotationScores.push({
+      deg:          deg,
+      origScore:    origScore,
+      warpScore:    warpScore,
+      effectiveScore: effectiveScore,
+      orientMatch:  orientationMatches,
+      quadFound:    !!quad
+    });
+
     if (!best || effectiveScore > best.effectiveScore) {
       best = { deg, rotated, binary, origPresence, origScore, quad, docType,
                warpCanvas, warpBinary, warpPresence, warpScore, effectiveScore };
@@ -247,6 +257,16 @@ function visionAnalyzeImage(srcCanvas) {
   // Select best source: warp beats original when warpScore > origScore
   var useWarp = !!(best.warpCanvas && best.docType && (best.warpScore > best.origScore));
   var selectedWhy = useWarp ? 'warp_score_higher' : 'orig_score_higher';
+
+  // Build human-readable selection reason for debug panel
+  var winnerOrientPreserves = (best.deg === 0 || best.deg === 180);
+  var winnerOrientMatch     = (srcIsLandscape === winnerOrientPreserves);
+  var selectionReason = 'rot=' + best.deg + '\u00b0'
+    + ' orient=' + (winnerOrientMatch ? 'ok' : 'MISMATCH\u26a0')
+    + ' orig=' + best.origScore.toFixed(3)
+    + ' warp=' + (best.warpScore > 0 ? best.warpScore.toFixed(3) : '\u2014')
+    + ' eff=' + best.effectiveScore.toFixed(3)
+    + ' src=' + (useWarp ? 'warp' : 'orig');
 
   // MRZ crop extraction
   var mrzCrop = null;
@@ -291,21 +311,32 @@ function visionAnalyzeImage(srcCanvas) {
       mrzCrop:      mrzCrop          // MRZ strip: warp'tan bilinen konumdan, veya density-detected
     },
     meta: {
-      detectedRotation:  best.deg,
-      mrzFound:          best.effectiveScore > 0,
-      sourceUsedForMrz:  useWarp ? 'warp' : 'original',
-      selectedWhy:       selectedWhy,
-      selectedScore:     best.effectiveScore,
-      mrzOrigRegions:    { y: best.origPresence.cropY, h: best.origPresence.cropH, score: best.origScore },
-      mrzWarpRegions:    best.warpPresence
-                           ? { y: best.warpPresence.cropY, h: best.warpPresence.cropH, score: best.warpScore }
-                           : null,
-      mrzBox:            { y: mrzCropY, h: mrzCropH },
-      docType:           best.docType,
-      quadFound:         !!best.quad,
-      analyzeMs:         Math.round(t1 - t0),
-      cropMs:            Math.round(t2 - t1),
-      totalMs:           Math.round(t2 - t0)
+      detectedRotation:    best.deg,
+      mrzFound:            best.effectiveScore > 0,
+      sourceUsedForMrz:    useWarp ? 'warp' : 'original',
+      selectedWhy:         selectedWhy,
+      selectionReason:     selectionReason,
+      selectedScore:       best.effectiveScore,
+      selectedRegionScore: useWarp
+                             ? (best.warpPresence ? best.warpPresence.score : null)
+                             : best.origPresence.score,
+      selectedRegionLines: useWarp
+                             ? (best.warpPresence && best.warpPresence.lines != null ? best.warpPresence.lines : null)
+                             : (best.origPresence.lines != null ? best.origPresence.lines : null),
+      origScore:           best.origScore,
+      warpScore:           best.warpScore,
+      rotationScores:      rotationScores,
+      mrzOrigRegions:      { y: best.origPresence.cropY, h: best.origPresence.cropH, score: best.origScore },
+      mrzWarpRegions:      best.warpPresence
+                             ? { y: best.warpPresence.cropY, h: best.warpPresence.cropH, score: best.warpScore }
+                             : null,
+      mrzBox:              { y: mrzCropY, h: mrzCropH },
+      docType:             best.docType,
+      quadFound:           !!best.quad,
+      srcIsLandscape:      srcIsLandscape,
+      analyzeMs:           Math.round(t1 - t0),
+      cropMs:              Math.round(t2 - t1),
+      totalMs:             Math.round(t2 - t0)
     }
   };
 }
@@ -370,17 +401,43 @@ function visionRenderPanel(containerEl, vd) {
 
   var origR = m.mrzOrigRegions;
   var warpR = m.mrzWarpRegions;
+
+  // Compact per-rotation summary: "0°:0.28 | 90°:0.46✓(⚠) | 180°:0.19 | 270°:0.31"
+  var rotSummary = '';
+  if (m.rotationScores && m.rotationScores.length) {
+    rotSummary = m.rotationScores.map(function(r) {
+      var label = r.deg + '\u00b0:' + r.effectiveScore.toFixed(2);
+      if (r.deg === m.detectedRotation) label = '\u27a4' + label;
+      if (!r.orientMatch)               label += '\u26a0';
+      if (r.quadFound)                  label += '\u25a0';
+      return label;
+    }).join(' \u2502 ');
+  }
+
   var fields = [
+    // ── selection summary ──
     ['detectedRotation', m.detectedRotation + '\u00b0'],
-    ['mrzFound',         m.mrzFound ? '\u2705 evet' : '\u274c hay\u0131r'],
+    ['srcOrientation',   m.srcIsLandscape ? 'landscape' : 'portrait'],
+    m.selectionReason ? ['selectionReason', m.selectionReason] : null,
+    // ── scores ──
+    ['origScore',        m.origScore !== undefined ? m.origScore.toFixed(3) : '\u2014'],
+    ['warpScore',        m.warpScore  > 0          ? m.warpScore.toFixed(3)  : '\u2014'],
+    ['selectedScore',    m.selectedScore !== undefined ? m.selectedScore.toFixed(3) : '\u2014'],
+    m.selectedRegionScore != null
+      ? ['selectedRegionScore', m.selectedRegionScore.toFixed(3)] : null,
+    m.selectedRegionLines != null
+      ? ['selectedRegionLines', String(m.selectedRegionLines)] : null,
+    // ── all rotations ──
+    rotSummary ? ['rotations', rotSummary] : null,
+    // ── source / region ──
     ['source',           m.sourceUsedForMrz],
-    ['why',              m.selectedWhy],
-    ['score',            m.selectedScore !== undefined ? m.selectedScore.toFixed(3) : '\u2014'],
     ['quadFound',        m.quadFound ? '\u2705' : '\u274c'],
     m.docType ? ['docType', m.docType] : null,
     m.mrzBox  ? ['mrzBox',  'y=' + m.mrzBox.y + ' h=' + m.mrzBox.h] : null,
-    origR ? ['origScore', origR.score.toFixed(3) + ' y=' + origR.y + ' h=' + origR.h] : null,
-    warpR ? ['warpScore', warpR.score.toFixed(3) + ' y=' + warpR.y + ' h=' + warpR.h] : null,
+    origR ? ['origRegion', 'score=' + origR.score.toFixed(3) + ' y=' + origR.y + ' h=' + origR.h] : null,
+    warpR ? ['warpRegion', 'score=' + warpR.score.toFixed(3) + ' y=' + warpR.y + ' h=' + warpR.h] : null,
+    // ── timing ──
+    ['mrzFound',         m.mrzFound ? '\u2705 evet' : '\u274c hay\u0131r'],
     ['analyzeMs',        m.analyzeMs + 'ms'],
     ['totalMs',          m.totalMs   + 'ms'],
   ].filter(Boolean);
