@@ -883,16 +883,18 @@
       const MAX_P295_CALLS = 3;
       let p295count = 0;
 
+      console.log('[P295] start bestDeg=' + bestDeg + ' file=' + (fileName || '?'));
+
       for (const { deg: fallbackDeg, frac } of PHASE295_ATTEMPTS) {
         if (p295count >= MAX_P295_CALLS) break;
         const pcd = projByDeg[fallbackDeg];
-        if (!pcd) continue;
+        if (!pcd) { console.log('[P295] skip deg=' + fallbackDeg + ' no projByDeg entry'); continue; }
 
         const rh     = pcd.rotated.height;
         const botH   = Math.round(rh * frac);
-        const topPad = Math.round(rh * 0.02);                              // 2% buffer above MRZ
-        const botY   = Math.max(0, rh - botH - topPad);                   // guard: no negative Y
-        const padW   = Math.min(20, Math.round(pcd.rotated.width * 0.03)); // guard: small images
+        const topPad = Math.round(rh * 0.02);
+        const botY   = Math.max(0, rh - botH - topPad);
+        const padW   = Math.min(20, Math.round(pcd.rotated.width * 0.03));
 
         const fbCrop = document.createElement('canvas');
         fbCrop.width  = Math.max(1, pcd.rotated.width - 2 * padW);
@@ -902,7 +904,8 @@
         );
 
         const fbOcrIn = batchUpscaleIfNeeded(batchPreprocessMRZ(fbCrop));
-        if (fbOcrIn.height < 24) continue;   // only height guard; width varies after upscale
+        console.log('[P295] attempt deg=' + fallbackDeg + ' frac=' + frac + ' cropH=' + botH + ' ocrH=' + fbOcrIn.height);
+        if (fbOcrIn.height < 24) { console.log('[P295] skip: height < 24'); continue; }
 
         ocrAttempt++;
         p295count++;
@@ -912,19 +915,20 @@
         try {
           const { data: { text: fbText } } = await wr.recognize(fbOcrIn);
 
-          // Debug log for problem images
-          if (['1914', '1780'].some(id => (fileName || '').includes(id))) {
-            const fl = fbText.split('\n');
-            if (!window._dbgData) window._dbgData = [];
-            window._dbgData.push({
-              label: bandLabel, deg: fallbackDeg, frac, fileName,
-              cropHeight: botH,
-              allLengths: fl.map(l => l.length),
-              mrzCandidates: fl.filter(l => l.length >= 28),
-              chevronCount: (fbText.match(/</g) || []).length,
-              mrzScore: scoreMRZText(fbText),
-            });
-          }
+          // Unconditional debug — always pushed, every attempt, every image
+          const fl = fbText.split('\n');
+          const dbgEntry = {
+            phase: '2.95', label: bandLabel, deg: fallbackDeg, frac, fileName,
+            cropHeight: botH,
+            allLengths: fl.map(l => l.length),
+            longestLine: Math.max(0, ...fl.map(l => l.length)),
+            mrzCandidates: fl.filter(l => l.length >= 28),
+            chevronCount: (fbText.match(/</g) || []).length,
+            mrzScore: scoreMRZText(fbText),
+          };
+          if (!window._dbgData) window._dbgData = [];
+          window._dbgData.push(dbgEntry);
+          console.log('[P295]', JSON.stringify(dbgEntry));
 
           const fbResult = extractMRZ(clean(fbText));
           if (fbResult) {
@@ -943,8 +947,10 @@
               }
             }
           }
-        } catch (_) {}
+          console.log('[P295] attempt ' + bandLabel + ' no valid MRZ');
+        } catch (e) { console.log('[P295] OCR error:', e?.message); }
       }
+      console.log('[P295] all attempts exhausted, p295count=' + p295count);
     }
 
     // ── Phase 3: NO_PARSE ─────────────────────────────────────────────────
