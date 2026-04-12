@@ -258,9 +258,9 @@ function visionAnalyzeImage(srcCanvas) {
 
   return {
     images: {
-      original:     best.rotated,    // rotation-normalized source
-      documentWarp: best.warpCanvas, // full-document warp (null if quad not found)
-      mrzCrop:      mrzCrop          // MRZ strip: known-pos from warp, or density-detected from rotated
+      original:     srcCanvas,       // yüklenen orijinal — döndürülmemiş
+      documentWarp: best.warpCanvas, // döndürülüp perspective düzeltilmiş belge
+      mrzCrop:      mrzCrop          // MRZ strip: warp'tan bilinen konumdan, veya density-detected
     },
     meta: {
       detectedRotation:  best.deg,
@@ -330,10 +330,10 @@ function visionRenderPanel(containerEl, vd) {
   // Image slots
   var imgRow = document.createElement('div');
   imgRow.className = 'vision-images';
-  var origLabel = 'Original' + (m.detectedRotation > 0 ? ' (rot ' + m.detectedRotation + '\u00b0)' : '');
-  imgRow.appendChild(makeSlot(origLabel,        vd.images.original));
-  imgRow.appendChild(makeSlot('Document Warp',  vd.images.documentWarp));
-  imgRow.appendChild(makeSlot('MRZ Crop ('      + m.sourceUsedForMrz + ')', vd.images.mrzCrop));
+  var warpLabel = 'Document Warp' + (m.detectedRotation > 0 ? ' (rot ' + m.detectedRotation + '\u00b0)' : '');
+  imgRow.appendChild(makeSlot('Original',       vd.images.original));
+  imgRow.appendChild(makeSlot(warpLabel,        vd.images.documentWarp));
+  imgRow.appendChild(makeSlot('MRZ Crop (' + m.sourceUsedForMrz + ')', vd.images.mrzCrop));
   panel.appendChild(imgRow);
 
   // Meta row
