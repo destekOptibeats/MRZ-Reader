@@ -254,8 +254,12 @@ function visionAnalyzeImage(srcCanvas) {
 
   var t1 = performance.now();
 
-  // Select best source: warp beats original when warpScore > origScore
-  var useWarp = !!(best.warpCanvas && best.docType && (best.warpScore > best.origScore));
+  // Select best source: use warp when quad+docType confirmed and warpScore within 5% of origScore.
+  // A confirmed quad+docType means geometry-based strip extraction is available, which is
+  // categorically more reliable than density fallback — so don't discard it over noise margins.
+  var useWarpStrict = !!(best.warpCanvas && best.docType && (best.warpScore > best.origScore));
+  var useWarp       = !!(best.warpCanvas && best.docType && (best.warpScore >= best.origScore * 0.95));
+  var warpSelectedByThreshold = useWarp && !useWarpStrict; // true when threshold rule (not strict) decided
   var selectedWhy = useWarp ? 'warp_score_higher' : 'orig_score_higher';
 
   // Build human-readable selection reason for debug panel
@@ -334,6 +338,7 @@ function visionAnalyzeImage(srcCanvas) {
       docType:             best.docType,
       quadFound:           !!best.quad,
       srcIsLandscape:      srcIsLandscape,
+      warpSelectedByThreshold: warpSelectedByThreshold,
       analyzeMs:           Math.round(t1 - t0),
       cropMs:              Math.round(t2 - t1),
       totalMs:             Math.round(t2 - t0)
