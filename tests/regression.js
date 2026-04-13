@@ -307,12 +307,17 @@ async function runAllTests() {
     }
 
     let outcome, subtype = null, diffs = [], timingMs, timingsDetail = null, meta = null;
+    let dbgPathClass = null, dbgP275 = null, dbgP295 = null;
 
     if (!file) {
       outcome = 'SKIPPED';
     } else {
       const timings = {};
       const t0 = performance.now();
+
+      // Snapshot _dbgData length before this run so we can find the new entry afterward
+      const dbgIdxBefore = (window._dbgData && window._mrzDebug) ? window._dbgData.length : -1;
+
       let pipelineResult;
       try {
         pipelineResult = await window.MRZPipeline.processImage(file, regressionWorker, timings);
@@ -326,13 +331,28 @@ async function runAllTests() {
       timingsDetail = { totalTime: timingMs, ocrTime, preprocessingTime, raw: timings };
       meta = pipelineResult && pipelineResult.meta ? pipelineResult.meta : null;
 
+      // Pull pathClass / p275 / p295 from the _dbgData entry written by _finalizeRun
+      if (window._mrzDebug && dbgIdxBefore >= 0 &&
+          window._dbgData && window._dbgData.length > dbgIdxBefore) {
+        const dbgEntry = window._dbgData[window._dbgData.length - 1];
+        dbgPathClass = dbgEntry.pathClass  || null;
+        dbgP275      = dbgEntry.p275       || null;
+        dbgP295      = dbgEntry.p295       || null;
+      }
+
       const cmp = compareCase(pipelineResult, c);
       outcome = cmp.outcome;
       subtype = cmp.subtype;
       diffs   = cmp.diffs;
     }
 
-    results.push({ id: c.id, outcome, subtype, diffs, timingMs, timings: timingsDetail, meta });
+    const resultEntry = { id: c.id, outcome, subtype, diffs, timingMs, timings: timingsDetail, meta };
+    if (window._mrzDebug && dbgPathClass !== null) {
+      resultEntry.pathClass = dbgPathClass;
+      resultEntry.p275      = dbgP275;
+      resultEntry.p295      = dbgP295;
+    }
+    results.push(resultEntry);
 
     // Capture canvas for Vision debug panel (all non-SKIPPED rows)
     if (file && outcome !== 'SKIPPED' && typeof batchVisionCache !== 'undefined') {
@@ -366,10 +386,27 @@ function exportJSON() {
   const counts = { PASS: 0, FAIL: 0, SKIPPED: 0, NO_PARSE: 0, DECODE_FAIL: 0 };
   for (const r of results) counts[r.outcome] = (counts[r.outcome] || 0) + 1;
 
+  // Build aggregate block if any result carries debug instrumentation
+  let aggregate = null;
+  if (results.some(r => r.pathClass !== undefined)) {
+    const pathClass = { primary: 0, early_correction: 0, cheap_fallback: 0,
+                        late_fallback: 0, debt_fallback: 0, no_parse: 0 };
+    let p275Reached = 0, p275Won = 0, p295Reached = 0, p295Won = 0;
+    for (const r of results) {
+      if (r.pathClass) pathClass[r.pathClass] = (pathClass[r.pathClass] || 0) + 1;
+      if (r.p275) { if (r.p275.reached) p275Reached++; if (r.p275.won) p275Won++; }
+      if (r.p295) { if (r.p295.reached) p295Reached++; if (r.p295.won) p295Won++; }
+    }
+    aggregate = { pathClass, p275Reached, p275Won, p295Reached, p295Won };
+  }
+
+  const summary = { ...counts, total: results.length };
+  if (aggregate) summary.aggregate = aggregate;
+
   const report = {
     timestamp:       new Date().toISOString(),
     manifestVersion: manifest.version,
-    summary:         { ...counts, total: results.length },
+    summary,
     results,
   };
 
