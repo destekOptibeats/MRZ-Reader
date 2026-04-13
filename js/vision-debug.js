@@ -158,6 +158,46 @@ function computeQuadQuality(corners, W, H) {
   };
 }
 
+// ── FRAME MODE CLASSIFIER ─────────────────────────────────────────────────
+// Distinguishes full-frame document crops from scene images with background.
+// Signal: mean luminance of the outer 8% ring of the canvas.
+//   bright border (>90) → document paper fills the frame → 'full-frame'
+//   dark border  (≤90) → background/clutter at edges    → 'scene'
+
+function visionClassifyFrameMode(canvas) {
+  var W = canvas.width, H = canvas.height;
+  var ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+  var bW = Math.max(4, Math.round(W * 0.08));
+  var bH = Math.max(4, Math.round(H * 0.08));
+
+  var total = 0, count = 0;
+  var step = 3; // sample every 3rd pixel for speed
+
+  function sampleStrip(x0, y0, x1, y1) {
+    x0 = Math.max(0, x0); y0 = Math.max(0, y0);
+    x1 = Math.min(W, x1); y1 = Math.min(H, y1);
+    if (x1 <= x0 || y1 <= y0) return;
+    var d = ctx.getImageData(x0, y0, x1 - x0, y1 - y0).data;
+    for (var i = 0; i < d.length; i += 4 * step) {
+      total += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+      count++;
+    }
+  }
+
+  sampleStrip(0,    0,    W,    bH);       // top
+  sampleStrip(0,    H-bH, W,    H);        // bottom
+  sampleStrip(0,    bH,   bW,   H-bH);     // left  (corners excluded)
+  sampleStrip(W-bW, bH,   W,    H-bH);     // right (corners excluded)
+
+  var borderBrightness = count > 0 ? Math.round(total / count) : 0;
+
+  return {
+    mode:             borderBrightness > 90 ? 'full-frame' : 'scene',
+    borderBrightness: borderBrightness
+  };
+}
+
 // ── PERSPECTIVE WARP ──────────────────────────────────────────────────────
 
 function visionComputeHomography(src, dst) {
@@ -257,6 +297,9 @@ function visionAnalyzeImage(srcCanvas) {
   var t0 = performance.now();
   var ROTATIONS = [0, 90, 180, 270];
   var srcIsLandscape = srcCanvas.width >= srcCanvas.height;
+  var frameModeResult  = visionClassifyFrameMode(srcCanvas);
+  var frameMode        = frameModeResult.mode;             // 'full-frame' | 'scene'
+  var borderBrightness = frameModeResult.borderBrightness; // raw luminance for debug
   var best = null; // { deg, rotated, origScore, warpCanvas, warpScore, effectiveScore, origPresence, warpPresence, quad, docType }
   var rotationScores = []; // per-rotation debug data
 
@@ -299,9 +342,17 @@ function visionAnalyzeImage(srcCanvas) {
     var warpAspect = warpCanvas ? (warpCanvas.width / warpCanvas.height) : 0;
     // warpAspect must be in [1.1, 2.2]: excludes portrait warps (wrong rotation)
     // and implausibly wide shapes; covers TD1 (1.59), TD2 (1.38), TD3 (1.42) comfortably.
-    // warpQuadOk: quad found + warp has plausible landscape aspect.
-    // quadQuality is diagnostic only — not gating here.
-    var warpQuadOk = !!(quad && warpAspect >= 1.1 && warpAspect <= 2.2);
+    // warpQuadOk: mode-specific quad acceptance.
+    // Mode A (full-frame): document fills frame — trust aspect ratio only.
+    // Mode B (scene): background fills Sobel box — require quad coverage < 0.85
+    //   to reject the "whole canvas = document" artifact from background clutter.
+    var warpQuadOk;
+    if (frameMode === 'full-frame') {
+      warpQuadOk = !!(quad && warpAspect >= 1.1 && warpAspect <= 2.2);
+    } else {
+      var quadCoverage = (quad && quad.quality) ? quad.quality.coverage : 1;
+      warpQuadOk = !!(quad && warpAspect >= 1.1 && warpAspect <= 2.2 && quadCoverage < 0.85);
+    }
 
     var warpMrzBR = 0;
     if (warpPresence && warpCanvas) {
@@ -451,6 +502,8 @@ function visionAnalyzeImage(srcCanvas) {
       docType:             best.docType,
       quadFound:           !!best.quad,
       quadQuality:         best.quadQuality || null,
+      frameMode:           frameMode,
+      borderBrightness:    borderBrightness,
       srcIsLandscape:      srcIsLandscape,
       warpSelectedByThreshold: warpSelectedByThreshold,
       analyzeMs:           Math.round(t1 - t0),
