@@ -450,8 +450,6 @@
       passClass = 'primary-pass';
     } else if (phaseTag === 'phase_1' && corrected) {
       passClass = 'correction-pass';
-    } else if (phaseTag === 'phase_2') {
-      passClass = 'correction-pass'; // Phase 2 is always correction-only
     } else {
       passClass = corrected ? 'correction-pass' : 'fallback-pass';
     }
@@ -470,13 +468,6 @@
       passClass,
       attempts:        rd.attempts,
       timing:          { totalMs },
-      phase2: {
-        reached:         rd.phase2Reached,
-        tried:           rd.phase2Tried,
-        succeeded:       rd.phase2Succeeded,
-        candidateSource: rd.phase2CandidateSource,
-        wouldBeRedundant: rd.phase2WouldBeRedundant,
-      },
     };
     if (!window._dbgData) window._dbgData = [];
     window._dbgData.push(summary);
@@ -527,9 +518,8 @@
   // Phase 0: Generate crop candidates across 4 rotations using density scoring (no OCR).
   //          40 raw candidates → deduped → globally ranked → top MAX_OCR selected.
   // Phase 1: OCR each top candidate in rank order — early exit on valid MRZ.
-  //          Track best parseable MRZ as rescue candidate even when checksum fails.
-  // Phase 2: Check digit rescue — recompute expected check digits from field data.
-  //          Returns corrected: true when this path fires.
+  //          Includes early-correction rescue: if raw validation fails, immediately
+  //          tries correctCheckDigits + validateMRZ before advancing to next candidate.
   // Phase 3: NO_PARSE return with best-effort metadata.
   async function fastBatchOCR(resized, timings, ocrWorker, fileName, fileIndex) {
     const wr = ocrWorker || worker;
@@ -537,13 +527,7 @@
 
     // Initialize per-run debug accumulator
     if (window._mrzDebug) {
-      _runDbg = {
-        fileName: fileName || '', attempts: [], ocrCalls: 0, startMs: performance.now(),
-        // Phase 2 audit fields
-        phase2Reached: false, phase2Tried: false, phase2Succeeded: false,
-        phase2CandidateSource: null, phase2WouldBeRedundant: false,
-        _earlyCorrTried: new Set(),  // JSON.stringify(lines) keys tried by early correction
-      };
+      _runDbg = { fileName: fileName || '', attempts: [], ocrCalls: 0, startMs: performance.now() };
     }
 
     if (window._mrzDebug) console.log('[MRZ] batch', fileName || '', resized.width + 'x' + resized.height);
@@ -590,7 +574,7 @@
         topCandidates.map(c => 'rot' + c.deg + '/' + c.label + ' gs=' + c.globalScore.toFixed(3)).join(' | '));
     }
 
-    let globalBestScore = -1, globalBestText = '', globalBestMRZ = null, globalBestMRZSource = null;
+    let globalBestScore = -1, globalBestText = '';
     let lastDiag = null, ocrAttempt = 0;
     const allFragmentLines = []; // Phase 2.5: accumulate candidate lines across OCR attempts
     let bestProjCropData = null;  // Phase 2.75: save best proj raw crop for hi-contrast fallback
@@ -640,9 +624,6 @@
         if (longest >= 28) {
           const result = extractMRZ(clean(text));
           if (result) {
-            // First parseable result → candidate for Phase 2 rescue
-            if (!globalBestMRZ) { globalBestMRZ = result; globalBestMRZSource = p1path; }
-
             if (validateMRZ(result).valid) {
               // Raw validation pass: normalize check-digit positions and accept
               const corrLines = correctCheckDigits(result.type, result.lines);
@@ -660,12 +641,11 @@
             }
 
             // Raw validation failed — try early correction before continuing the loop.
-            // Uses the same rules as Phase 2: correctCheckDigits + validateMRZ within MAX_CORRECTIONS.
+            // Applies correctCheckDigits + validateMRZ within MAX_CORRECTIONS.
             // If it passes, return immediately and skip remaining Phase 1 attempts.
             const earlyCorrLines = correctCheckDigits(result.type, result.lines);
             const earlyCorrCount = countCheckDigitChanges(result.type, result.lines, earlyCorrLines);
             if (earlyCorrCount > 0 && earlyCorrCount <= MAX_CORRECTIONS) {
-              if (_runDbg) _runDbg._earlyCorrTried.add(JSON.stringify(result.lines));
               const earlyCorrResult = { type: result.type, lines: earlyCorrLines };
               if (validateMRZ(earlyCorrResult).valid) {
                 const earlyPath = 'early-correction@' + p1path;
@@ -683,7 +663,6 @@
             // Both raw and corrected validation failed — log miss and continue loop
             _pushAttempt({ path: p1path, longestLine: longest, chevronCount: chevs,
                            extracted: true, validated: false, reason: 'validation_failed' });
-            if (ocrScore >= globalBestScore) { globalBestMRZ = result; globalBestMRZSource = p1path; }
           } else {
             _pushAttempt({ path: p1path, longestLine: longest, chevronCount: chevs,
                            extracted: false, validated: false, reason: 'no_extract' });
@@ -696,43 +675,6 @@
         timings[key] = Math.round(performance.now() - t);
         if (window._mrzDebug) console.warn('[MRZ] rot' + deg + '/' + label, 'error:', e.message);
       }
-    }
-
-    // ── Phase 2: check digit rescue (0 OCR calls) ─────────────────────────
-    if (globalBestMRZ) {
-      if (_runDbg) {
-        _runDbg.phase2Reached = true;
-        _runDbg.phase2CandidateSource = globalBestMRZSource;
-        _runDbg.phase2WouldBeRedundant =
-          _runDbg._earlyCorrTried.has(JSON.stringify(globalBestMRZ.lines));
-      }
-      try {
-        const corrLines      = correctCheckDigits(globalBestMRZ.type, globalBestMRZ.lines);
-        const correctionCount = countCheckDigitChanges(globalBestMRZ.type, globalBestMRZ.lines, corrLines);
-        if (correctionCount > 0 && correctionCount <= MAX_CORRECTIONS) {
-          if (_runDbg) _runDbg.phase2Tried = true;
-          const corrResult = { type: globalBestMRZ.type, lines: corrLines };
-          if (validateMRZ(corrResult).valid) {
-            if (_runDbg) _runDbg.phase2Succeeded = true;
-            if (window._mrzDebug) console.log('[MRZ] phase_2 safety-net success',
-              'source:', globalBestMRZSource, 'redundant:', _runDbg && _runDbg.phase2WouldBeRedundant);
-            const longest = globalBestText ? longestOCRLine(globalBestText) : 0;
-            const chevs2  = countChevrons(globalBestText || '');
-            _pushAttempt({ path: 'checkdigit-corrected', longestLine: longest, chevronCount: chevs2,
-                           extracted: true, validated: true, reason: 'accepted' });
-            return _finalizeRun({
-              extracted: corrResult, diag: lastDiag, attempts: ocrAttempt,
-              longestLine: longest, chevronCount: chevs2,
-              rawOcrText: globalBestText, selectedBand: 'checkdigit-corrected',
-              corrected: true, correctionCount,
-            }, 'phase_2');
-          }
-        } else if (window._mrzDebug && _runDbg && _runDbg.phase2Reached) {
-          console.log('[MRZ] phase_2 reached but no better candidate',
-            'corrCount:', correctionCount, 'source:', globalBestMRZSource,
-            'redundant:', _runDbg.phase2WouldBeRedundant);
-        }
-      } catch (_) {}
     }
 
     // Shared stats for Phase 2.5 and Phase 3
