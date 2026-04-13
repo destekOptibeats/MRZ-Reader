@@ -307,7 +307,7 @@ async function runAllTests() {
     }
 
     let outcome, subtype = null, diffs = [], timingMs, timingsDetail = null, meta = null;
-    let dbgPathClass = null, dbgP275 = null, dbgP295 = null;
+    let dbgPathClass = null, dbgP295 = null;
 
     if (!file) {
       outcome = 'SKIPPED';
@@ -316,7 +316,8 @@ async function runAllTests() {
       const t0 = performance.now();
 
       // Snapshot _dbgData length before this run so we can find the new entry afterward
-      const dbgIdxBefore = (window._dbgData && window._mrzDebug) ? window._dbgData.length : -1;
+      if (window._mrzDebug) window._dbgData = window._dbgData || [];
+      const dbgIdxBefore = window._mrzDebug ? window._dbgData.length : -1;
 
       let pipelineResult;
       try {
@@ -331,13 +332,12 @@ async function runAllTests() {
       timingsDetail = { totalTime: timingMs, ocrTime, preprocessingTime, raw: timings };
       meta = pipelineResult && pipelineResult.meta ? pipelineResult.meta : null;
 
-      // Pull pathClass / p275 / p295 from the _dbgData entry written by _finalizeRun
+      // Pull pathClass / p295 from the _dbgData entry written by _finalizeRun
       if (window._mrzDebug && dbgIdxBefore >= 0 &&
           window._dbgData && window._dbgData.length > dbgIdxBefore) {
         const dbgEntry = window._dbgData[window._dbgData.length - 1];
-        dbgPathClass = dbgEntry.pathClass  || null;
-        dbgP275      = dbgEntry.p275       || null;
-        dbgP295      = dbgEntry.p295       || null;
+        dbgPathClass = dbgEntry.pathClass || null;
+        dbgP295      = dbgEntry.p295      || null;
       }
 
       const cmp = compareCase(pipelineResult, c);
@@ -349,7 +349,6 @@ async function runAllTests() {
     const resultEntry = { id: c.id, outcome, subtype, diffs, timingMs, timings: timingsDetail, meta };
     if (window._mrzDebug && dbgPathClass !== null) {
       resultEntry.pathClass = dbgPathClass;
-      resultEntry.p275      = dbgP275;
       resultEntry.p295      = dbgP295;
     }
     results.push(resultEntry);
@@ -390,14 +389,13 @@ function exportJSON() {
   let aggregate = null;
   if (results.some(r => r.pathClass !== undefined)) {
     const pathClass = { primary: 0, early_correction: 0, cheap_fallback: 0,
-                        late_fallback: 0, debt_fallback: 0, no_parse: 0 };
-    let p275Reached = 0, p275Won = 0, p295Reached = 0, p295Won = 0;
+                        debt_fallback: 0, no_parse: 0 };
+    let p295Reached = 0, p295Won = 0;
     for (const r of results) {
       if (r.pathClass) pathClass[r.pathClass] = (pathClass[r.pathClass] || 0) + 1;
-      if (r.p275) { if (r.p275.reached) p275Reached++; if (r.p275.won) p275Won++; }
       if (r.p295) { if (r.p295.reached) p295Reached++; if (r.p295.won) p295Won++; }
     }
-    aggregate = { pathClass, p275Reached, p275Won, p295Reached, p295Won };
+    aggregate = { pathClass, p295Reached, p295Won };
   }
 
   const summary = { ...counts, total: results.length };

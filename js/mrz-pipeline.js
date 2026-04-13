@@ -116,56 +116,6 @@
     return c;
   }
 
-  // Hi-contrast variant: contrast-stretch THEN Otsu (no 140 floor).
-  // Used as a fallback preprocessing path for images where standard Otsu
-  // binarization gives poor results (low-contrast MRZ zones, blurry text).
-  function hiContrastPreprocess(srcCanvas) {
-    const sw = srcCanvas.width, sh = srcCanvas.height;
-    if (!sw || !sh) return srcCanvas;
-
-    const c = document.createElement('canvas');
-    c.width = sw; c.height = sh;
-    const ctx = c.getContext('2d');
-    ctx.drawImage(srcCanvas, 0, 0, sw, sh, 0, 0, sw, sh);
-
-    const imgData = ctx.getImageData(0, 0, sw, sh);
-    const data = imgData.data;
-
-    // 1. Grayscale + find actual pixel range for contrast stretch
-    const gray = new Uint8Array(sw * sh);
-    let minV = 255, maxV = 0;
-    for (let i = 0, j = 0; i < data.length; i += 4, j++) {
-      const g = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
-      gray[j] = g;
-      if (g < minV) minV = g;
-      if (g > maxV) maxV = g;
-    }
-
-    // 2. Contrast stretch: map [minV, maxV] → [0, 255] (uses full dynamic range)
-    const range = maxV - minV || 1;
-    for (let j = 0; j < gray.length; j++) {
-      gray[j] = Math.round((gray[j] - minV) * 255 / range);
-    }
-
-    // 3. Otsu threshold on stretched image — NO 140 floor, computed freely
-    const thresh = computeOtsuThreshold(gray);
-
-    // 4. Inversion detection (same logic as batchPreprocessMRZ)
-    let darkCount = 0;
-    for (let j = 0; j < gray.length; j++) if (gray[j] < thresh) darkCount++;
-    const inverted = (darkCount / gray.length) > 0.65;
-
-    // 5. Binarize
-    for (let i = 0, j = 0; i < data.length; i += 4, j++) {
-      const isDark = inverted ? (gray[j] >= thresh) : (gray[j] < thresh);
-      const val = isDark ? 0 : 255;
-      data[i] = data[i + 1] = data[i + 2] = val;
-      data[i + 3] = 255;
-    }
-    ctx.putImageData(imgData, 0, 0);
-    return c;
-  }
-
   // ── HORIZONTAL DENSITY PROJECTION ────────────────────────────────────────
 
   // Analyse a binarised canvas: find dense text bands near the bottom.
@@ -464,12 +414,8 @@
       pathClass = 'primary';
     } else if (phaseTag === 'phase_2.5') {
       pathClass = 'cheap_fallback';
-    } else if (phaseTag === 'phase_2.75') {
-      pathClass = 'late_fallback';
-    } else if (phaseTag === 'phase_2.95' && selBand.includes('bot40')) {
-      pathClass = 'debt_fallback';
     } else if (phaseTag === 'phase_2.95') {
-      pathClass = 'late_fallback';
+      pathClass = 'debt_fallback';
     } else {
       pathClass = 'no_parse';
     }
@@ -489,8 +435,6 @@
       pathClass,
       attempts:        rd.attempts,
       timing:          { totalMs },
-      p275: { reached: rd.p275Reached, extracted: rd.p275Extracted,
-              validated: rd.p275Validated, won: rd.p275Won },
       p295: { reached: rd.p295Reached, ocrAttempts: rd.p295OcrAttempts,
               won: rd.p295Won, wonVia: rd.p295WonVia, winLabel: rd.p295WinLabel },
     };
@@ -554,9 +498,7 @@
     if (window._mrzDebug) {
       _runDbg = {
         fileName: fileName || '', attempts: [], ocrCalls: 0, startMs: performance.now(),
-        // Phase 2.75 audit
-        p275Reached: false, p275Extracted: false, p275Validated: false, p275Won: false,
-        // Phase 2.95 audit
+        // Debt rescue (Phase 2.95) audit
         p295Reached: false, p295OcrAttempts: 0, p295Won: false, p295WonVia: null, p295WinLabel: null,
       };
     }
@@ -608,7 +550,6 @@
     let globalBestScore = -1, globalBestText = '';
     let lastDiag = null, ocrAttempt = 0;
     const allFragmentLines = []; // Phase 2.5: accumulate candidate lines across OCR attempts
-    let bestProjCropData = null;  // Phase 2.75: save best proj raw crop for hi-contrast fallback
 
     // ── Phase 1: OCR top candidates in rank order ─────────────────────────
     for (const { deg, rotated, y: cropY, h: cropH, label } of topCandidates) {
@@ -617,9 +558,6 @@
       crop.width  = Math.max(1, rotated.width - 2 * padW);
       crop.height = Math.max(1, cropH);
       crop.getContext('2d').drawImage(rotated, padW, cropY, crop.width, cropH, 0, 0, crop.width, cropH);
-
-      // Save first proj crop (raw, before preprocessing) for Phase 2.75 hi-contrast fallback
-      if (label === 'proj' && !bestProjCropData) bestProjCropData = { crop, deg };
 
       const ocrIn = batchUpscaleIfNeeded(batchPreprocessMRZ(crop));
       if (ocrIn.width <= 100 || ocrIn.height <= 100) continue;
@@ -793,46 +731,10 @@
       } catch (_) {}
     }
 
-    // ── Phase 2.75: proj-hicontrast (1 extra OCR call, only on full failure) ─
-    // Applies contrast-stretch + free-Otsu binarization to the best proj crop.
-    // Different from standard batchPreprocessMRZ (no 140 threshold floor) so it
-    // can recover MRZ zones that the standard path over-thresholds or under-exposes.
-    if (bestProjCropData) {
-      try {
-        const hcCanvas = hiContrastPreprocess(bestProjCropData.crop);
-        const hiOcrIn = batchUpscaleIfNeeded(hcCanvas);
-        if (hiOcrIn.width > 100 && hiOcrIn.height > 100) {
-          if (_runDbg) _runDbg.p275Reached = true;
-          ocrAttempt++;
-          if (_runDbg) _runDbg.ocrCalls++;
-          const { data: { text: hiText } } = await wr.recognize(hiOcrIn);
-
-          const hiLongest  = longestOCRLine(hiText);
-          const hiChevrons = countChevrons(hiText);
-
-          // Track intermediate extraction quality for audit (debug only, no behavior change)
-          if (_runDbg) {
-            const hiRaw = extractMRZ(clean(hiText));
-            _runDbg.p275Extracted = !!hiRaw;
-            if (hiRaw) _runDbg.p275Validated = validateMRZ(hiRaw).valid;
-          }
-
-          const hiHit = tryMRZ(hiText, 'proj-hicontrast', { diag: lastDiag, attempts: ocrAttempt,
-                                                             longestLine: hiLongest, chevronCount: hiChevrons });
-          if (hiHit) {
-            if (_runDbg) _runDbg.p275Won = true;
-            return _finalizeRun(hiHit, 'phase_2.75');
-          }
-        }
-      } catch (_) {}
-    }
-
-    // ── Phase 2.95: adaptive geometric bottom-crop safety net ────────────
-    // All prior phases failed. The density scorer often produces full-image crops
-    // when the MRZ zone has low density (OCR-B '<' fillers). This phase bypasses
-    // the scorer entirely, cutting a geometric bottom band from the stored rotated
-    // canvas for each rotation. Adaptive: starts from the density scorer's top pick
-    // (bestDeg), then tries +90° and +180° offsets with progressively deeper bands.
+    // ── Phase 2.95: debt rescue — geometric bottom-crop (img_1914-style) ──────
+    // All prior phases failed. Bypasses the density scorer entirely; cuts a
+    // geometric bottom band from each rotation's stored canvas. Audit-confirmed
+    // debt-only path: only img_1914 depends on this phase in the regression set.
     // Max 3 extra OCR calls.
     {
       const bestDeg = topCandidates[0]?.deg ?? 0;   // density scorer's top pick
@@ -845,7 +747,7 @@
       let p295count = 0;
 
       if (_runDbg) _runDbg.p295Reached = true;
-      if (window._mrzDebug) console.log('[P295] start bestDeg=' + bestDeg + ' file=' + (fileName || '?'));
+      if (window._mrzDebug) console.log('[P295/debt-rescue] start bestDeg=' + bestDeg + ' file=' + (fileName || '?'));
 
       for (const { deg: fallbackDeg, frac } of PHASE295_ATTEMPTS) {
         if (p295count >= MAX_P295_CALLS) break;

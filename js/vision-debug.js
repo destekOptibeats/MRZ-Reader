@@ -532,6 +532,160 @@ function visionCropToContent(canvas) {
   return out;
 }
 
+// ── TEXTURE-BASED DOCUMENT DETECTOR ──────────────────────────────────────────
+// Fallback for scene images where Otsu bright-region and contour detectors both
+// fail. Detects the document as the largest "smooth + bright" region — exploiting
+// the fact that card surfaces (smooth plastic) have much lower local variance than
+// textured backgrounds (wood grain, car interiors).
+
+function visionDetectDocumentByTexture(canvas) {
+  var W = canvas.width, H = canvas.height;
+
+  // ── Downsample to 25% ─────────────────────────────────────────────────────
+  var SCALE = 0.25;
+  var sw = Math.max(4, Math.round(W * SCALE));
+  var sh = Math.max(4, Math.round(H * SCALE));
+  var sc = document.createElement('canvas');
+  sc.width = sw; sc.height = sh;
+  sc.getContext('2d').drawImage(canvas, 0, 0, sw, sh);
+  var sd = sc.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, sw, sh).data;
+
+  var lum = new Uint8Array(sw * sh);
+  for (var i = 0; i < sw * sh; i++) {
+    lum[i] = Math.round(0.299 * sd[i*4] + 0.587 * sd[i*4+1] + 0.114 * sd[i*4+2]);
+  }
+
+  // ── Grid cell stats (8×8 pixel patches at 25% scale = 32×32 at full res) ──
+  var CELL = 8;
+  var gw = Math.floor(sw / CELL);
+  var gh = Math.floor(sh / CELL);
+  if (gw < 3 || gh < 3) return null;
+
+  var cellMean = new Float32Array(gw * gh);
+  var cellStd  = new Float32Array(gw * gh);
+
+  for (var gy = 0; gy < gh; gy++) {
+    for (var gx = 0; gx < gw; gx++) {
+      var s = 0, s2 = 0, n = 0;
+      for (var cy = 0; cy < CELL; cy++) {
+        for (var cx = 0; cx < CELL; cx++) {
+          var px = gx * CELL + cx, py = gy * CELL + cy;
+          if (px >= sw || py >= sh) continue;
+          var v = lum[py * sw + px];
+          s += v; s2 += v * v; n++;
+        }
+      }
+      var m = n > 0 ? s / n : 0;
+      cellMean[gy * gw + gx] = m;
+      cellStd[gy * gw + gx]  = n > 0 ? Math.sqrt(Math.max(0, s2 / n - m * m)) : 0;
+    }
+  }
+
+  // ── Adaptive thresholds ───────────────────────────────────────────────────
+  var sortedMeans = Array.from(cellMean).sort(function(a, b) { return a - b; });
+  var sortedStds  = Array.from(cellStd).sort(function(a, b) { return a - b; });
+  var brightThresh = Math.max(150, sortedMeans[Math.floor(sortedMeans.length * 0.65)]);
+  var smoothThresh = Math.max(8, Math.min(35, sortedStds[Math.floor(sortedStds.length * 0.40)]));
+
+  // ── Mark card-like cells (bright AND smooth) ──────────────────────────────
+  var cardCell = new Uint8Array(gw * gh);
+  for (var i = 0; i < gw * gh; i++) {
+    if (cellMean[i] > brightThresh && cellStd[i] < smoothThresh) cardCell[i] = 1;
+  }
+
+  // ── Largest connected cluster of card-like cells (4-connected BFS) ────────
+  var visited = new Uint8Array(gw * gh);
+  var bestMinGx = gw, bestMinGy = gh, bestMaxGx = 0, bestMaxGy = 0, bestSize = 0;
+
+  for (var seed = 0; seed < gw * gh; seed++) {
+    if (!cardCell[seed] || visited[seed]) continue;
+    visited[seed] = 1;
+    var stack = [seed], cells = [seed];
+    while (stack.length > 0) {
+      var ci = stack.pop();
+      var ciy = (ci / gw) | 0, cix = ci % gw;
+      var nbrs4 = [ci - gw, ci + gw];
+      if (cix > 0)      nbrs4.push(ci - 1);
+      if (cix < gw - 1) nbrs4.push(ci + 1);
+      for (var ni = 0; ni < nbrs4.length; ni++) {
+        var nci = nbrs4[ni];
+        if (nci < 0 || nci >= gw * gh) continue;
+        if (cardCell[nci] && !visited[nci]) {
+          visited[nci] = 1; stack.push(nci); cells.push(nci);
+        }
+      }
+    }
+    if (cells.length > bestSize) {
+      bestSize = cells.length;
+      bestMinGx = gw; bestMinGy = gh; bestMaxGx = 0; bestMaxGy = 0;
+      for (var k = 0; k < cells.length; k++) {
+        var kidx = cells[k];
+        var kiy = (kidx / gw) | 0, kix = kidx % gw;
+        if (kix < bestMinGx) bestMinGx = kix; if (kix > bestMaxGx) bestMaxGx = kix;
+        if (kiy < bestMinGy) bestMinGy = kiy; if (kiy > bestMaxGy) bestMaxGy = kiy;
+      }
+    }
+  }
+
+  if (bestSize < 4) return null;
+
+  // ── Scale cluster bbox to full resolution + validate ─────────────────────
+  var invS = 1.0 / SCALE;
+  var bMinX = bestMinGx * CELL * invS;
+  var bMinY = bestMinGy * CELL * invS;
+  var bMaxX = (bestMaxGx + 1) * CELL * invS;
+  var bMaxY = (bestMaxGy + 1) * CELL * invS;
+  var bW = bMaxX - bMinX, bH = bMaxY - bMinY;
+  var aspect   = bW / Math.max(bH, 1);
+  var coverage = (bW * bH) / (W * H);
+
+  if (bW < W * 0.35 || bH < H * 0.35) return null; // too small to be a document
+  if (aspect < 1.0 || aspect > 2.8)   return null;
+  if (coverage < 0.05 || coverage > 0.82) return null;
+
+  // ── Sobel corner refinement within the detected bbox + 5% padding ─────────
+  // Same pattern as visionDetectSceneDocumentQuad (Sobel edges → quadrant extrema).
+  var ctx2 = canvas.getContext('2d', { willReadFrequently: true });
+  var dFull = ctx2.getImageData(0, 0, W, H).data;
+  var gray = new Uint8Array(W * H);
+  for (var i = 0; i < W * H; i++) {
+    gray[i] = Math.round(0.299 * dFull[i*4] + 0.587 * dFull[i*4+1] + 0.114 * dFull[i*4+2]);
+  }
+
+  var edge = new Uint8Array(W * H);
+  for (var y = 1; y < H - 1; y++) {
+    for (var x = 1; x < W - 1; x++) {
+      var gxs = -gray[(y-1)*W+(x-1)] + gray[(y-1)*W+(x+1)]
+                - 2*gray[y*W+(x-1)]  + 2*gray[y*W+(x+1)]
+                - gray[(y+1)*W+(x-1)] + gray[(y+1)*W+(x+1)];
+      var gys = -gray[(y-1)*W+(x-1)] - 2*gray[(y-1)*W+x] - gray[(y-1)*W+(x+1)]
+                + gray[(y+1)*W+(x-1)] + 2*gray[(y+1)*W+x] + gray[(y+1)*W+(x+1)];
+      edge[y*W+x] = Math.sqrt(gxs*gxs + gys*gys) > 30 ? 255 : 0;
+    }
+  }
+
+  var pad = Math.round(Math.max(W, H) * 0.05);
+  var rx0 = Math.max(0, Math.round(bMinX) - pad), ry0 = Math.max(0, Math.round(bMinY) - pad);
+  var rx1 = Math.min(W, Math.round(bMaxX) + pad), ry1 = Math.min(H, Math.round(bMaxY) + pad);
+  var rcx = (rx0 + rx1) / 2, rcy = (ry0 + ry1) / 2;
+
+  var tl = {x: rx1, y: ry1}, tr = {x: rx0, y: ry1};
+  var bl = {x: rx1, y: ry0}, br = {x: rx0, y: ry0};
+
+  for (var y = ry0; y < ry1; y++) {
+    for (var x = rx0; x < rx1; x++) {
+      if (!edge[y*W+x]) continue;
+      if (x <= rcx && y <= rcy) { if (x + y < tl.x + tl.y) { tl.x = x; tl.y = y; } }
+      else if (x > rcx && y <= rcy) { if (-x + y < -tr.x + tr.y) { tr.x = x; tr.y = y; } }
+      else if (x <= rcx && y > rcy) { if (x - y < bl.x - bl.y) { bl.x = x; bl.y = y; } }
+      else { if (-x - y < -br.x - br.y) { br.x = x; br.y = y; } }
+    }
+  }
+
+  var quality = computeQuadQuality([tl, tr, br, bl], W, H);
+  return { corners: [tl, tr, br, bl], quality: quality };
+}
+
 // ── PERSPECTIVE WARP ──────────────────────────────────────────────────────
 
 function visionComputeHomography(src, dst) {
@@ -661,6 +815,7 @@ function visionAnalyzeImage(srcCanvas) {
         // no clear luminance contrast), try contour-based detector which finds compact
         // edge-connected components (works well for card on dark background).
         if (!quad) quad = visionDetectDocumentQuad(rotated);
+        if (!quad) quad = visionDetectDocumentByTexture(rotated); // texture fallback
       } else {
         quad = visionDetectDocumentQuad(rotated);
       }
