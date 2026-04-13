@@ -82,7 +82,78 @@ function visionDetectDocumentQuad(canvas) {
       }
     }
   }
-  return { corners: [tl, tr, br, bl] };
+  var quality = computeQuadQuality([tl, tr, br, bl], w, h);
+  if (!quality.isValid) return null;
+  return { corners: [tl, tr, br, bl], quality: quality };
+}
+
+// ── QUAD QUALITY VALIDATOR ────────────────────────────────────────────────
+// Scores how document-like the detected corners are.
+// A bad quad is worse than no quad — reject below threshold 0.55.
+
+function computeQuadQuality(corners, W, H) {
+  var tl = corners[0], tr = corners[1], br = corners[2], bl = corners[3];
+
+  // ── Aspect score ─────────────────────────────────────────────────────────
+  var wTop   = Math.hypot(tr.x - tl.x, tr.y - tl.y);
+  var wBot   = Math.hypot(br.x - bl.x, br.y - bl.y);
+  var hLeft  = Math.hypot(bl.x - tl.x, bl.y - tl.y);
+  var hRight = Math.hypot(br.x - tr.x, br.y - tr.y);
+  var avgW   = (wTop + wBot) / 2;
+  var avgH   = (hLeft + hRight) / 2;
+  var aspect = avgW / Math.max(avgH, 1);
+  // Peak at ~1.65 (midpoint of TD1/TD2/TD3), falls to 0 at edges of [1.1, 2.2]
+  var aspectScore = (aspect >= 1.1 && aspect <= 2.2)
+    ? 1 - Math.abs(aspect - 1.65) / 0.55
+    : 0;
+  aspectScore = Math.max(0, Math.min(1, aspectScore));
+
+  // ── Coverage score ────────────────────────────────────────────────────────
+  // Shoelace area of the quad vs canvas area. Valid range: [0.15, 0.92]
+  var area = Math.abs(
+    (tl.x*(tr.y - bl.y) + tr.x*(br.y - tl.y) +
+     br.x*(bl.y - tr.y) + bl.x*(tl.y - br.y)) / 2
+  );
+  var coverage = area / (W * H);
+  var coverageScore = (coverage >= 0.15 && coverage <= 0.92)
+    ? 1 - Math.abs(coverage - 0.50) / 0.42
+    : 0;
+  coverageScore = Math.max(0, Math.min(1, coverageScore));
+
+  // ── Rectangularity score ──────────────────────────────────────────────────
+  // Opposite sides parallel (similar length) + corner angle near 90°
+  var wSymmetry = 1 - Math.min(1, Math.abs(wTop - wBot) / Math.max(avgW, 1));
+  var hSymmetry = 1 - Math.min(1, Math.abs(hLeft - hRight) / Math.max(avgH, 1));
+  var vRight = { x: tr.x - tl.x, y: tr.y - tl.y };
+  var vDown  = { x: bl.x - tl.x, y: bl.y - tl.y };
+  var dot = vRight.x*vDown.x + vRight.y*vDown.y;
+  var lenR = Math.hypot(vRight.x, vRight.y), lenD = Math.hypot(vDown.x, vDown.y);
+  var cosAngle = (lenR > 0 && lenD > 0) ? dot / (lenR * lenD) : 1;
+  // cos≈0 → ~90° → good; cos≈1 → parallel → bad
+  var angleScore = 1 - Math.min(1, Math.abs(cosAngle) / 0.5);
+  var rectangularityScore = (wSymmetry + hSymmetry + angleScore) / 3;
+
+  // ── Edge proximity check ──────────────────────────────────────────────────
+  // >2 corners hugging the image border → the "quad" is just the image frame
+  var margin = 0.03;
+  var nearEdge = [tl, tr, br, bl].filter(function(c) {
+    return c.x < W * margin || c.x > W * (1 - margin) ||
+           c.y < H * margin || c.y > H * (1 - margin);
+  }).length;
+  var edgePenalty = nearEdge > 2 ? 0 : 1;
+
+  var score = (aspectScore + coverageScore + rectangularityScore) / 3 * edgePenalty;
+
+  return {
+    aspect:         Math.round(aspect * 100) / 100,
+    coverage:       Math.round(coverage * 100) / 100,
+    aspectScore:    Math.round(aspectScore * 100) / 100,
+    coverageScore:  Math.round(coverageScore * 100) / 100,
+    rectangularity: Math.round(rectangularityScore * 100) / 100,
+    edgePenalty:    edgePenalty,
+    score:          Math.round(score * 100) / 100,
+    isValid:        score >= 0.55
+  };
 }
 
 // ── PERSPECTIVE WARP ──────────────────────────────────────────────────────
@@ -226,7 +297,7 @@ function visionAnalyzeImage(srcCanvas) {
     var warpAspect = warpCanvas ? (warpCanvas.width / warpCanvas.height) : 0;
     // warpAspect must be in [1.1, 2.2]: excludes portrait warps (wrong rotation)
     // and implausibly wide shapes; covers TD1 (1.59), TD2 (1.38), TD3 (1.42) comfortably.
-    var warpQuadOk = !!(quad && warpAspect >= 1.1 && warpAspect <= 2.2);
+    var warpQuadOk = !!(quad && quad.quality && quad.quality.isValid && warpAspect >= 1.1 && warpAspect <= 2.2);
 
     var warpMrzBR = 0;
     if (warpPresence && warpCanvas) {
@@ -262,13 +333,15 @@ function visionAnalyzeImage(srcCanvas) {
       warpMrzBR:      Math.round(warpMrzBR * 100) / 100,
       origMrzBR:      Math.round(origMrzBR * 100) / 100,
       tier:           tier,
-      quadFound:      !!quad
+      quadFound:      !!quad,
+      quadQuality:    quad ? quad.quality : null
     });
 
     if (!best || effectiveScore > best.effectiveScore) {
       best = { deg, rotated, binary, origPresence, origScore, quad, docType,
                warpCanvas, warpBinary, warpPresence, warpScore, effectiveScore,
-               warpMrzBR: warpMrzBR, origMrzBR: origMrzBR, tier: tier };
+               warpMrzBR: warpMrzBR, origMrzBR: origMrzBR, tier: tier,
+               quadQuality: quad ? quad.quality : null };
     }
   }
 
@@ -373,6 +446,7 @@ function visionAnalyzeImage(srcCanvas) {
       mrzBox:              { y: mrzCropY, h: mrzCropH },
       docType:             best.docType,
       quadFound:           !!best.quad,
+      quadQuality:         best.quadQuality || null,
       srcIsLandscape:      srcIsLandscape,
       warpSelectedByThreshold: warpSelectedByThreshold,
       analyzeMs:           Math.round(t1 - t0),
