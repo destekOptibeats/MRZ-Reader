@@ -453,17 +453,14 @@ function visionAnalyzeImage(srcCanvas) {
     var warpAspect = warpCanvas ? (warpCanvas.width / warpCanvas.height) : 0;
     // warpAspect must be in [1.1, 2.2]: excludes portrait warps (wrong rotation)
     // and implausibly wide shapes; covers TD1 (1.59), TD2 (1.38), TD3 (1.42) comfortably.
-    // warpQuadOk: mode-specific quad acceptance.
-    // Mode A (full-frame): document fills frame — trust aspect ratio only.
-    // Mode B (scene): background fills Sobel box — require quad coverage < 0.85
-    //   to reject the "whole canvas = document" artifact from background clutter.
-    var warpQuadOk;
-    if (frameMode === 'full-frame') {
-      warpQuadOk = !!(quad && warpAspect >= 1.1 && warpAspect <= 2.2);
-    } else {
-      var quadCoverage = (quad && quad.quality) ? quad.quality.coverage : 1;
-      warpQuadOk = !!(quad && warpAspect >= 1.1 && warpAspect <= 2.2 && quadCoverage < 0.90);
-    }
+    // warpQuadOk: quad found + warp has plausible landscape aspect.
+    // Both modes use the same check — the detectors already gate on coverage:
+    //   full-frame → visionDetectDocumentQuad (aspect-ratio gated)
+    //   scene      → visionDetectSceneDocumentQuad (bright-bbox coverage < 0.90 gated)
+    // Do NOT re-check quad.quality.coverage here — shoelace area of Sobel-refined
+    // corners is larger than the bright-region bbox (due to ±5% padding) and would
+    // incorrectly reject valid close-up scene detections.
+    var warpQuadOk = !!(quad && warpAspect >= 1.1 && warpAspect <= 2.2);
 
     var warpMrzBR = 0;
     if (warpPresence && warpCanvas) {
