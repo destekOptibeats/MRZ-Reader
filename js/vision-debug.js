@@ -581,67 +581,62 @@ function visionDetectDocumentByTexture(canvas) {
     }
   }
 
-  // ── Adaptive thresholds ───────────────────────────────────────────────────
-  var sortedMeans = Array.from(cellMean).sort(function(a, b) { return a - b; });
-  var sortedStds  = Array.from(cellStd).sort(function(a, b) { return a - b; });
-  var brightThresh = Math.max(150, sortedMeans[Math.floor(sortedMeans.length * 0.65)]);
-  var smoothThresh = Math.max(8, Math.min(35, sortedStds[Math.floor(sortedStds.length * 0.40)]));
-
-  // ── Mark card-like cells (bright AND smooth) ──────────────────────────────
-  var cardCell = new Uint8Array(gw * gh);
-  for (var i = 0; i < gw * gh; i++) {
-    if (cellMean[i] > brightThresh && cellStd[i] < smoothThresh) cardCell[i] = 1;
+  // ── 2D prefix sums for O(1) window queries ────────────────────────────────
+  var GW1 = gw + 1;
+  var sumM = new Float64Array(GW1 * (gh + 1));
+  var sumS = new Float64Array(GW1 * (gh + 1));
+  for (var gy = 0; gy < gh; gy++) {
+    for (var gx = 0; gx < gw; gx++) {
+      var ci = gy * gw + gx;
+      sumM[(gy+1)*GW1+(gx+1)] = cellMean[ci] + sumM[gy*GW1+(gx+1)] + sumM[(gy+1)*GW1+gx] - sumM[gy*GW1+gx];
+      sumS[(gy+1)*GW1+(gx+1)] = cellStd[ci]  + sumS[gy*GW1+(gx+1)] + sumS[(gy+1)*GW1+gx] - sumS[gy*GW1+gx];
+    }
+  }
+  function txWinScore(x0, y0, x1, y1) {
+    var n = (x1 - x0) * (y1 - y0);
+    if (n <= 0) return -1;
+    var m = (sumM[y1*GW1+x1] - sumM[y0*GW1+x1] - sumM[y1*GW1+x0] + sumM[y0*GW1+x0]) / n;
+    var s = (sumS[y1*GW1+x1] - sumS[y0*GW1+x1] - sumS[y1*GW1+x0] + sumS[y0*GW1+x0]) / n;
+    return m - 0.8 * s; // bright + smooth → high score
   }
 
-  // ── Largest connected cluster of card-like cells (4-connected BFS) ────────
-  var visited = new Uint8Array(gw * gh);
-  var bestMinGx = gw, bestMinGy = gh, bestMaxGx = 0, bestMaxGy = 0, bestSize = 0;
+  // ── Slide landscape windows at TD1 (1.59) and TD2 (1.38) aspect ratios ────
+  // Window heights: 6 to 20 grid cells. Width = round(height * aspect).
+  // Step size 2 for speed. Best window = highest bright-minus-smooth score.
+  var bestScore = -1, bestX0 = -1, bestY0 = 0, bestX1 = 0, bestY1 = 0;
+  var docAspects = [1.38, 1.59];
 
-  for (var seed = 0; seed < gw * gh; seed++) {
-    if (!cardCell[seed] || visited[seed]) continue;
-    visited[seed] = 1;
-    var stack = [seed], cells = [seed];
-    while (stack.length > 0) {
-      var ci = stack.pop();
-      var ciy = (ci / gw) | 0, cix = ci % gw;
-      var nbrs4 = [ci - gw, ci + gw];
-      if (cix > 0)      nbrs4.push(ci - 1);
-      if (cix < gw - 1) nbrs4.push(ci + 1);
-      for (var ni = 0; ni < nbrs4.length; ni++) {
-        var nci = nbrs4[ni];
-        if (nci < 0 || nci >= gw * gh) continue;
-        if (cardCell[nci] && !visited[nci]) {
-          visited[nci] = 1; stack.push(nci); cells.push(nci);
+  for (var ai = 0; ai < docAspects.length; ai++) {
+    var docAsp = docAspects[ai];
+    for (var wH = 12; wH <= 20; wH += 2) {
+      if (wH > gh) continue;
+      var wW = Math.round(wH * docAsp);
+      if (wW > gw || wW < 4) continue;
+      for (var gy0 = 0; gy0 + wH <= gh; gy0 += 2) {
+        for (var gx0 = 0; gx0 + wW <= gw; gx0 += 2) {
+          var sc = txWinScore(gx0, gy0, gx0 + wW, gy0 + wH);
+          if (sc > bestScore) {
+            bestScore = sc; bestX0 = gx0; bestY0 = gy0;
+            bestX1 = gx0 + wW; bestY1 = gy0 + wH;
+          }
         }
       }
     }
-    if (cells.length > bestSize) {
-      bestSize = cells.length;
-      bestMinGx = gw; bestMinGy = gh; bestMaxGx = 0; bestMaxGy = 0;
-      for (var k = 0; k < cells.length; k++) {
-        var kidx = cells[k];
-        var kiy = (kidx / gw) | 0, kix = kidx % gw;
-        if (kix < bestMinGx) bestMinGx = kix; if (kix > bestMaxGx) bestMaxGx = kix;
-        if (kiy < bestMinGy) bestMinGy = kiy; if (kiy > bestMaxGy) bestMaxGy = kiy;
-      }
-    }
   }
 
-  if (bestSize < 4) return null;
+  if (bestX0 < 0) return null;
 
-  // ── Scale cluster bbox to full resolution + validate ─────────────────────
+  // ── Scale best window to full resolution + validate ───────────────────────
   var invS = 1.0 / SCALE;
-  var bMinX = bestMinGx * CELL * invS;
-  var bMinY = bestMinGy * CELL * invS;
-  var bMaxX = (bestMaxGx + 1) * CELL * invS;
-  var bMaxY = (bestMaxGy + 1) * CELL * invS;
+  var bMinX = bestX0 * CELL * invS;
+  var bMinY = bestY0 * CELL * invS;
+  var bMaxX = bestX1 * CELL * invS;
+  var bMaxY = bestY1 * CELL * invS;
   var bW = bMaxX - bMinX, bH = bMaxY - bMinY;
-  var aspect   = bW / Math.max(bH, 1);
-  var coverage = (bW * bH) / (W * H);
 
   if (bW < W * 0.35 || bH < H * 0.35) return null; // too small to be a document
-  if (aspect < 1.0 || aspect > 2.8)   return null;
-  if (coverage < 0.05 || coverage > 0.82) return null;
+  var coverage = (bW * bH) / (W * H);
+  if (coverage > 0.82) return null;
 
   // ── Sobel corner refinement within the detected bbox + 5% padding ─────────
   // Same pattern as visionDetectSceneDocumentQuad (Sobel edges → quadrant extrema).
@@ -815,7 +810,8 @@ function visionAnalyzeImage(srcCanvas) {
         // no clear luminance contrast), try contour-based detector which finds compact
         // edge-connected components (works well for card on dark background).
         if (!quad) quad = visionDetectDocumentQuad(rotated);
-        if (!quad) quad = visionDetectDocumentByTexture(rotated); // texture fallback
+        var quadIsTextureFallback = false;
+        if (!quad) { quad = visionDetectDocumentByTexture(rotated); quadIsTextureFallback = !!quad; }
       } else {
         quad = visionDetectDocumentQuad(rotated);
       }
@@ -861,8 +857,9 @@ function visionAnalyzeImage(srcCanvas) {
     var origMrzBR = (origPresence.cropY + origPresence.cropH) / rotH;
 
     var effectiveScore;
-    if (warpQuadOk && warpMrzBR >= 0.50) {
+    if (warpQuadOk && warpMrzBR >= 0.50 && !quadIsTextureFallback) {
       // Tier 1: warp confirms document orientation + MRZ at bottom
+      // (texture-fallback quads are capped at Tier 2 to preserve priority of scene/contour warps)
       effectiveScore = 100 + (warpPresence ? warpPresence.score * 40 : 0);
     } else if (warpQuadOk) {
       // Tier 2: warp found but MRZ not confirmed at bottom
