@@ -288,18 +288,42 @@
     return kept;
   }
 
-  // Upscale small crop canvases for reliable Tesseract recognition.
-  // Very small crops (<150px) get a higher target to preserve detail in distance shots.
+  // Upscale small crop canvases for reliable Tesseract recognition, then cap
+  // total pixel count to prevent runaway OCR cost on wide landscape crops.
+  //
+  // Two-part policy (Batch 12):
+  //   1. factor = max(1, ceil(targetH / h)) — no forced 2× minimum; already-large
+  //      crops (h >= targetH) get factor=1 and are only resized if over pixel budget.
+  //   2. MAX_PIXELS cap — after upscale, proportionally scale down if output exceeds
+  //      4M pixels. This bounds OCR cost for wide crops (e.g. 5922×621 → 11844×1242
+  //      was 14.7M px; now capped to ~4M px via sqrt-scale).
+  //
+  // Very small crops (<150px) use a higher targetH (1200) to preserve fine detail.
+  const UPSCALE_MAX_PIXELS = 4_000_000;
   function batchUpscaleIfNeeded(canvas) {
     const targetH = canvas.height < 150 ? 1200 : 900;
-    if (canvas.height >= targetH) return canvas;
-    const factor = Math.max(2, Math.ceil(targetH / canvas.height));
+    const factor  = Math.max(1, Math.ceil(targetH / canvas.height));
+
+    let outW = canvas.width  * factor;
+    let outH = canvas.height * factor;
+
+    // Cap: if upscaled output exceeds pixel budget, scale both dims proportionally
+    const pxOut = outW * outH;
+    if (pxOut > UPSCALE_MAX_PIXELS) {
+      const s = Math.sqrt(UPSCALE_MAX_PIXELS / pxOut);
+      outW = Math.max(1, Math.round(outW * s));
+      outH = Math.max(1, Math.round(outH * s));
+    }
+
+    // No-op: if dimensions are unchanged, return original to avoid a canvas copy
+    if (outW === canvas.width && outH === canvas.height) return canvas;
+
     const c = document.createElement('canvas');
-    c.width = canvas.width * factor;
-    c.height = canvas.height * factor;
+    c.width  = outW;
+    c.height = outH;
     const ctx = c.getContext('2d');
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, c.width, c.height);
+    ctx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, outW, outH);
     return c;
   }
 
