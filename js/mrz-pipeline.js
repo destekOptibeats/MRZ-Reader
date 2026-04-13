@@ -739,9 +739,9 @@
     {
       const bestDeg = topCandidates[0]?.deg ?? 0;   // density scorer's top pick
       const PHASE295_ATTEMPTS = [
-        { deg: bestDeg,                frac: 0.16 },  // scorer's choice, narrow band
-        { deg: (bestDeg + 90)  % 360,  frac: 0.22 },  // +90° alternative
-        { deg: (bestDeg + 180) % 360,  frac: 0.40 },  // opposite rotation, deep band
+        { deg: (bestDeg + 180) % 360,  frac: 0.40 },  // opposite rotation, deep band (audit: only known winner)
+        { deg: bestDeg,                 frac: 0.22 },  // scorer's choice, medium band
+        { deg: (bestDeg + 90)  % 360,  frac: 0.16 },  // +90° alternative, narrow band
       ];
       const MAX_P295_CALLS = 3;
       let p295count = 0;
