@@ -627,10 +627,11 @@
         if (longest >= 28) {
           const result = extractMRZ(clean(text));
           if (result) {
-            // First parseable result → candidate for rescue
+            // First parseable result → candidate for Phase 2 rescue
             if (!globalBestMRZ) globalBestMRZ = result;
+
             if (validateMRZ(result).valid) {
-              // Normalize check-digit positions (fixes e.g. 'C' at composite check)
+              // Raw validation pass: normalize check-digit positions and accept
               const corrLines = correctCheckDigits(result.type, result.lines);
               const correctionCount = countCheckDigitChanges(result.type, result.lines, corrLines);
               const corrected = correctionCount > 0 && correctionCount <= MAX_CORRECTIONS;
@@ -644,7 +645,28 @@
                 selectedBand: p1path, corrected, correctionCount,
               }, 'phase_1');
             }
-            // Phase 1 miss: valid parse but checksum failed
+
+            // Raw validation failed — try early correction before continuing the loop.
+            // Uses the same rules as Phase 2: correctCheckDigits + validateMRZ within MAX_CORRECTIONS.
+            // If it passes, return immediately and skip remaining Phase 1 attempts.
+            const earlyCorrLines = correctCheckDigits(result.type, result.lines);
+            const earlyCorrCount = countCheckDigitChanges(result.type, result.lines, earlyCorrLines);
+            if (earlyCorrCount > 0 && earlyCorrCount <= MAX_CORRECTIONS) {
+              const earlyCorrResult = { type: result.type, lines: earlyCorrLines };
+              if (validateMRZ(earlyCorrResult).valid) {
+                const earlyPath = 'early-correction@' + p1path;
+                if (window._mrzDebug) console.log('[MRZ] early correction success', earlyPath, 'corrCount:', earlyCorrCount);
+                _pushAttempt({ path: earlyPath, longestLine: longest, chevronCount: chevs,
+                               extracted: true, validated: true, reason: 'early_correction_accepted' });
+                return _finalizeRun({
+                  extracted: earlyCorrResult, diag: diagnoseMRZ(text), attempts: ocrAttempt,
+                  longestLine: longest, chevronCount: chevs, rawOcrText: text,
+                  selectedBand: earlyPath, corrected: true, correctionCount: earlyCorrCount,
+                }, 'phase_1');
+              }
+            }
+
+            // Both raw and corrected validation failed — log miss and continue loop
             _pushAttempt({ path: p1path, longestLine: longest, chevronCount: chevs,
                            extracted: true, validated: false, reason: 'validation_failed' });
             if (ocrScore >= globalBestScore) globalBestMRZ = result;
