@@ -148,10 +148,11 @@ function visionDetectSceneDocumentQuad(canvas) {
   var aspect = quadW / Math.max(quadH, 1);
   if (aspect < 1.0 || aspect > 2.6) return null;
 
-  // Reject if bright region covers ≥ 85% of canvas — this would be a full-frame
+  // Reject if bright region covers ≥ 90% of canvas — this would be a full-frame
   // image mis-classified as scene, or a scene with near-white background.
+  // 0.90 (not 0.85) because close-up scene images can have coverage up to ~0.86.
   var coverage = (quadW * quadH) / (W * H);
-  if (coverage >= 0.85 || coverage < 0.05) return null;
+  if (coverage >= 0.90 || coverage < 0.05) return null;
 
   // ── Sobel corner refinement within the bright bounding box ────────────────
   // Compute Sobel edges and refine corners within ±pad region of the bbox.
@@ -461,7 +462,7 @@ function visionAnalyzeImage(srcCanvas) {
       warpQuadOk = !!(quad && warpAspect >= 1.1 && warpAspect <= 2.2);
     } else {
       var quadCoverage = (quad && quad.quality) ? quad.quality.coverage : 1;
-      warpQuadOk = !!(quad && warpAspect >= 1.1 && warpAspect <= 2.2 && quadCoverage < 0.85);
+      warpQuadOk = !!(quad && warpAspect >= 1.1 && warpAspect <= 2.2 && quadCoverage < 0.90);
     }
 
     var warpMrzBR = 0;
