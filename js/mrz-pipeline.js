@@ -369,45 +369,6 @@
     return c;
   }
 
-  // Rotate a canvas by an arbitrary angle (degrees) around its center.
-  // Output canvas is sized to contain the full rotated image; background is white.
-  // Used by Phase 2.9 micro-deskew search for small tilt correction (±12°).
-  function arbitraryRotateCanvas(srcCanvas, angleDeg) {
-    if (angleDeg === 0) return srcCanvas;
-    const rad = angleDeg * Math.PI / 180;
-    const cos = Math.abs(Math.cos(rad)), sin = Math.abs(Math.sin(rad));
-    const w = srcCanvas.width, h = srcCanvas.height;
-    const nw = Math.round(w * cos + h * sin);
-    const nh = Math.round(w * sin + h * cos);
-    const c = document.createElement('canvas');
-    c.width = nw; c.height = nh;
-    const ctx = c.getContext('2d');
-    ctx.fillStyle = 'white';
-    ctx.fillRect(0, 0, nw, nh);
-    ctx.translate(nw / 2, nh / 2);
-    ctx.rotate(rad);
-    ctx.drawImage(srcCanvas, -w / 2, -h / 2);
-    return c;
-  }
-
-  // Score a binarized (black-on-white) canvas for MRZ horizontal alignment
-  // using row-density variance. Higher variance = text rows are sharply separated
-  // from blank rows = better horizontal alignment. When MRZ is tilted, text smears
-  // across rows → variance drops. Used by Phase 2.9 to rank deskew angle candidates.
-  function scoreDeskewCandidate(binaryCanvas) {
-    const ctx = binaryCanvas.getContext('2d');
-    const { width: w, height: h } = binaryCanvas;
-    const data = ctx.getImageData(0, 0, w, h).data;
-    const densities = [];
-    for (let y = 0; y < h; y++) {
-      let dark = 0;
-      for (let x = 0; x < w; x++) if (data[(y * w + x) * 4] === 0) dark++;
-      densities.push(dark / w);
-    }
-    const mean = densities.reduce((a, b) => a + b, 0) / h;
-    return densities.reduce((s, d) => s + (d - mean) ** 2, 0) / h;  // variance
-  }
-
   // ── OCR SCORING HELPERS ───────────────────────────────────────────────────
 
   function longestOCRLine(text) {
@@ -620,8 +581,6 @@
     let lastDiag = null, ocrAttempt = 0;
     const allFragmentLines = []; // Phase 2.5: accumulate candidate lines across OCR attempts
     let bestProjCropData = null;  // Phase 2.75: save best proj raw crop for hi-contrast fallback
-    let hiContrastCanvas = null; // Phase 2.8:  reuse hi-contrast canvas across phases
-    const triedProjDegs = new Set(); // Phase 2.95: track proj degs tried in Phase 1
 
     // ── Phase 1: OCR top candidates in rank order ─────────────────────────
     for (const { deg, rotated, y: cropY, h: cropH, label } of topCandidates) {
@@ -633,8 +592,6 @@
 
       // Save first proj crop (raw, before preprocessing) for Phase 2.75 hi-contrast fallback
       if (label === 'proj' && !bestProjCropData) bestProjCropData = { crop, deg };
-      // Track which proj rotations are OCR'd in Phase 1 (for Phase 2.95 deduplication)
-      if (label === 'proj') triedProjDegs.add(deg);
 
       const ocrIn = batchUpscaleIfNeeded(batchPreprocessMRZ(crop));
       if (ocrIn.width <= 100 || ocrIn.height <= 100) continue;
@@ -819,8 +776,8 @@
     // can recover MRZ zones that the standard path over-thresholds or under-exposes.
     if (bestProjCropData) {
       try {
-        hiContrastCanvas = hiContrastPreprocess(bestProjCropData.crop); // save for Phase 2.8
-        const hiOcrIn = batchUpscaleIfNeeded(hiContrastCanvas);
+        const hcCanvas = hiContrastPreprocess(bestProjCropData.crop);
+        const hiOcrIn = batchUpscaleIfNeeded(hcCanvas);
         if (hiOcrIn.width > 100 && hiOcrIn.height > 100) {
           ocrAttempt++;
           if (_runDbg) _runDbg.ocrCalls++;
@@ -835,91 +792,13 @@
       } catch (_) {}
     }
 
-    // ── Phase 2.8: PSM 7 / PSM 8 targeted line fallback (≤2 extra OCR calls) ─
-    // Feeds the hi-contrast crop to Tesseract with PSM 7 (single text line),
-    // which can improve character recognition when block segmentation fails.
-    // Falls back to PSM 8 (single word) if PSM 7 also fails to find MRZ.
-    // Always restores PSM 6 (uniform block) before exiting.
-    if (hiContrastCanvas) {
-      const hiOcrIn28 = batchUpscaleIfNeeded(hiContrastCanvas);
-      // tryPsm: refactored to use tryMRZ for consistent validation + instrumentation
-      const tryPsm = async (psm) => {
-        try {
-          await wr.setParameters({ tessedit_pageseg_mode: psm });
-          ocrAttempt++;
-          if (_runDbg) _runDbg.ocrCalls++;
-          const { data: { text: psmText } } = await wr.recognize(hiOcrIn28);
-          await wr.setParameters({ tessedit_pageseg_mode: '6' }); // restore
-          const psmLongest  = longestOCRLine(psmText);
-          const psmChevrons = countChevrons(psmText);
-          return tryMRZ(psmText, 'psm' + psm, { diag: lastDiag, attempts: ocrAttempt,
-                                                 longestLine: psmLongest, chevronCount: psmChevrons });
-        } catch (_) {
-          try { await wr.setParameters({ tessedit_pageseg_mode: '6' }); } catch (_2) {}
-          return null;
-        }
-      };
-
-      if (hiOcrIn28.width > 100 && hiOcrIn28.height > 100) {
-        const r7 = await tryPsm('7');
-        if (r7) return _finalizeRun(r7, 'phase_2.8');
-        const r8 = await tryPsm('8');
-        if (r8) return _finalizeRun(r8, 'phase_2.8');
-      }
-    }
-
-    // ── Phase 2.9: micro-deskew search (≤1 extra OCR call) ──────────────
-    // Tries small rotation offsets [-12…+12]° on the raw proj crop.
-    // Scores each via row-density variance (no OCR) — higher variance means
-    // text rows are sharply separated from blank rows = better alignment.
-    // Runs 1 OCR call only if a non-0° angle beats the 0° baseline by ≥3%.
-    if (bestProjCropData) {
-      try {
-        const DESKEW_ANGLES = [0, -4, 4, -8, 8, -12, 12]; // small angles first
-        let score0 = null, bestAngleScore = -1, bestRawCanvas = null, bestAngle = 0;
-        const angleScores = {};
-
-        for (const angle of DESKEW_ANGLES) {
-          const rotated   = arbitraryRotateCanvas(bestProjCropData.crop, angle); // raw color
-          const processed = hiContrastPreprocess(rotated);                       // binary — scoring only
-          const score     = scoreDeskewCandidate(processed);
-          angleScores[angle] = score;
-          if (angle === 0) { score0 = score; continue; } // baseline, skip as candidate
-          if (score > bestAngleScore) {
-            bestAngleScore = score;
-            bestRawCanvas  = rotated;   // store RAW canvas, not processed
-            bestAngle      = angle;
-          }
-          // Early break: angle is clearly superior, no need to check wider ones
-          if (score0 !== null && score > score0 * 1.10) break;
-        }
-
-        // Only proceed if a non-zero angle meaningfully outperforms 0° baseline (≥3%)
-        // RAW canvas used for OCR → single preprocessing, no double-processing artifacts
-        if (bestRawCanvas && score0 !== null && bestAngleScore > score0 * 1.03) {
-          const deskewOcrIn = batchUpscaleIfNeeded(hiContrastPreprocess(bestRawCanvas));
-          if (deskewOcrIn.width > 80 && deskewOcrIn.height > 40) {
-            ocrAttempt++;
-            if (_runDbg) _runDbg.ocrCalls++;
-            const { data: { text: deskewText } } = await wr.recognize(deskewOcrIn);
-
-            const deskewLongest  = longestOCRLine(deskewText);
-            const deskewChevrons = countChevrons(deskewText);
-            const deskewHit = tryMRZ(deskewText, 'micro-deskew', { diag: lastDiag, attempts: ocrAttempt,
-                                                                    longestLine: deskewLongest, chevronCount: deskewChevrons });
-            if (deskewHit) return _finalizeRun(deskewHit, 'phase_2.9');
-          }
-        }
-      } catch (_) {}
-    }
-
     // ── Phase 2.95: adaptive geometric bottom-crop safety net ────────────
     // All prior phases failed. The density scorer often produces full-image crops
     // when the MRZ zone has low density (OCR-B '<' fillers). This phase bypasses
     // the scorer entirely, cutting a geometric bottom band from the stored rotated
     // canvas for each rotation. Adaptive: starts from the density scorer's top pick
     // (bestDeg), then tries +90° and +180° offsets with progressively deeper bands.
-    // Max 3 extra OCR calls; triedProjDegs is intentionally ignored here.
+    // Max 3 extra OCR calls.
     {
       const bestDeg = topCandidates[0]?.deg ?? 0;   // density scorer's top pick
       const PHASE295_ATTEMPTS = [
