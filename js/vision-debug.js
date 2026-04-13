@@ -522,8 +522,48 @@ function visionAnalyzeImage(srcCanvas) {
   var warpSelectedByThreshold = useWarp && !useWarpStrict; // true when threshold rule (not strict) decided
   var selectedWhy = useWarp ? 'warp_score_higher' : 'orig_score_higher';
 
+  // ── Post-warp canonical orientation normalization ──────────────────────────
+  // A warp passes tier scoring when MRZ is in the lower half (warpMrzBR >= 0.50).
+  // However the warp can still be visually upside-down for human viewing — the
+  // perspective transform produces landscape aspect but may flip the document 180°.
+  // Fix: if warpMrzBR < 0.50, try the warp rotated 180° and switch if that is better.
+  //
+  // This does NOT change OCR result — it only fixes the displayed document orientation.
+  var warpFlipped = false;
+  var ocrUsableRotation = best.deg;  // rotation chosen purely for OCR quality
+
+  if (useWarp && best.warpCanvas && (best.warpMrzBR === undefined || best.warpMrzBR < 0.50)) {
+    try {
+      var flipCanvas = document.createElement('canvas');
+      flipCanvas.width  = best.warpCanvas.width;
+      flipCanvas.height = best.warpCanvas.height;
+      var fc = flipCanvas.getContext('2d');
+      fc.translate(flipCanvas.width, flipCanvas.height);
+      fc.rotate(Math.PI);
+      fc.drawImage(best.warpCanvas, 0, 0);
+
+      var flipBinary   = window.MRZPipeline.batchPreprocessMRZ(flipCanvas);
+      var flipPresence = window.MRZPipeline.scoreMRZPresence(flipBinary);
+      var flipMrzBR    = (flipPresence.cropY + flipPresence.cropH) / flipCanvas.height;
+
+      if (flipMrzBR >= 0.50) {
+        best.warpCanvas   = flipCanvas;
+        best.warpPresence = flipPresence;
+        best.warpMrzBR    = flipMrzBR;
+        warpFlipped       = true;
+        selectedWhy      += '+warp_180_normalized';
+      }
+    } catch(e) {}
+  }
+
+  var canonicalRotation = best.deg + (warpFlipped ? '+flip' : '');
+  var isVisuallyUpright = useWarp
+    ? (best.warpMrzBR !== undefined && best.warpMrzBR >= 0.50)
+    : false;  // orig-path has no warp to check
+
   // Build human-readable selection reason for debug panel
   var selectionReason = 'rot=' + best.deg + '\u00b0'
+    + (warpFlipped ? '+flip' : '')
     + ' tier=' + best.tier
     + ' warpMrzBR=' + (best.warpMrzBR !== undefined ? best.warpMrzBR.toFixed(2) : '\u2014')
     + ' orig=' + best.origScore.toFixed(3)
@@ -587,7 +627,11 @@ function visionAnalyzeImage(srcCanvas) {
       mrzCrop:      mrzCrop          // MRZ strip: warp'tan bilinen konumdan, veya density-detected
     },
     meta: {
-      detectedRotation:    best.deg,
+      detectedRotation:    best.deg,          // kept for backwards compatibility
+      ocrUsableRotation:   ocrUsableRotation, // rotation selected for best OCR quality
+      canonicalRotation:   canonicalRotation, // visual rotation (may add +flip suffix)
+      isVisuallyUpright:   isVisuallyUpright, // true when warp MRZ confirmed at bottom
+      warpFlipped:         warpFlipped,       // true when warp was 180° corrected post-selection
       mrzFound:            best.effectiveScore > 0,
       sourceUsedForMrz:    useWarp ? 'warp' : 'original',
       selectedWhy:         selectedWhy,
