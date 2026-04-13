@@ -291,28 +291,32 @@
   // Upscale small crop canvases for reliable Tesseract recognition, then cap
   // total pixel count to prevent runaway OCR cost on wide landscape crops.
   //
-  // Two-part policy (Batch 12):
-  //   1. factor = max(1, ceil(targetH / h)) — no forced 2× minimum; already-large
-  //      crops (h >= targetH) get factor=1 and are only resized if over pixel budget.
-  //   2. MAX_PIXELS cap — after upscale, proportionally scale down if output exceeds
-  //      8M pixels. This bounds OCR cost for very wide crops (e.g. 5922×621 → 11844×1242
-  //      was 14.7M px; now capped to ~8M px via sqrt-scale). Cap is set at 8M rather
-  //      than 4M to preserve quality for medium-large crops like img_1780 (7.2M) and
-  //      img_1785 (6.3M) which regressed at the 4M threshold.
-  //
-  // Very small crops (<150px) use a higher targetH (1200) to preserve fine detail.
-  const UPSCALE_MAX_PIXELS = 8_000_000;
+  // Three-part policy (Batch 13):
+  //   1. Integer upscale to reach MIN_HEIGHT — ensures MRZ line clarity.
+  //      factor = max(1, ceil(MIN_HEIGHT / h)); crops already ≥ MIN_HEIGHT get factor=1.
+  //   2. Height cap at MAX_HEIGHT — bounds tall crops; prevents oversized Tesseract input.
+  //   3. Pixel cap at MAX_PIXELS — final safety net for very wide crops
+  //      (e.g. img_1775: factor=2 → 11844×1242 → height cap → 10491×1100 → pixel cap → 8729×916).
+  const MIN_HEIGHT = 800;
+  const MAX_HEIGHT = 1100;
+  const MAX_PIXELS = 8_000_000;
   function batchUpscaleIfNeeded(canvas) {
-    const targetH = canvas.height < 150 ? 1200 : 900;
-    const factor  = Math.max(1, Math.ceil(targetH / canvas.height));
-
+    // Stage 1: Integer upscale to reach MIN_HEIGHT
+    const factor = Math.max(1, Math.ceil(MIN_HEIGHT / canvas.height));
     let outW = canvas.width  * factor;
     let outH = canvas.height * factor;
 
-    // Cap: if upscaled output exceeds pixel budget, scale both dims proportionally
+    // Stage 2: Height cap — scale down proportionally if above MAX_HEIGHT
+    if (outH > MAX_HEIGHT) {
+      const s = MAX_HEIGHT / outH;
+      outW = Math.max(1, Math.round(outW * s));
+      outH = MAX_HEIGHT;
+    }
+
+    // Stage 3: Pixel cap — final safety net for very wide crops
     const pxOut = outW * outH;
-    if (pxOut > UPSCALE_MAX_PIXELS) {
-      const s = Math.sqrt(UPSCALE_MAX_PIXELS / pxOut);
+    if (pxOut > MAX_PIXELS) {
+      const s = Math.sqrt(MAX_PIXELS / pxOut);
       outW = Math.max(1, Math.round(outW * s));
       outH = Math.max(1, Math.round(outH * s));
     }
