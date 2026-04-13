@@ -219,17 +219,41 @@ function visionDetectSceneDocumentQuad(canvas) {
     }
   }
 
-  var quadW = maxX - minX, quadH = maxY - minY;
-  if (quadW < W * 0.10 || quadH < H * 0.10) return null;
+  // ── Find a valid bright bbox ─────────────────────────────────────────────
+  // Try Otsu first; if it produces a bbox that's too large or wrong aspect
+  // (e.g. warm-tan table or car interior raises all pixels), retry with
+  // progressively higher fixed thresholds to isolate only the white card.
+  var quadW = 0, quadH = 0, coverage = 0;
+  var allThresholds = [threshold, 180, 195, 210];
+  var foundGoodBbox = false;
 
-  var aspect = quadW / Math.max(quadH, 1);
-  if (aspect < 1.0 || aspect > 2.6) return null;
+  for (var ti = 0; ti < allThresholds.length; ti++) {
+    var thr = allThresholds[ti];
+    if (ti > 0) {
+      // Recompute bbox for this higher threshold
+      minX = W; minY = H; maxX = 0; maxY = 0;
+      for (var ry = 0; ry < H; ry++) {
+        for (var rx = 0; rx < W; rx++) {
+          if (gray[ry*W+rx] > thr) {
+            if (rx < minX) minX = rx; if (rx > maxX) maxX = rx;
+            if (ry < minY) minY = ry; if (ry > maxY) maxY = ry;
+          }
+        }
+      }
+      if (maxX === 0 && maxY === 0) continue; // no pixels above threshold
+    }
+    var qW = maxX - minX, qH = maxY - minY;
+    if (qW < W * 0.10 || qH < H * 0.10) continue;
+    var asp = qW / Math.max(qH, 1);
+    if (asp < 1.0 || asp > 2.6) continue;
+    var cov = (qW * qH) / (W * H);
+    if (cov >= 0.88 || cov < 0.05) continue;
+    quadW = qW; quadH = qH; coverage = cov;
+    foundGoodBbox = true;
+    break;
+  }
 
-  // Reject if bright region covers ≥ 90% of canvas — this would be a full-frame
-  // image mis-classified as scene, or a scene with near-white background.
-  // 0.90 (not 0.85) because close-up scene images can have coverage up to ~0.86.
-  var coverage = (quadW * quadH) / (W * H);
-  if (coverage >= 0.90 || coverage < 0.05) return null;
+  if (!foundGoodBbox) return null;
 
   // ── Sobel corner refinement within the bright bounding box ────────────────
   // Compute Sobel edges and refine corners within ±pad region of the bbox.
@@ -377,7 +401,7 @@ function visionClassifyFrameMode(canvas) {
   var borderBrightness = count > 0 ? Math.round(total / count) : 0;
 
   return {
-    mode:             borderBrightness > 90 ? 'full-frame' : 'scene',
+    mode:             borderBrightness > 155 ? 'full-frame' : 'scene',
     borderBrightness: borderBrightness
   };
 }
@@ -420,6 +444,87 @@ function visionTrimWarpMargins(canvas) {
   var cx1 = Math.min(W, maxX + pad), cy1 = Math.min(H, maxY + pad);
   var cW = cx1 - cx0, cH = cy1 - cy0;
   if (cW < 80 || cH < 40) return canvas; // result too small — bail
+
+  var out = document.createElement('canvas');
+  out.width = cW; out.height = cH;
+  out.getContext('2d').drawImage(canvas, cx0, cy0, cW, cH, 0, 0, cW, cH);
+  return out;
+}
+
+// ── CONTENT CROP (Otsu-based bright-region extraction) ─────────────────────
+// For scene warps with dark or light backgrounds: crops to the bright document
+// region. For full-frame images (document fills canvas): returns as-is.
+
+function visionCropToContent(canvas) {
+  var W = canvas.width, H = canvas.height;
+
+  // Downsample to 25% for fast luminance analysis
+  var SCALE = 0.25;
+  var sw = Math.max(4, Math.round(W * SCALE));
+  var sh = Math.max(4, Math.round(H * SCALE));
+  var sc = document.createElement('canvas');
+  sc.width = sw; sc.height = sh;
+  sc.getContext('2d').drawImage(canvas, 0, 0, sw, sh);
+  var sd = sc.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, sw, sh).data;
+
+  // Build luminance array + histogram
+  var lum = new Uint8Array(sw * sh);
+  var hist = new Int32Array(256);
+  for (var i = 0; i < sw * sh; i++) {
+    var l = Math.round(0.299 * sd[i*4] + 0.587 * sd[i*4+1] + 0.114 * sd[i*4+2]);
+    lum[i] = l;
+    hist[l]++;
+  }
+
+  // Otsu threshold
+  var total = sw * sh;
+  var sum = 0;
+  for (var t = 0; t < 256; t++) sum += t * hist[t];
+  var sumB = 0, wB = 0, wF = 0, maxVar = 0, thresh = 128;
+  for (var t = 0; t < 256; t++) {
+    wB += hist[t];
+    if (!wB) continue;
+    wF = total - wB;
+    if (!wF) break;
+    sumB += t * hist[t];
+    var mB = sumB / wB, mF = (sum - sumB) / wF;
+    var v = wB * wF * (mB - mF) * (mB - mF);
+    if (v > maxVar) { maxVar = v; thresh = t; }
+  }
+
+  // Bounding box of pixels above Otsu threshold
+  var xMin = sw, xMax = 0, yMin = sh, yMax = 0, brightCount = 0;
+  for (var y = 0; y < sh; y++) {
+    for (var x = 0; x < sw; x++) {
+      if (lum[y * sw + x] > thresh) {
+        brightCount++;
+        if (x < xMin) xMin = x;
+        if (x > xMax) xMax = x;
+        if (y < yMin) yMin = y;
+        if (y > yMax) yMax = y;
+      }
+    }
+  }
+
+  var brightRatio = brightCount / total;
+
+  // No-op cases: bright region fills canvas, or too small to be meaningful
+  if (brightRatio >= 0.85 || brightRatio < 0.10) return canvas;
+
+  // Scale bbox back to full resolution + 2% padding
+  var PAD = 0.02;
+  var invS = 1.0 / SCALE;
+  var cx0 = Math.max(0, Math.round(xMin * invS - W * PAD));
+  var cy0 = Math.max(0, Math.round(yMin * invS - H * PAD));
+  var cx1 = Math.min(W, Math.round((xMax + 1) * invS + W * PAD));
+  var cy1 = Math.min(H, Math.round((yMax + 1) * invS + H * PAD));
+  var cW = cx1 - cx0, cH = cy1 - cy0;
+
+  // Safety: never crop more than 60% in either dimension
+  if (cW < W * 0.4 || cH < H * 0.4) return canvas;
+
+  // Safety: if crop is nearly the same size, skip the copy
+  if (cW >= W * 0.90 && cH >= H * 0.90) return canvas;
 
   var out = document.createElement('canvas');
   out.width = cW; out.height = cH;
@@ -550,9 +655,15 @@ function visionAnalyzeImage(srcCanvas) {
     // Full-frame mode uses Sobel bounding box (existing detector).
     var quad = null, warpCanvas = null, warpBinary = null, warpPresence = null, warpScore = 0, docType = null;
     try {
-      quad = (frameMode === 'scene')
-        ? visionDetectSceneDocumentQuad(rotated)
-        : visionDetectDocumentQuad(rotated);
+      if (frameMode === 'scene') {
+        quad = visionDetectSceneDocumentQuad(rotated);
+        // Fallback: when Otsu bright-region approach fails (e.g. bright background,
+        // no clear luminance contrast), try contour-based detector which finds compact
+        // edge-connected components (works well for card on dark background).
+        if (!quad) quad = visionDetectDocumentQuad(rotated);
+      } else {
+        quad = visionDetectDocumentQuad(rotated);
+      }
       if (quad) {
         docType = visionClassifyDocType(quad.corners);
         warpCanvas = visionWarpDocument(rotated, quad.corners, docType);
@@ -582,7 +693,11 @@ function visionAnalyzeImage(srcCanvas) {
     // Do NOT re-check quad.quality.coverage here — shoelace area of Sobel-refined
     // corners is larger than the bright-region bbox (due to ±5% padding) and would
     // incorrectly reject valid close-up scene detections.
-    var warpQuadOk = !!(quad && warpAspect >= 1.1 && warpAspect <= 2.2);
+    var warpQuadOk = !!(quad && (
+      frameMode === 'scene'
+        ? (warpAspect >= 1.0 && warpAspect <= 2.6)
+        : (warpAspect >= 1.1 && warpAspect <= 2.2)
+    ));
 
     var warpMrzBR = 0;
     if (warpPresence && warpCanvas) {
@@ -699,7 +814,9 @@ function visionAnalyzeImage(srcCanvas) {
   // For full-frame images this is a no-op (content fills canvas).
   // For scene images this removes background clutter around the document.
   if (useWarp && best.warpCanvas) {
-    var trimmed = visionTrimWarpMargins(best.warpCanvas);
+    var trimmed = (frameMode === 'scene')
+      ? visionCropToContent(best.warpCanvas)
+      : visionTrimWarpMargins(best.warpCanvas);
     if (trimmed !== best.warpCanvas) {
       best.warpCanvas = trimmed;
       try {
