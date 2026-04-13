@@ -717,6 +717,15 @@ function visionAnalyzeImage(srcCanvas) {
     ? (best.warpMrzBR !== undefined && best.warpMrzBR >= 0.55)
     : false;
 
+  // ── Unified final document canvas ─────────────────────────────────────────
+  // Single source of truth for both UI display and MRZ crop extraction.
+  //   scene / valid quad  → finalDocumentCanvas = best.warpCanvas (perspective-corrected)
+  //   full-frame / no quad → finalDocumentCanvas = best.rotated   (document IS the full image)
+  // Always non-null. Full-frame images never appear as "missing document".
+  var finalDocumentCanvas = useWarp ? best.warpCanvas : best.rotated;
+  var finalDocumentSource = useWarp ? 'warp' : 'rotated';
+  var finalPresence       = useWarp ? best.warpPresence : best.origPresence;
+
   // Build human-readable selection reason for debug panel
   var selectionReason = 'rot=' + best.deg + '\u00b0'
     + (warpNormDeg ? '+norm' + warpNormDeg : '')
@@ -725,62 +734,57 @@ function visionAnalyzeImage(srcCanvas) {
     + ' orig=' + best.origScore.toFixed(3)
     + ' warp=' + (best.warpScore > 0 ? best.warpScore.toFixed(3) : '\u2014')
     + ' eff=' + best.effectiveScore.toFixed(3)
-    + ' src=' + (useWarp ? 'warp' : 'orig');
+    + ' src=' + finalDocumentSource;
 
-  // MRZ crop extraction
+  // ── MRZ crop extraction — always from finalDocumentCanvas ────────────────
+  // One code path regardless of source. Coordinates are relative to finalDocumentCanvas.
   var mrzCrop = null;
   var mrzCropY, mrzCropH;
+  var finalH = finalDocumentCanvas.height;
 
   if (useWarp) {
-    var wH = best.warpCanvas.height;
-    var warpP = best.warpPresence; // scoreMRZPresence result on the warped canvas
-
-    // Prefer scoreMRZPresence crop when it found a tight band (score > 0.15 and height < 35% of warp).
-    // This gives image-specific crop position instead of always using a fixed bottom percentage.
-    // Fall back to docType-based strip when the density scorer fails (warpPresence covers full image).
+    // Warp path: prefer density-scored band, fall back to docType-based fixed strip.
     var stripRatio = best.docType === 'TD1' ? 0.36 : 0.28;
-    var fixedH = Math.round(wH * stripRatio);
+    var fixedH = Math.round(finalH * stripRatio);
 
-    if (warpP && warpP.score > 0.15 && warpP.cropH < wH * 0.35) {
+    if (finalPresence && finalPresence.score > 0.15 && finalPresence.cropH < finalH * 0.35) {
       // Density scorer found a real band — use its coordinates directly
-      mrzCropY = warpP.cropY;
-      mrzCropH = warpP.cropH;
+      mrzCropY = finalPresence.cropY;
+      mrzCropH = finalPresence.cropH;
       selectedWhy += '+warp_density(' + best.docType + ')';
     } else {
       // Fallback: docType-based fixed bottom strip
       mrzCropH = fixedH;
-      mrzCropY = wH - mrzCropH;
+      mrzCropY = finalH - mrzCropH;
       selectedWhy += '+doctype_pos(' + best.docType + ')';
     }
-    try { mrzCrop = visionCropRegion(best.warpCanvas, mrzCropY, mrzCropH); } catch(e) {}
   } else {
-    var p    = best.origPresence;
-    var imgH = best.rotated.height;
-
+    // Rotated-original path: density band capped at 25% height, forced into lower half.
     if (best.origScore <= 0.05) {
       // Band bulunamadı → sabit alt %22
-      mrzCropY = Math.round(imgH * 0.78);
-      mrzCropH = Math.round(imgH * 0.22);
+      mrzCropY = Math.round(finalH * 0.78);
+      mrzCropH = Math.round(finalH * 0.22);
     } else {
-      var maxH = Math.round(imgH * 0.25);          // 40% → 25%
-      mrzCropH = Math.min(p.cropH, maxH);
-      mrzCropY = p.cropY;
-      var minY = Math.round(imgH * 0.50);          // Alt yarıda zorla
+      var maxH = Math.round(finalH * 0.25);
+      mrzCropH = Math.min(finalPresence.cropH, maxH);
+      mrzCropY = finalPresence.cropY;
+      var minY = Math.round(finalH * 0.50);    // force into lower half
       if (mrzCropY < minY) {
         mrzCropY = minY;
-        mrzCropH = Math.min(mrzCropH, imgH - mrzCropY);
+        mrzCropH = Math.min(mrzCropH, finalH - mrzCropY);
       }
     }
-    try { mrzCrop = visionCropRegion(best.rotated, mrzCropY, mrzCropH); } catch(e) {}
   }
+  try { mrzCrop = visionCropRegion(finalDocumentCanvas, mrzCropY, mrzCropH); } catch(e) {}
 
   var t2 = performance.now();
 
   return {
     images: {
-      original:     srcCanvas,       // yüklenen orijinal — döndürülmemiş
-      documentWarp: best.warpCanvas, // döndürülüp perspective düzeltilmiş belge
-      mrzCrop:      mrzCrop          // MRZ strip: warp'tan bilinen konumdan, veya density-detected
+      original:        srcCanvas,            // unrotated source — never mutated
+      finalDocument:   finalDocumentCanvas,  // always present: warp (scene) or rotated (full-frame)
+      documentWarp:    best.warpCanvas,      // null when no valid quad found (full-frame images)
+      mrzCrop:         mrzCrop               // MRZ strip cropped from finalDocumentCanvas
     },
     meta: {
       detectedRotation:    best.deg,          // kept for backwards compatibility
@@ -789,8 +793,9 @@ function visionAnalyzeImage(srcCanvas) {
       isVisuallyUpright:   isVisuallyUpright, // true when warp MRZ confirmed at bottom after normalization
       warpFlipped:         warpFlipped,       // true when any post-warp rotation was applied
       warpNormDeg:         warpNormDeg,       // additional rotation applied to warp (0/90/180/270)
+      finalDocumentSource: finalDocumentSource, // 'warp' | 'rotated' — how finalDocument was produced
       mrzFound:            best.effectiveScore > 0,
-      sourceUsedForMrz:    useWarp ? 'warp' : 'original',
+      sourceUsedForMrz:    useWarp ? 'warp' : 'original', // kept for backwards compatibility
       selectedWhy:         selectedWhy,
       selectionReason:     selectionReason,
       selectedScore:       best.effectiveScore,
@@ -870,10 +875,18 @@ function visionRenderPanel(containerEl, vd) {
   // Image slots
   var imgRow = document.createElement('div');
   imgRow.className = 'vision-images';
-  var warpLabel = 'Document Warp' + (m.detectedRotation > 0 ? ' (rot ' + m.detectedRotation + '\u00b0)' : '');
+  // finalDocument label: shows how the canvas was produced + which rotation
+  var finalDocLabel;
+  if (m.finalDocumentSource === 'warp') {
+    finalDocLabel = 'Document (warp'
+      + (m.ocrUsableRotation > 0 ? '+' + m.ocrUsableRotation + '\u00b0' : '')
+      + ')';
+  } else {
+    finalDocLabel = 'Document (rot\u00a0' + m.ocrUsableRotation + '\u00b0)';
+  }
   imgRow.appendChild(makeSlot('Original',       vd.images.original));
-  imgRow.appendChild(makeSlot(warpLabel,        vd.images.documentWarp));
-  imgRow.appendChild(makeSlot('MRZ Crop (' + m.sourceUsedForMrz + ')', vd.images.mrzCrop));
+  imgRow.appendChild(makeSlot(finalDocLabel,    vd.images.finalDocument));
+  imgRow.appendChild(makeSlot('MRZ Crop',       vd.images.mrzCrop));
   panel.appendChild(imgRow);
 
   // Meta row
@@ -910,7 +923,7 @@ function visionRenderPanel(containerEl, vd) {
     // ── all rotations ──
     rotSummary ? ['rotations', rotSummary] : null,
     // ── source / region ──
-    ['source',           m.sourceUsedForMrz],
+    ['finalDocSrc',      m.finalDocumentSource],
     ['quadFound',        m.quadFound ? '\u2705' : '\u274c'],
     m.docType ? ['docType', m.docType] : null,
     m.mrzBox  ? ['mrzBox',  'y=' + m.mrzBox.y + ' h=' + m.mrzBox.h] : null,
