@@ -930,7 +930,43 @@
           window._dbgData.push(dbgEntry);
           console.log('[P295]', JSON.stringify(dbgEntry));
 
-          const fbResult = extractMRZ(clean(fbText));
+          let fbResult = extractMRZ(clean(fbText));
+
+          // Phase 2.95 line recombination: if extractMRZ failed, short OCR lines
+          // (>10 chars) between MRZ lines may have blocked the j+3 consecutive
+          // search window. Collect MRZ-like candidate lines (≥28 chars, clean
+          // charset, MRZ pattern), try all 3-line orderings via extractMRZ.
+          // No OCR call — pure string ops. Max 5 candidates = 60 permutations.
+          if (!fbResult) {
+            const fbCands = fbText.split('\n').filter(l => {
+              const cl = l.trim().replace(/[^A-Z0-9<]/gi, '').toUpperCase();
+              if (cl.length < 28) return false;
+              if (!/^[A-Z0-9<]+$/.test(cl)) return false;
+              return cl.includes('<') || /^I</.test(cl) || /^\d{6}/.test(cl) || cl.includes('<<');
+            }).slice(0, 5);
+            let p295permCount = 0;
+            outer295:
+            for (let ai = 0; ai < fbCands.length; ai++) {
+              for (let bi = 0; bi < fbCands.length; bi++) {
+                if (bi === ai) continue;
+                for (let ci = 0; ci < fbCands.length; ci++) {
+                  if (ci === ai || ci === bi) continue;
+                  p295permCount++;
+                  const reord = [fbCands[ai], fbCands[bi], fbCands[ci]].join('\n');
+                  const r = extractMRZ(clean(reord));
+                  if (r) {
+                    fbResult = r;
+                    console.log('[P295] recombination success at perm#' + p295permCount + ' order=[' + ai + ',' + bi + ',' + ci + ']');
+                    break outer295;
+                  }
+                }
+              }
+            }
+            if (!fbResult && fbCands.length >= 3) {
+              console.log('[P295] recombination exhausted ' + p295permCount + ' permutations, candidates=' + fbCands.length);
+            }
+          }
+
           if (fbResult) {
             const corrLines = correctCheckDigits(fbResult.type, fbResult.lines);
             const corrCount = countCheckDigitChanges(fbResult.type, fbResult.lines, corrLines);
