@@ -25,67 +25,144 @@ function visionClassifyDocType(corners) {
 }
 
 // ── DOCUMENT QUAD DETECTION ───────────────────────────────────────────────
-// Sobel edge → bounding box → corner refinement.
-// Aspect ratio check [1.1, 2.5] selects landscape documents.
+// Contour-based detector: finds real document boundaries, not full-canvas bounding boxes.
+//
+// Algorithm:
+//   1. Downsample to 25% for fast component analysis
+//   2. Grayscale + Sobel edges (threshold 25)
+//   3. 3×3 dilation to close edge gaps
+//   4. BFS connected component labeling (border pixels excluded)
+//   5. Only keep components > 3% of analysis area (rejects scattered text/noise)
+//   6. For each large component: quadrant corner selection → scale to full res
+//   7. Validate: coverage [0.10, 0.85], aspect [1.1, 2.5], edgePenalty > 0
+//   8. Return best valid quad, or null
+//
+// Returns null for full-frame images (document fills canvas → no inset boundary found).
+// Called only when frameMode === 'full-frame'; scene images use visionDetectSceneDocumentQuad.
 
 function visionDetectDocumentQuad(canvas) {
-  var w = canvas.width, h = canvas.height;
-  var ctx = canvas.getContext('2d', { willReadFrequently: true });
-  var d = ctx.getImageData(0, 0, w, h).data;
+  var W = canvas.width, H = canvas.height;
 
-  var gray = new Uint8Array(w * h);
-  for (var i = 0; i < w * h; i++) {
-    gray[i] = Math.round(0.299 * d[i*4] + 0.587 * d[i*4+1] + 0.114 * d[i*4+2]);
+  // ── Downsample to 25% for fast component analysis ─────────────────────
+  var SCALE = 0.25;
+  var sw = Math.max(4, Math.round(W * SCALE));
+  var sh = Math.max(4, Math.round(H * SCALE));
+  var sc = document.createElement('canvas');
+  sc.width = sw; sc.height = sh;
+  sc.getContext('2d').drawImage(canvas, 0, 0, sw, sh);
+  var sctx = sc.getContext('2d', { willReadFrequently: true });
+  var sd = sctx.getImageData(0, 0, sw, sh).data;
+
+  // ── Grayscale ─────────────────────────────────────────────────────────
+  var gray = new Uint8Array(sw * sh);
+  for (var i = 0; i < sw * sh; i++) {
+    gray[i] = Math.round(0.299 * sd[i*4] + 0.587 * sd[i*4+1] + 0.114 * sd[i*4+2]);
   }
-  var edge = new Uint8Array(w * h);
-  for (var y = 1; y < h - 1; y++) {
-    for (var x = 1; x < w - 1; x++) {
-      var gx = -gray[(y-1)*w+(x-1)] + gray[(y-1)*w+(x+1)]
-               - 2*gray[y*w+(x-1)]  + 2*gray[y*w+(x+1)]
-               - gray[(y+1)*w+(x-1)] + gray[(y+1)*w+(x+1)];
-      var gy = -gray[(y-1)*w+(x-1)] - 2*gray[(y-1)*w+x] - gray[(y-1)*w+(x+1)]
-               + gray[(y+1)*w+(x-1)] + 2*gray[(y+1)*w+x] + gray[(y+1)*w+(x+1)];
-      edge[y*w+x] = Math.min(255, Math.sqrt(gx*gx + gy*gy)) > 30 ? 255 : 0;
+
+  // ── Sobel edges (threshold 25 — slightly lower at quarter-res) ─────────
+  var edge = new Uint8Array(sw * sh);
+  for (var y = 1; y < sh - 1; y++) {
+    for (var x = 1; x < sw - 1; x++) {
+      var gx = -gray[(y-1)*sw+(x-1)] + gray[(y-1)*sw+(x+1)]
+               - 2*gray[y*sw+(x-1)]  + 2*gray[y*sw+(x+1)]
+               - gray[(y+1)*sw+(x-1)] + gray[(y+1)*sw+(x+1)];
+      var gy = -gray[(y-1)*sw+(x-1)] - 2*gray[(y-1)*sw+x] - gray[(y-1)*sw+(x+1)]
+               + gray[(y+1)*sw+(x-1)] + 2*gray[(y+1)*sw+x] + gray[(y+1)*sw+(x+1)];
+      edge[y*sw+x] = (Math.sqrt(gx*gx + gy*gy) > 25) ? 1 : 0;
     }
   }
 
-  var minX = w, minY = h, maxX = 0, maxY = 0;
-  for (var y = 0; y < h; y++) {
-    for (var x = 0; x < w; x++) {
-      if (edge[y*w+x]) {
-        if (x < minX) minX = x; if (x > maxX) maxX = x;
-        if (y < minY) minY = y; if (y > maxY) maxY = y;
+  // ── 3×3 dilation to close edge gaps ───────────────────────────────────
+  var dil = new Uint8Array(sw * sh);
+  for (var y = 1; y < sh - 1; y++) {
+    for (var x = 1; x < sw - 1; x++) {
+      if (edge[y*sw+x] || edge[(y-1)*sw+x] || edge[(y+1)*sw+x] ||
+          edge[y*sw+(x-1)] || edge[y*sw+(x+1)]) dil[y*sw+x] = 1;
+    }
+  }
+
+  // ── Connected component labeling (BFS, skip border pixels) ────────────
+  // BORD: ignore pixels within 3% of analysis image edge (image border ≠ doc border)
+  // MINPX: component must be > 3% of analysis area to count as a real boundary
+  var BORD   = Math.max(1, Math.round(Math.min(sw, sh) * 0.03));
+  var MINPX  = Math.round(sw * sh * 0.03);
+  var label  = new Int32Array(sw * sh); // 0 = unlabeled / unvisited
+  var bestQuad = null, bestScore = -1;
+
+  for (var sy = BORD; sy < sh - BORD; sy++) {
+    for (var sx = BORD; sx < sw - BORD; sx++) {
+      if (!dil[sy*sw+sx] || label[sy*sw+sx]) continue;
+
+      // BFS flood fill from this seed pixel
+      var seedIdx = sy * sw + sx;
+      label[seedIdx] = 1;
+      var stack = [seedIdx];
+      var pixels = [];
+
+      while (stack.length > 0) {
+        var idx = stack.pop();
+        var py = (idx / sw) | 0, px = idx % sw;
+        pixels.push({ x: px, y: py });
+
+        var nbrs = [idx - sw, idx + sw, idx - 1, idx + 1];
+        for (var ni = 0; ni < 4; ni++) {
+          var nidx = nbrs[ni];
+          if (nidx < 0 || nidx >= sw * sh) continue;
+          var ny = (nidx / sw) | 0, nx = nidx % sw;
+          if (nx < BORD || nx >= sw - BORD || ny < BORD || ny >= sh - BORD) continue;
+          if (dil[nidx] && !label[nidx]) {
+            label[nidx] = 1;
+            stack.push(nidx);
+          }
+        }
+      }
+
+      if (pixels.length < MINPX) continue; // component too small — noise, skip
+
+      // ── Quadrant corner selection on component pixels ──────────────────
+      var cx = 0, cy = 0;
+      for (var pi = 0; pi < pixels.length; pi++) { cx += pixels[pi].x; cy += pixels[pi].y; }
+      cx /= pixels.length; cy /= pixels.length;
+
+      var tl = {x: sw, y: sh}, tr = {x: 0, y: sh};
+      var bl = {x: sw, y: 0},  br = {x: 0, y: 0};
+      for (var pi = 0; pi < pixels.length; pi++) {
+        var p = pixels[pi];
+        if (p.x <= cx && p.y <= cy) {
+          if (p.x + p.y < tl.x + tl.y) { tl.x = p.x; tl.y = p.y; }
+        } else if (p.x > cx && p.y <= cy) {
+          if (-p.x + p.y < -tr.x + tr.y) { tr.x = p.x; tr.y = p.y; }
+        } else if (p.x <= cx && p.y > cy) {
+          if (p.x - p.y < bl.x - bl.y) { bl.x = p.x; bl.y = p.y; }
+        } else {
+          if (-p.x - p.y < -br.x - br.y) { br.x = p.x; br.y = p.y; }
+        }
+      }
+
+      // ── Scale corners back to full resolution ─────────────────────────
+      var invS = 1.0 / SCALE;
+      var ftl = { x: Math.round(tl.x * invS), y: Math.round(tl.y * invS) };
+      var ftr = { x: Math.round(tr.x * invS), y: Math.round(tr.y * invS) };
+      var fbr = { x: Math.round(br.x * invS), y: Math.round(br.y * invS) };
+      var fbl = { x: Math.round(bl.x * invS), y: Math.round(bl.y * invS) };
+
+      // ── Score and validate ─────────────────────────────────────────────
+      var quality = computeQuadQuality([ftl, ftr, fbr, fbl], W, H);
+      // coverage > 0.85 → full-canvas false positive → reject
+      if (quality.coverage < 0.10 || quality.coverage > 0.85) continue;
+      // aspect outside [1.1, 2.5] → not a landscape document → reject
+      if (quality.aspect < 1.1 || quality.aspect > 2.5) continue;
+      // edgePenalty === 0 → corners at image boundary → image border, not doc border → reject
+      if (quality.edgePenalty === 0) continue;
+
+      if (quality.score > bestScore) {
+        bestScore = quality.score;
+        bestQuad  = { corners: [ftl, ftr, fbr, fbl], quality: quality };
       }
     }
   }
 
-  var quadW = maxX - minX, quadH = maxY - minY;
-  if (quadW < w * 0.30 || quadH < h * 0.30) return null;
-  var aspect = quadW / Math.max(quadH, 1);
-  if (aspect < 1.1 || aspect > 2.5) return null;
-
-  var cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
-  var tl = { x: maxX, y: maxY }, tr = { x: minX, y: maxY };
-  var bl = { x: maxX, y: minY }, br = { x: minX, y: minY };
-
-  for (var y = 0; y < h; y++) {
-    for (var x = 0; x < w; x++) {
-      if (!edge[y*w+x]) continue;
-      if (x <= cx && y <= cy) {
-        if (x + y < tl.x + tl.y) { tl.x = x; tl.y = y; }
-      } else if (x > cx && y <= cy) {
-        if (-x + y < -tr.x + tr.y) { tr.x = x; tr.y = y; }
-      } else if (x <= cx && y > cy) {
-        if (x - y < bl.x - bl.y) { bl.x = x; bl.y = y; }
-      } else {
-        if (-x - y < -br.x - br.y) { br.x = x; br.y = y; }
-      }
-    }
-  }
-  var quality = computeQuadQuality([tl, tr, br, bl], w, h);
-  // quality is attached for diagnostic/reporting only — NOT a hard reject gate.
-  // Full-frame document crops (coverage≈1, nearEdge=4) are valid quads in our dataset.
-  return { corners: [tl, tr, br, bl], quality: quality };
+  return bestQuad; // null when no inset document boundary found (correct for full-frame scans)
 }
 
 // ── SCENE-MODE DOCUMENT QUAD DETECTOR ────────────────────────────────────
