@@ -83,13 +83,15 @@ function visionDetectDocumentQuad(canvas) {
     }
   }
   var quality = computeQuadQuality([tl, tr, br, bl], w, h);
-  if (!quality.isValid) return null;
+  // quality is attached for diagnostic/reporting only — NOT a hard reject gate.
+  // Full-frame document crops (coverage≈1, nearEdge=4) are valid quads in our dataset.
   return { corners: [tl, tr, br, bl], quality: quality };
 }
 
 // ── QUAD QUALITY VALIDATOR ────────────────────────────────────────────────
 // Scores how document-like the detected corners are.
-// A bad quad is worse than no quad — reject below threshold 0.55.
+// Used as a DIAGNOSTIC METRIC only — not a hard gate.
+// isValid threshold 0.55 is informational; rotation decisions use warpAspect + warpMrzBR.
 
 function computeQuadQuality(corners, W, H) {
   var tl = corners[0], tr = corners[1], br = corners[2], bl = corners[3];
@@ -297,7 +299,9 @@ function visionAnalyzeImage(srcCanvas) {
     var warpAspect = warpCanvas ? (warpCanvas.width / warpCanvas.height) : 0;
     // warpAspect must be in [1.1, 2.2]: excludes portrait warps (wrong rotation)
     // and implausibly wide shapes; covers TD1 (1.59), TD2 (1.38), TD3 (1.42) comfortably.
-    var warpQuadOk = !!(quad && quad.quality && quad.quality.isValid && warpAspect >= 1.1 && warpAspect <= 2.2);
+    // warpQuadOk: quad found + warp has plausible landscape aspect.
+    // quadQuality is diagnostic only — not gating here.
+    var warpQuadOk = !!(quad && warpAspect >= 1.1 && warpAspect <= 2.2);
 
     var warpMrzBR = 0;
     if (warpPresence && warpCanvas) {
