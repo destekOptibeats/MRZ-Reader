@@ -291,17 +291,17 @@
   // Upscale small crop canvases for reliable Tesseract recognition, then cap
   // total pixel count to prevent runaway OCR cost on wide landscape crops.
   //
-  // Adaptive policy (Batch 14):
-  //   Factor is chosen based on input height to preserve MRZ line clarity:
-  //     h < 500px  → factor 3 (small crops: aggressive upscale to preserve detail)
-  //     h < 700px  → factor 2 (medium crops: balanced)
-  //     h ≥ 700px  → factor 1 (large crops: already sufficient, no upscale)
-  //   After integer upscale, 8M pixel cap bounds cost for very wide crops.
+  // Two-part policy (Batch 12b — proven PASS=10):
+  //   1. factor = max(1, ceil(targetH / h)) — no forced 2× minimum; already-large
+  //      crops (h >= targetH) get factor=1 and are only resized if over pixel budget.
+  //   2. MAX_PIXELS cap — after upscale, proportionally scale down if output exceeds
+  //      8M pixels. This bounds OCR cost for very wide crops.
+  //
+  // Very small crops (<150px) use a higher targetH (1200) to preserve fine detail.
   const UPSCALE_MAX_PIXELS = 8_000_000;
   function batchUpscaleIfNeeded(canvas) {
-    const factor = canvas.height < 500 ? 3
-                 : canvas.height < 700 ? 2
-                 : 1;
+    const targetH = canvas.height < 150 ? 1200 : 900;
+    const factor  = Math.max(1, Math.ceil(targetH / canvas.height));
 
     let outW = canvas.width  * factor;
     let outH = canvas.height * factor;
