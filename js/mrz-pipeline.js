@@ -767,7 +767,12 @@
           pcd.rotated, padW, botY, fbCrop.width, botH, 0, 0, fbCrop.width, botH
         );
 
-        const fbOcrIn = batchUpscaleIfNeeded(batchPreprocessMRZ(fbCrop));
+        const fbPreprocessed = batchPreprocessMRZ(fbCrop);
+        // Phase 2.95 crops are already large enough in the current debt-rescue path.
+        // Avoid unnecessary 2x upscale for large bottom-band crops.
+        const fbOcrIn = fbPreprocessed.height >= 400
+          ? fbPreprocessed
+          : batchUpscaleIfNeeded(fbPreprocessed);
         if (window._mrzDebug) console.log('[P295] attempt deg=' + fallbackDeg + ' frac=' + frac + ' cropH=' + botH + ' ocrH=' + fbOcrIn.height);
         if (fbOcrIn.height < 24) { if (window._mrzDebug) console.log('[P295] skip: height < 24'); continue; }
 
