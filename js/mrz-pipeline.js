@@ -452,14 +452,83 @@
     return count;
   }
 
+  // ── Per-run instrumentation ───────────────────────────────────────────────
+  // All instrumentation is gated behind window._mrzDebug.
+  // _runDbg accumulates data for one fastBatchOCR call; reset by _finalizeRun.
+
+  let _runDbg = null; // module-level; safe because fastBatchOCR is not re-entrant per worker
+
+  function _pushAttempt(entry) {
+    if (_runDbg) _runDbg.attempts.push(entry);
+  }
+
+  // Call at every return point in fastBatchOCR.
+  // Computes the final debug summary, pushes to window._dbgData, resets _runDbg.
+  // Returns result unchanged so callers can do: return _finalizeRun(result, phaseTag)
+  function _finalizeRun(result, phaseTag) {
+    if (!_runDbg) return result;
+    const rd = _runDbg;
+    _runDbg = null; // reset first — avoids double-push on unexpected re-entry
+    if (!window._mrzDebug) return result;
+
+    const totalMs   = Math.round(performance.now() - rd.startMs);
+    const isPass    = !!(result && result.extracted);
+    const corrected = result && (result.corrected || false);
+    const corrCount = result && (result.correctionCount || 0);
+    const selBand   = (result && result.selectedBand) || '—';
+
+    // usedFallback: anything beyond Phase 1 mainline
+    const usedFallback = phaseTag !== 'phase_1';
+    const outcome      = isPass ? 'pass' : 'no_parse';
+
+    // passClass priority: debt-pass > correction-pass > fallback-pass > primary-pass
+    let passClass;
+    if (!isPass) {
+      passClass = 'no_parse';
+    } else if (phaseTag === 'phase_1' && !corrected) {
+      passClass = 'primary-pass';
+    } else if (phaseTag === 'phase_1' && corrected) {
+      passClass = 'correction-pass';
+    } else if (phaseTag === 'phase_2') {
+      passClass = 'correction-pass'; // Phase 2 is always correction-only
+    } else {
+      passClass = corrected ? 'correction-pass' : 'fallback-pass';
+    }
+
+    const summary = {
+      fileName:        rd.fileName,
+      attemptCount:    rd.attempts.length,
+      ocrCalls:        rd.ocrCalls,
+      finalOutcome:    outcome,
+      finalPath:       selBand,
+      finalPhase:      phaseTag,
+      usedFallback,
+      usedCorrection:  corrected,
+      correctionCount: corrCount,
+      usedRelaxation:  false, // reserved for future relaxation tracking
+      passClass,
+      attempts:        rd.attempts,
+      timing:          { totalMs },
+    };
+    if (!window._dbgData) window._dbgData = [];
+    window._dbgData.push(summary);
+    if (window._mrzDebug) console.log('[MRZ-DBG]', rd.fileName, '→', outcome, phaseTag, selBand,
+      'ocr:', rd.ocrCalls, 'ms:', totalMs, 'class:', passClass);
+    return result;
+  }
+
   // ── tryMRZ helper ─────────────────────────────────────────────────────────
 
   // Runs the full extract → correct → validate pipeline on raw OCR text.
   // Returns a complete pipeline result object (ready to return from fastBatchOCR)
   // or null. Fast-rejects weak OCR output before running extractMRZ.
   // Debug mode logs the null reason and input quality signals for tuning.
-  function tryMRZ(text, label, { diag, attempts, longestLine, chevronCount }) {
+  // quiet=true suppresses _pushAttempt (used in Phase 2.95 reord loop to avoid 60+ entries)
+  function tryMRZ(text, label, { diag, attempts, longestLine, chevronCount }, quiet = false) {
+    const dbgEntry = { path: label, longestLine, chevronCount, extracted: false, validated: false, reason: '' };
     const dbg = (reason) => {
+      dbgEntry.reason = reason;
+      if (!quiet) _pushAttempt({ ...dbgEntry });
       if (window._mrzDebug) console.log('[tryMRZ]', label, reason,
         '| longest:', longestLine, 'chevrons:', chevronCount, 'attempt:', attempts);
     };
@@ -474,6 +543,7 @@
     if (corrCount > MAX_CORRECTIONS) { dbg('too_many_corrections(' + corrCount + ')'); return null; }
     const corrResult = { type: raw.type, lines: corrLines };
     if (!validateMRZ(corrResult).valid) { dbg('validation_failed'); return null; }
+    if (!quiet) _pushAttempt({ ...dbgEntry, extracted: true, validated: true, reason: 'accepted' });
     return {
       extracted: corrResult, diag, attempts, longestLine, chevronCount,
       rawOcrText: text, selectedBand: label,
@@ -496,6 +566,11 @@
   async function fastBatchOCR(resized, timings, ocrWorker, fileName, fileIndex) {
     const wr = ocrWorker || worker;
     timings.resizedSize = resized.width + 'x' + resized.height;
+
+    // Initialize per-run debug accumulator
+    if (window._mrzDebug) {
+      _runDbg = { fileName: fileName || '', attempts: [], ocrCalls: 0, startMs: performance.now() };
+    }
 
     if (window._mrzDebug) console.log('[MRZ] batch', fileName || '', resized.width + 'x' + resized.height);
 
@@ -565,8 +640,10 @@
       if (ocrIn.width <= 100 || ocrIn.height <= 100) continue;
 
       ocrAttempt++;
+      if (_runDbg) _runDbg.ocrCalls++;
       const key = 'ocr' + ocrAttempt;
       const t = performance.now();
+      const p1path = 'rot' + deg + '/' + label;
       try {
         const { data: { text } } = await wr.recognize(ocrIn);
         timings[key] = Math.round(performance.now() - t);
@@ -601,16 +678,26 @@
               const correctionCount = countCheckDigitChanges(result.type, result.lines, corrLines);
               const corrected = correctionCount > 0 && correctionCount <= MAX_CORRECTIONS;
               const finalResult = corrected ? { type: result.type, lines: corrLines } : result;
-              return {
+              _pushAttempt({ path: p1path, longestLine: longest, chevronCount: chevs,
+                             extracted: true, validated: true,
+                             reason: corrected ? 'accepted_corrected' : 'accepted' });
+              return _finalizeRun({
                 extracted: finalResult, diag: diagnoseMRZ(text), attempts: ocrAttempt,
                 longestLine: longest, chevronCount: chevs, rawOcrText: text,
-                selectedBand: 'rot' + deg + '/' + label,
-                corrected, correctionCount,
-              };
+                selectedBand: p1path, corrected, correctionCount,
+              }, 'phase_1');
             }
-            // Better-scoring parse: update rescue candidate
+            // Phase 1 miss: valid parse but checksum failed
+            _pushAttempt({ path: p1path, longestLine: longest, chevronCount: chevs,
+                           extracted: true, validated: false, reason: 'validation_failed' });
             if (ocrScore >= globalBestScore) globalBestMRZ = result;
+          } else {
+            _pushAttempt({ path: p1path, longestLine: longest, chevronCount: chevs,
+                           extracted: false, validated: false, reason: 'no_extract' });
           }
+        } else {
+          _pushAttempt({ path: p1path, longestLine: longest, chevronCount: chevs,
+                         extracted: false, validated: false, reason: 'fast_reject_length' });
         }
       } catch (e) {
         timings[key] = Math.round(performance.now() - t);
@@ -627,12 +714,15 @@
           const corrResult = { type: globalBestMRZ.type, lines: corrLines };
           if (validateMRZ(corrResult).valid) {
             const longest = globalBestText ? longestOCRLine(globalBestText) : 0;
-            return {
+            const chevs2  = countChevrons(globalBestText || '');
+            _pushAttempt({ path: 'checkdigit-corrected', longestLine: longest, chevronCount: chevs2,
+                           extracted: true, validated: true, reason: 'accepted' });
+            return _finalizeRun({
               extracted: corrResult, diag: lastDiag, attempts: ocrAttempt,
-              longestLine: longest, chevronCount: countChevrons(globalBestText || ''),
+              longestLine: longest, chevronCount: chevs2,
               rawOcrText: globalBestText, selectedBand: 'checkdigit-corrected',
               corrected: true, correctionCount,
-            };
+            }, 'phase_2');
           }
         }
       } catch (_) {}
@@ -682,7 +772,10 @@
             // 2-line combo (TD3)
             const r2 = tryCombo([frags[i], frags[j]]);
             if (r2) {
-              return {
+              const fss2 = sources([frags[i], frags[j]]);
+              _pushAttempt({ path: 'fragment-combined/' + fss2, longestLine: failLongest, chevronCount: failChevrons,
+                             extracted: true, validated: true, reason: 'accepted' });
+              return _finalizeRun({
                 extracted: r2.corrResult, diag: lastDiag, attempts: ocrAttempt,
                 longestLine: failLongest, chevronCount: failChevrons,
                 rawOcrText: globalBestText,
@@ -690,8 +783,8 @@
                 corrected: r2.corrCount > 0, correctionCount: r2.corrCount,
                 recoveryMode: 'fragment-combined',
                 combinationCount,
-                fragmentSources: sources([frags[i], frags[j]]),
-              };
+                fragmentSources: fss2,
+              }, 'phase_2.5');
             }
 
             // 3-line combos (TD1)
@@ -700,7 +793,10 @@
               if (combinationCount >= 20) break outer25;
               const r3 = tryCombo([frags[i], frags[j], frags[k]]);
               if (r3) {
-                return {
+                const fss3 = sources([frags[i], frags[j], frags[k]]);
+                _pushAttempt({ path: 'fragment-combined/' + fss3, longestLine: failLongest, chevronCount: failChevrons,
+                               extracted: true, validated: true, reason: 'accepted' });
+                return _finalizeRun({
                   extracted: r3.corrResult, diag: lastDiag, attempts: ocrAttempt,
                   longestLine: failLongest, chevronCount: failChevrons,
                   rawOcrText: globalBestText,
@@ -708,8 +804,8 @@
                   corrected: r3.corrCount > 0, correctionCount: r3.corrCount,
                   recoveryMode: 'fragment-combined',
                   combinationCount,
-                  fragmentSources: sources([frags[i], frags[j], frags[k]]),
-                };
+                  fragmentSources: fss3,
+                }, 'phase_2.5');
               }
             }
           }
@@ -727,13 +823,14 @@
         const hiOcrIn = batchUpscaleIfNeeded(hiContrastCanvas);
         if (hiOcrIn.width > 100 && hiOcrIn.height > 100) {
           ocrAttempt++;
+          if (_runDbg) _runDbg.ocrCalls++;
           const { data: { text: hiText } } = await wr.recognize(hiOcrIn);
 
           const hiLongest  = longestOCRLine(hiText);
           const hiChevrons = countChevrons(hiText);
           const hiHit = tryMRZ(hiText, 'proj-hicontrast', { diag: lastDiag, attempts: ocrAttempt,
                                                              longestLine: hiLongest, chevronCount: hiChevrons });
-          if (hiHit) return hiHit;
+          if (hiHit) return _finalizeRun(hiHit, 'phase_2.75');
         }
       } catch (_) {}
     }
@@ -745,31 +842,18 @@
     // Always restores PSM 6 (uniform block) before exiting.
     if (hiContrastCanvas) {
       const hiOcrIn28 = batchUpscaleIfNeeded(hiContrastCanvas);
+      // tryPsm: refactored to use tryMRZ for consistent validation + instrumentation
       const tryPsm = async (psm) => {
         try {
           await wr.setParameters({ tessedit_pageseg_mode: psm });
           ocrAttempt++;
+          if (_runDbg) _runDbg.ocrCalls++;
           const { data: { text: psmText } } = await wr.recognize(hiOcrIn28);
           await wr.setParameters({ tessedit_pageseg_mode: '6' }); // restore
-
-          const psmResult = extractMRZ(clean(psmText));
-          if (psmResult) {
-            const corrLines = correctCheckDigits(psmResult.type, psmResult.lines);
-            const corrCount = countCheckDigitChanges(psmResult.type, psmResult.lines, corrLines);
-            if (corrCount <= MAX_CORRECTIONS) {
-              const corrResult = { type: psmResult.type, lines: corrLines };
-              if (validateMRZ(corrResult).valid) {
-                return {
-                  extracted: corrResult, diag: lastDiag, attempts: ocrAttempt,
-                  longestLine: failLongest, chevronCount: failChevrons,
-                  rawOcrText: psmText, selectedBand: 'psm' + psm,
-                  corrected: corrCount > 0, correctionCount: corrCount,
-                  recoveryMode: 'psm' + psm,
-                };
-              }
-            }
-          }
-          return null;
+          const psmLongest  = longestOCRLine(psmText);
+          const psmChevrons = countChevrons(psmText);
+          return tryMRZ(psmText, 'psm' + psm, { diag: lastDiag, attempts: ocrAttempt,
+                                                 longestLine: psmLongest, chevronCount: psmChevrons });
         } catch (_) {
           try { await wr.setParameters({ tessedit_pageseg_mode: '6' }); } catch (_2) {}
           return null;
@@ -778,9 +862,9 @@
 
       if (hiOcrIn28.width > 100 && hiOcrIn28.height > 100) {
         const r7 = await tryPsm('7');
-        if (r7) return r7;
+        if (r7) return _finalizeRun(r7, 'phase_2.8');
         const r8 = await tryPsm('8');
-        if (r8) return r8;
+        if (r8) return _finalizeRun(r8, 'phase_2.8');
       }
     }
 
@@ -816,13 +900,14 @@
           const deskewOcrIn = batchUpscaleIfNeeded(hiContrastPreprocess(bestRawCanvas));
           if (deskewOcrIn.width > 80 && deskewOcrIn.height > 40) {
             ocrAttempt++;
+            if (_runDbg) _runDbg.ocrCalls++;
             const { data: { text: deskewText } } = await wr.recognize(deskewOcrIn);
 
             const deskewLongest  = longestOCRLine(deskewText);
             const deskewChevrons = countChevrons(deskewText);
             const deskewHit = tryMRZ(deskewText, 'micro-deskew', { diag: lastDiag, attempts: ocrAttempt,
                                                                     longestLine: deskewLongest, chevronCount: deskewChevrons });
-            if (deskewHit) return deskewHit;
+            if (deskewHit) return _finalizeRun(deskewHit, 'phase_2.9');
           }
         }
       } catch (_) {}
@@ -870,6 +955,7 @@
         if (fbOcrIn.height < 24) { if (window._mrzDebug) console.log('[P295] skip: height < 24'); continue; }
 
         ocrAttempt++;
+        if (_runDbg) _runDbg.ocrCalls++;
         p295count++;
         const pct       = Math.round(frac * 100);
         const bandLabel = 'rot' + fallbackDeg + '/bot' + pct + '-fallback';
@@ -920,11 +1006,14 @@
                   if (ci === ai || ci === bi) continue;
                   p295permCount++;
                   const reord = [fbCands[ai], fbCands[bi], fbCands[ci]].join('\n');
+                  // quiet=true: suppress per-permutation entries (up to 60); push one summary on success
                   const reordHit = tryMRZ(reord, bandLabel, { diag: lastDiag, attempts: ocrAttempt,
-                                                               longestLine: fbLongest, chevronCount: fbChevrons });
+                                                               longestLine: fbLongest, chevronCount: fbChevrons }, true);
                   if (reordHit) {
                     if (window._mrzDebug) console.log('[P295] recombination success at perm#' + p295permCount + ' order=[' + ai + ',' + bi + ',' + ci + ']');
-                    return reordHit;
+                    _pushAttempt({ path: bandLabel + '/reord', longestLine: fbLongest, chevronCount: fbChevrons,
+                                   extracted: true, validated: true, reason: 'reord_accepted_perm' + p295permCount });
+                    return _finalizeRun(reordHit, 'phase_2.95');
                   }
                 }
               }
@@ -937,7 +1026,7 @@
                                                      longestLine: fbLongest, chevronCount: fbChevrons });
           if (fbHit) {
             if (window._mrzDebug) console.log('[P295] full-text extractMRZ found result');
-            return fbHit;
+            return _finalizeRun(fbHit, 'phase_2.95');
           }
           if (window._mrzDebug) console.log('[P295] attempt ' + bandLabel + ' no valid MRZ');
         } catch (e) { if (window._mrzDebug) console.log('[P295] OCR error:', e?.message); }
@@ -946,11 +1035,11 @@
     }
 
     // ── Phase 3: NO_PARSE ─────────────────────────────────────────────────
-    return {
+    return _finalizeRun({
       extracted: null, diag: lastDiag, attempts: ocrAttempt,
       longestLine: failLongest, chevronCount: failChevrons,
       rawOcrText: globalBestText, selectedBand: '—',
-    };
+    }, 'phase_3');
   }
 
   // ── WORKER FACTORY ────────────────────────────────────────────────────────
