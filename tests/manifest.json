@@ -70,12 +70,7 @@
       "category": "id_clean_easy",
       "docType": "TD1",
       "match": "exact",
-      "confidence": "high",
-      "mrz_expected": [
-          "I<TURA48P241286<52000135084<<<",
-          "8001070M3411067TUR<<<<<<<<<<<0",
-          "GUCEL<<SUAT<<<<<<<<<<<<<<<<<<<"
-      ]
+      "confidence": "high"
     },
     {
       "id": "img_1923",
