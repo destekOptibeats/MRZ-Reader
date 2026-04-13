@@ -88,6 +88,112 @@ function visionDetectDocumentQuad(canvas) {
   return { corners: [tl, tr, br, bl], quality: quality };
 }
 
+// ── SCENE-MODE DOCUMENT QUAD DETECTOR ────────────────────────────────────
+// Used when frameMode === 'scene'. Finds the inset document rectangle using
+// Otsu brightness thresholding instead of a global Sobel bounding box.
+//
+// Why: in scene images, background clutter fills the Sobel bounding box.
+// Otsu separates bright document (passport/ID paper) from dark background,
+// giving a meaningful inset bounding box that can be used for perspective warp.
+//
+// Algorithm:
+//   1. Grayscale + Otsu threshold → bright mask
+//   2. Bounding box of bright region → candidate document rectangle
+//   3. Reject if too small, wrong aspect, or covers ≥ 85% of canvas (≈ full-frame)
+//   4. Refine corners using Sobel edge pixels within the bounding box ±5% margin
+//   5. Return { corners, quality } or null
+
+function visionDetectSceneDocumentQuad(canvas) {
+  var W = canvas.width, H = canvas.height;
+  var ctx = canvas.getContext('2d', { willReadFrequently: true });
+  var d = ctx.getImageData(0, 0, W, H).data;
+
+  // ── Grayscale ─────────────────────────────────────────────────────────────
+  var gray = new Uint8Array(W * H);
+  for (var i = 0; i < W * H; i++) {
+    gray[i] = Math.round(0.299 * d[i*4] + 0.587 * d[i*4+1] + 0.114 * d[i*4+2]);
+  }
+
+  // ── Otsu threshold ────────────────────────────────────────────────────────
+  var hist = new Int32Array(256);
+  for (var i = 0; i < gray.length; i++) hist[gray[i]]++;
+  var total = W * H, sum = 0;
+  for (var t = 0; t < 256; t++) sum += t * hist[t];
+  var sumB = 0, wB = 0, maxVar = 0, threshold = 128;
+  for (var t = 0; t < 256; t++) {
+    wB += hist[t];
+    if (!wB) continue;
+    var wF = total - wB;
+    if (!wF) break;
+    sumB += t * hist[t];
+    var mB = sumB / wB, mF = (sum - sumB) / wF;
+    var between = wB * wF * (mB - mF) * (mB - mF);
+    if (between > maxVar) { maxVar = between; threshold = t; }
+  }
+
+  // ── Bounding box of bright pixels ─────────────────────────────────────────
+  var minX = W, minY = H, maxX = 0, maxY = 0;
+  for (var y = 0; y < H; y++) {
+    for (var x = 0; x < W; x++) {
+      if (gray[y*W+x] > threshold) {
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+      }
+    }
+  }
+
+  var quadW = maxX - minX, quadH = maxY - minY;
+  if (quadW < W * 0.10 || quadH < H * 0.10) return null;
+
+  var aspect = quadW / Math.max(quadH, 1);
+  if (aspect < 1.0 || aspect > 2.6) return null;
+
+  // Reject if bright region covers ≥ 85% of canvas — this would be a full-frame
+  // image mis-classified as scene, or a scene with near-white background.
+  var coverage = (quadW * quadH) / (W * H);
+  if (coverage >= 0.85 || coverage < 0.05) return null;
+
+  // ── Sobel corner refinement within the bright bounding box ────────────────
+  // Compute Sobel edges and refine corners within ±pad region of the bbox.
+  var edge = new Uint8Array(W * H);
+  for (var y = 1; y < H - 1; y++) {
+    for (var x = 1; x < W - 1; x++) {
+      var gx = -gray[(y-1)*W+(x-1)] + gray[(y-1)*W+(x+1)]
+               - 2*gray[y*W+(x-1)]  + 2*gray[y*W+(x+1)]
+               - gray[(y+1)*W+(x-1)] + gray[(y+1)*W+(x+1)];
+      var gy = -gray[(y-1)*W+(x-1)] - 2*gray[(y-1)*W+x] - gray[(y-1)*W+(x+1)]
+               + gray[(y+1)*W+(x-1)] + 2*gray[(y+1)*W+x] + gray[(y+1)*W+(x+1)];
+      edge[y*W+x] = Math.min(255, Math.sqrt(gx*gx + gy*gy)) > 30 ? 255 : 0;
+    }
+  }
+
+  var pad = Math.round(Math.max(W, H) * 0.05);
+  var rx0 = Math.max(0, minX - pad), ry0 = Math.max(0, minY - pad);
+  var rx1 = Math.min(W, maxX + pad), ry1 = Math.min(H, maxY + pad);
+  var cx = (rx0 + rx1) / 2, cy = (ry0 + ry1) / 2;
+
+  var tl = {x: rx1, y: ry1}, tr = {x: rx0, y: ry1};
+  var bl = {x: rx1, y: ry0}, br = {x: rx0, y: ry0};
+
+  for (var y = ry0; y < ry1; y++) {
+    for (var x = rx0; x < rx1; x++) {
+      if (!edge[y*W+x]) continue;
+      if (x <= cx && y <= cy) {
+        if (x + y < tl.x + tl.y) { tl.x = x; tl.y = y; }
+      } else if (x > cx && y <= cy) {
+        if (-x + y < -tr.x + tr.y) { tr.x = x; tr.y = y; }
+      } else if (x <= cx && y > cy) {
+        if (x - y < bl.x - bl.y) { bl.x = x; bl.y = y; }
+      } else {
+        if (-x - y < -br.x - br.y) { br.x = x; br.y = y; }
+      }
+    }
+  }
+
+  var quality = computeQuadQuality([tl, tr, br, bl], W, H);
+  return { corners: [tl, tr, br, bl], quality: quality };
+}
+
 // ── QUAD QUALITY VALIDATOR ────────────────────────────────────────────────
 // Scores how document-like the detected corners are.
 // Used as a DIAGNOSTIC METRIC only — not a hard gate.
@@ -316,10 +422,14 @@ function visionAnalyzeImage(srcCanvas) {
     // origScore: raw density score, no bottom-half multiplier
     origScore = origPresence.score;
 
-    // Try document quad + full-document warp
+    // Try document quad + full-document warp.
+    // Scene mode uses Otsu-threshold bright-region detector to find the inset document.
+    // Full-frame mode uses Sobel bounding box (existing detector).
     var quad = null, warpCanvas = null, warpBinary = null, warpPresence = null, warpScore = 0, docType = null;
     try {
-      quad = visionDetectDocumentQuad(rotated);
+      quad = (frameMode === 'scene')
+        ? visionDetectSceneDocumentQuad(rotated)
+        : visionDetectDocumentQuad(rotated);
       if (quad) {
         docType = visionClassifyDocType(quad.corners);
         warpCanvas = visionWarpDocument(rotated, quad.corners, docType);
