@@ -930,21 +930,23 @@
           window._dbgData.push(dbgEntry);
           console.log('[P295]', JSON.stringify(dbgEntry));
 
-          let fbResult = extractMRZ(clean(fbText));
+          // Phase 2.95 line recombination: ALWAYS try filtered candidates FIRST
+          // to prevent false positives from garbage lines in full OCR text.
+          // Collect MRZ-like lines (≥28 chars, clean charset, MRZ pattern),
+          // try all 3-line orderings via extractMRZ. Pure string ops, no OCR.
+          // Max 5 candidates = 60 permutations. Falls back to full-text
+          // extractMRZ only if no filtered candidates found or all fail.
+          const fbCands = fbText.split('\n').filter(l => {
+            const cl = l.trim().replace(/[^A-Z0-9<]/gi, '').toUpperCase();
+            if (cl.length < 28) return false;
+            if (!/^[A-Z0-9<]+$/.test(cl)) return false;
+            return cl.includes('<') || /^I</.test(cl) || /^\d{6}/.test(cl) || cl.includes('<<');
+          }).slice(0, 5);
 
-          // Phase 2.95 line recombination: if extractMRZ failed, short OCR lines
-          // (>10 chars) between MRZ lines may have blocked the j+3 consecutive
-          // search window. Collect MRZ-like candidate lines (≥28 chars, clean
-          // charset, MRZ pattern), try all 3-line orderings via extractMRZ.
-          // No OCR call — pure string ops. Max 5 candidates = 60 permutations.
-          if (!fbResult) {
-            const fbCands = fbText.split('\n').filter(l => {
-              const cl = l.trim().replace(/[^A-Z0-9<]/gi, '').toUpperCase();
-              if (cl.length < 28) return false;
-              if (!/^[A-Z0-9<]+$/.test(cl)) return false;
-              return cl.includes('<') || /^I</.test(cl) || /^\d{6}/.test(cl) || cl.includes('<<');
-            }).slice(0, 5);
-            let p295permCount = 0;
+          let fbResult = null;
+          let p295permCount = 0;
+
+          if (fbCands.length >= 2) {
             outer295:
             for (let ai = 0; ai < fbCands.length; ai++) {
               for (let bi = 0; bi < fbCands.length; bi++) {
@@ -962,9 +964,13 @@
                 }
               }
             }
-            if (!fbResult && fbCands.length >= 3) {
-              console.log('[P295] recombination exhausted ' + p295permCount + ' permutations, candidates=' + fbCands.length);
-            }
+            console.log('[P295] recombination done: ' + (fbResult ? 'found' : 'no match') + ' after ' + p295permCount + ' permutations, candidates=' + fbCands.length);
+          }
+
+          // Fallback: full OCR text (only if recombination found nothing or too few candidates)
+          if (!fbResult) {
+            fbResult = extractMRZ(clean(fbText));
+            if (fbResult) console.log('[P295] full-text extractMRZ found result');
           }
 
           if (fbResult) {
