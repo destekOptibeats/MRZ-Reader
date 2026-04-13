@@ -442,7 +442,7 @@
     const usedFallback = phaseTag !== 'phase_1';
     const outcome      = isPass ? 'pass' : 'no_parse';
 
-    // passClass priority: debt-pass > correction-pass > fallback-pass > primary-pass
+    // passClass: coarse pass bucket for existing consumers
     let passClass;
     if (!isPass) {
       passClass = 'no_parse';
@@ -452,6 +452,26 @@
       passClass = 'correction-pass';
     } else {
       passClass = corrected ? 'correction-pass' : 'fallback-pass';
+    }
+
+    // pathClass: fine-grained routing label for audit / Batch 8+
+    let pathClass;
+    if (!isPass) {
+      pathClass = 'no_parse';
+    } else if (phaseTag === 'phase_1' && selBand.startsWith('early-correction@')) {
+      pathClass = 'early_correction';
+    } else if (phaseTag === 'phase_1') {
+      pathClass = 'primary';
+    } else if (phaseTag === 'phase_2.5') {
+      pathClass = 'cheap_fallback';
+    } else if (phaseTag === 'phase_2.75') {
+      pathClass = 'late_fallback';
+    } else if (phaseTag === 'phase_2.95' && selBand.includes('bot40')) {
+      pathClass = 'debt_fallback';
+    } else if (phaseTag === 'phase_2.95') {
+      pathClass = 'late_fallback';
+    } else {
+      pathClass = 'no_parse';
     }
 
     const summary = {
@@ -466,13 +486,18 @@
       correctionCount: corrCount,
       usedRelaxation:  false, // reserved for future relaxation tracking
       passClass,
+      pathClass,
       attempts:        rd.attempts,
       timing:          { totalMs },
+      p275: { reached: rd.p275Reached, extracted: rd.p275Extracted,
+              validated: rd.p275Validated, won: rd.p275Won },
+      p295: { reached: rd.p295Reached, ocrAttempts: rd.p295OcrAttempts,
+              won: rd.p295Won, wonVia: rd.p295WonVia, winLabel: rd.p295WinLabel },
     };
     if (!window._dbgData) window._dbgData = [];
     window._dbgData.push(summary);
     if (window._mrzDebug) console.log('[MRZ-DBG]', rd.fileName, '→', outcome, phaseTag, selBand,
-      'ocr:', rd.ocrCalls, 'ms:', totalMs, 'class:', passClass);
+      'ocr:', rd.ocrCalls, 'ms:', totalMs, 'passClass:', passClass, 'pathClass:', pathClass);
     return result;
   }
 
@@ -527,7 +552,13 @@
 
     // Initialize per-run debug accumulator
     if (window._mrzDebug) {
-      _runDbg = { fileName: fileName || '', attempts: [], ocrCalls: 0, startMs: performance.now() };
+      _runDbg = {
+        fileName: fileName || '', attempts: [], ocrCalls: 0, startMs: performance.now(),
+        // Phase 2.75 audit
+        p275Reached: false, p275Extracted: false, p275Validated: false, p275Won: false,
+        // Phase 2.95 audit
+        p295Reached: false, p295OcrAttempts: 0, p295Won: false, p295WonVia: null, p295WinLabel: null,
+      };
     }
 
     if (window._mrzDebug) console.log('[MRZ] batch', fileName || '', resized.width + 'x' + resized.height);
@@ -771,15 +802,27 @@
         const hcCanvas = hiContrastPreprocess(bestProjCropData.crop);
         const hiOcrIn = batchUpscaleIfNeeded(hcCanvas);
         if (hiOcrIn.width > 100 && hiOcrIn.height > 100) {
+          if (_runDbg) _runDbg.p275Reached = true;
           ocrAttempt++;
           if (_runDbg) _runDbg.ocrCalls++;
           const { data: { text: hiText } } = await wr.recognize(hiOcrIn);
 
           const hiLongest  = longestOCRLine(hiText);
           const hiChevrons = countChevrons(hiText);
+
+          // Track intermediate extraction quality for audit (debug only, no behavior change)
+          if (_runDbg) {
+            const hiRaw = extractMRZ(clean(hiText));
+            _runDbg.p275Extracted = !!hiRaw;
+            if (hiRaw) _runDbg.p275Validated = validateMRZ(hiRaw).valid;
+          }
+
           const hiHit = tryMRZ(hiText, 'proj-hicontrast', { diag: lastDiag, attempts: ocrAttempt,
                                                              longestLine: hiLongest, chevronCount: hiChevrons });
-          if (hiHit) return _finalizeRun(hiHit, 'phase_2.75');
+          if (hiHit) {
+            if (_runDbg) _runDbg.p275Won = true;
+            return _finalizeRun(hiHit, 'phase_2.75');
+          }
         }
       } catch (_) {}
     }
@@ -801,6 +844,7 @@
       const MAX_P295_CALLS = 3;
       let p295count = 0;
 
+      if (_runDbg) _runDbg.p295Reached = true;
       if (window._mrzDebug) console.log('[P295] start bestDeg=' + bestDeg + ' file=' + (fileName || '?'));
 
       for (const { deg: fallbackDeg, frac } of PHASE295_ATTEMPTS) {
@@ -826,7 +870,7 @@
         if (fbOcrIn.height < 24) { if (window._mrzDebug) console.log('[P295] skip: height < 24'); continue; }
 
         ocrAttempt++;
-        if (_runDbg) _runDbg.ocrCalls++;
+        if (_runDbg) { _runDbg.ocrCalls++; _runDbg.p295OcrAttempts++; }
         p295count++;
         const pct       = Math.round(frac * 100);
         const bandLabel = 'rot' + fallbackDeg + '/bot' + pct + '-fallback';
@@ -881,6 +925,7 @@
                   const reordHit = tryMRZ(reord, bandLabel, { diag: lastDiag, attempts: ocrAttempt,
                                                                longestLine: fbLongest, chevronCount: fbChevrons }, true);
                   if (reordHit) {
+                    if (_runDbg) { _runDbg.p295Won = true; _runDbg.p295WonVia = 'reord'; _runDbg.p295WinLabel = bandLabel; }
                     if (window._mrzDebug) console.log('[P295] recombination success at perm#' + p295permCount + ' order=[' + ai + ',' + bi + ',' + ci + ']');
                     _pushAttempt({ path: bandLabel + '/reord', longestLine: fbLongest, chevronCount: fbChevrons,
                                    extracted: true, validated: true, reason: 'reord_accepted_perm' + p295permCount });
@@ -896,6 +941,7 @@
           const fbHit = tryMRZ(fbText, bandLabel, { diag: lastDiag, attempts: ocrAttempt,
                                                      longestLine: fbLongest, chevronCount: fbChevrons });
           if (fbHit) {
+            if (_runDbg) { _runDbg.p295Won = true; _runDbg.p295WonVia = 'full-text'; _runDbg.p295WinLabel = bandLabel; }
             if (window._mrzDebug) console.log('[P295] full-text extractMRZ found result');
             return _finalizeRun(fbHit, 'phase_2.95');
           }
