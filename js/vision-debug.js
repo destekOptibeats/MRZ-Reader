@@ -305,6 +305,51 @@ function visionClassifyFrameMode(canvas) {
   };
 }
 
+// ── POST-WARP DOCUMENT TRIMMER ────────────────────────────────────────────
+// Removes near-white margins from the normalized warp canvas.
+// For full-frame scans (content fills canvas): returns as-is (< 2% margin).
+// For scene images: removes background clutter outside the document.
+
+function visionTrimWarpMargins(canvas) {
+  var W = canvas.width, H = canvas.height;
+  if (W < 50 || H < 30) return canvas;
+  var ctx = canvas.getContext('2d', { willReadFrequently: true });
+  var d = ctx.getImageData(0, 0, W, H).data;
+
+  var minX = W, minY = H, maxX = 0, maxY = 0;
+  var thresh = 235; // pixels brighter than this are treated as margins
+  for (var y = 0; y < H; y++) {
+    for (var x = 0; x < W; x++) {
+      var pi = (y * W + x) * 4;
+      var lum = 0.299 * d[pi] + 0.587 * d[pi+1] + 0.114 * d[pi+2];
+      if (lum < thresh) {
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+      }
+    }
+  }
+
+  if (maxX <= minX || maxY <= minY) return canvas; // no content found
+
+  // If content bounding box is > 96% of canvas in both axes — image already fills frame.
+  // Return as-is to avoid no-op resampling.
+  var xMarginFrac = (minX + (W - maxX)) / W;
+  var yMarginFrac = (minY + (H - maxY)) / H;
+  if (xMarginFrac < 0.04 && yMarginFrac < 0.04) return canvas;
+
+  // Add 2% padding around content bounding box
+  var pad = Math.max(4, Math.round(Math.max(W, H) * 0.02));
+  var cx0 = Math.max(0, minX - pad), cy0 = Math.max(0, minY - pad);
+  var cx1 = Math.min(W, maxX + pad), cy1 = Math.min(H, maxY + pad);
+  var cW = cx1 - cx0, cH = cy1 - cy0;
+  if (cW < 80 || cH < 40) return canvas; // result too small — bail
+
+  var out = document.createElement('canvas');
+  out.width = cW; out.height = cH;
+  out.getContext('2d').drawImage(canvas, cx0, cy0, cW, cH, 0, 0, cW, cH);
+  return out;
+}
+
 // ── PERSPECTIVE WARP ──────────────────────────────────────────────────────
 
 function visionComputeHomography(src, dst) {
@@ -522,48 +567,82 @@ function visionAnalyzeImage(srcCanvas) {
   var warpSelectedByThreshold = useWarp && !useWarpStrict; // true when threshold rule (not strict) decided
   var selectedWhy = useWarp ? 'warp_score_higher' : 'orig_score_higher';
 
-  // ── Post-warp canonical orientation normalization ──────────────────────────
-  // A warp passes tier scoring when MRZ is in the lower half (warpMrzBR >= 0.50).
-  // However the warp can still be visually upside-down for human viewing — the
-  // perspective transform produces landscape aspect but may flip the document 180°.
-  // Fix: if warpMrzBR < 0.50, try the warp rotated 180° and switch if that is better.
-  //
-  // This does NOT change OCR result — it only fixes the displayed document orientation.
+  // ── Post-warp canonical orientation normalization ─────────────────────────
+  // warpMrzBR alone is insufficient — scoreMRZPresence can return bottom-half
+  // results for sideways canvases (horizontal row scan misaligned with vertical MRZ).
+  // Fix: test all 4 rotations of the warp canvas, pick the one with highest MRZ
+  // score AND MRZ firmly in the lower portion (>= 0.55). Replace best.warpCanvas.
+  var warpNormDeg = 0;
   var warpFlipped = false;
-  var ocrUsableRotation = best.deg;  // rotation chosen purely for OCR quality
+  var ocrUsableRotation = best.deg;
 
-  if (useWarp && best.warpCanvas && (best.warpMrzBR === undefined || best.warpMrzBR < 0.50)) {
-    try {
-      var flipCanvas = document.createElement('canvas');
-      flipCanvas.width  = best.warpCanvas.width;
-      flipCanvas.height = best.warpCanvas.height;
-      var fc = flipCanvas.getContext('2d');
-      fc.translate(flipCanvas.width, flipCanvas.height);
-      fc.rotate(Math.PI);
-      fc.drawImage(best.warpCanvas, 0, 0);
+  if (useWarp && best.warpCanvas) {
+    var _normBest = { deg: 0, score: -1, canvas: best.warpCanvas,
+                      presence: best.warpPresence, mrzBR: best.warpMrzBR || 0 };
+    [0, 90, 180, 270].forEach(function(ndeg) {
+      try {
+        var nc;
+        if (ndeg === 0) {
+          nc = best.warpCanvas;
+        } else {
+          nc = document.createElement('canvas');
+          nc.width  = (ndeg === 90 || ndeg === 270) ? best.warpCanvas.height : best.warpCanvas.width;
+          nc.height = (ndeg === 90 || ndeg === 270) ? best.warpCanvas.width  : best.warpCanvas.height;
+          var nctx = nc.getContext('2d');
+          nctx.save();
+          nctx.translate(nc.width / 2, nc.height / 2);
+          nctx.rotate(ndeg * Math.PI / 180);
+          nctx.drawImage(best.warpCanvas, -best.warpCanvas.width / 2, -best.warpCanvas.height / 2);
+          nctx.restore();
+        }
+        var nBin  = window.MRZPipeline.batchPreprocessMRZ(nc);
+        var nPres = window.MRZPipeline.scoreMRZPresence(nBin);
+        var nBR   = (nPres.cropY + nPres.cropH) / nc.height;
+        var nAsp  = nc.width / nc.height;
+        // Must have MRZ in lower 45% of canvas (br >= 0.55), stay landscape, beat current best
+        if (nBR >= 0.55 && nAsp >= 1.0 && nPres.score > _normBest.score) {
+          _normBest = { deg: ndeg, score: nPres.score, canvas: nc,
+                        presence: nPres, mrzBR: nBR };
+        }
+      } catch(e) {}
+    });
 
-      var flipBinary   = window.MRZPipeline.batchPreprocessMRZ(flipCanvas);
-      var flipPresence = window.MRZPipeline.scoreMRZPresence(flipBinary);
-      var flipMrzBR    = (flipPresence.cropY + flipPresence.cropH) / flipCanvas.height;
-
-      if (flipMrzBR >= 0.50) {
-        best.warpCanvas   = flipCanvas;
-        best.warpPresence = flipPresence;
-        best.warpMrzBR    = flipMrzBR;
-        warpFlipped       = true;
-        selectedWhy      += '+warp_180_normalized';
-      }
-    } catch(e) {}
+    if (_normBest.deg !== 0) {
+      best.warpCanvas   = _normBest.canvas;
+      best.warpPresence = _normBest.presence;
+      best.warpMrzBR    = _normBest.mrzBR;
+      warpNormDeg       = _normBest.deg;
+      warpFlipped       = true;
+      selectedWhy      += '+warp_norm' + warpNormDeg;
+    }
   }
 
-  var canonicalRotation = best.deg + (warpFlipped ? '+flip' : '');
+  // ── Post-normalization tight document crop ─────────────────────────────────
+  // Trim non-content (white / near-white) margins from the normalized warp.
+  // For full-frame images this is a no-op (content fills canvas).
+  // For scene images this removes background clutter around the document.
+  if (useWarp && best.warpCanvas) {
+    var trimmed = visionTrimWarpMargins(best.warpCanvas);
+    if (trimmed !== best.warpCanvas) {
+      best.warpCanvas = trimmed;
+      try {
+        var tBin  = window.MRZPipeline.batchPreprocessMRZ(trimmed);
+        var tPres = window.MRZPipeline.scoreMRZPresence(tBin);
+        best.warpPresence = tPres;
+        best.warpMrzBR    = (tPres.cropY + tPres.cropH) / trimmed.height;
+      } catch(e) {}
+      selectedWhy += '+trim';
+    }
+  }
+
+  var canonicalRotation = best.deg + (warpNormDeg ? '+' + warpNormDeg : '');
   var isVisuallyUpright = useWarp
-    ? (best.warpMrzBR !== undefined && best.warpMrzBR >= 0.50)
-    : false;  // orig-path has no warp to check
+    ? (best.warpMrzBR !== undefined && best.warpMrzBR >= 0.55)
+    : false;
 
   // Build human-readable selection reason for debug panel
   var selectionReason = 'rot=' + best.deg + '\u00b0'
-    + (warpFlipped ? '+flip' : '')
+    + (warpNormDeg ? '+norm' + warpNormDeg : '')
     + ' tier=' + best.tier
     + ' warpMrzBR=' + (best.warpMrzBR !== undefined ? best.warpMrzBR.toFixed(2) : '\u2014')
     + ' orig=' + best.origScore.toFixed(3)
@@ -630,8 +709,9 @@ function visionAnalyzeImage(srcCanvas) {
       detectedRotation:    best.deg,          // kept for backwards compatibility
       ocrUsableRotation:   ocrUsableRotation, // rotation selected for best OCR quality
       canonicalRotation:   canonicalRotation, // visual rotation (may add +flip suffix)
-      isVisuallyUpright:   isVisuallyUpright, // true when warp MRZ confirmed at bottom
-      warpFlipped:         warpFlipped,       // true when warp was 180° corrected post-selection
+      isVisuallyUpright:   isVisuallyUpright, // true when warp MRZ confirmed at bottom after normalization
+      warpFlipped:         warpFlipped,       // true when any post-warp rotation was applied
+      warpNormDeg:         warpNormDeg,       // additional rotation applied to warp (0/90/180/270)
       mrzFound:            best.effectiveScore > 0,
       sourceUsedForMrz:    useWarp ? 'warp' : 'original',
       selectedWhy:         selectedWhy,
