@@ -295,11 +295,13 @@
   //   1. factor = max(1, ceil(targetH / h)) — no forced 2× minimum; already-large
   //      crops (h >= targetH) get factor=1 and are only resized if over pixel budget.
   //   2. MAX_PIXELS cap — after upscale, proportionally scale down if output exceeds
-  //      4M pixels. This bounds OCR cost for wide crops (e.g. 5922×621 → 11844×1242
-  //      was 14.7M px; now capped to ~4M px via sqrt-scale).
+  //      8M pixels. This bounds OCR cost for very wide crops (e.g. 5922×621 → 11844×1242
+  //      was 14.7M px; now capped to ~8M px via sqrt-scale). Cap is set at 8M rather
+  //      than 4M to preserve quality for medium-large crops like img_1780 (7.2M) and
+  //      img_1785 (6.3M) which regressed at the 4M threshold.
   //
   // Very small crops (<150px) use a higher targetH (1200) to preserve fine detail.
-  const UPSCALE_MAX_PIXELS = 4_000_000;
+  const UPSCALE_MAX_PIXELS = 8_000_000;
   function batchUpscaleIfNeeded(canvas) {
     const targetH = canvas.height < 150 ? 1200 : 900;
     const factor  = Math.max(1, Math.ceil(targetH / canvas.height));
