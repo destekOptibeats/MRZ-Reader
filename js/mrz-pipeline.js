@@ -452,6 +452,36 @@
     return count;
   }
 
+  // ── tryMRZ helper ─────────────────────────────────────────────────────────
+
+  // Runs the full extract → correct → validate pipeline on raw OCR text.
+  // Returns a complete pipeline result object (ready to return from fastBatchOCR)
+  // or null. Fast-rejects weak OCR output before running extractMRZ.
+  // Debug mode logs the null reason and input quality signals for tuning.
+  function tryMRZ(text, label, { diag, attempts, longestLine, chevronCount }) {
+    const dbg = (reason) => {
+      if (window._mrzDebug) console.log('[tryMRZ]', label, reason,
+        '| longest:', longestLine, 'chevrons:', chevronCount, 'attempt:', attempts);
+    };
+    // Fast reject: OCR output too weak to contain any MRZ line
+    if (longestLine < 25) { dbg('fast_reject_length'); return null; }
+    if (chevronCount < 3)  { dbg('fast_reject_chevrons'); return null; }
+    const cleaned = clean(text);
+    const raw = extractMRZ(cleaned);
+    if (!raw) { dbg('no_extract'); return null; }
+    const corrLines = correctCheckDigits(raw.type, raw.lines);
+    const corrCount = countCheckDigitChanges(raw.type, raw.lines, corrLines);
+    if (corrCount > MAX_CORRECTIONS) { dbg('too_many_corrections(' + corrCount + ')'); return null; }
+    const corrResult = { type: raw.type, lines: corrLines };
+    if (!validateMRZ(corrResult).valid) { dbg('validation_failed'); return null; }
+    return {
+      extracted: corrResult, diag, attempts, longestLine, chevronCount,
+      rawOcrText: text, selectedBand: label,
+      corrected: corrCount > 0, correctionCount: corrCount,
+      recoveryMode: label,
+    };
+  }
+
   // ── BATCH OCR LOOP ────────────────────────────────────────────────────────
 
   // Multi-crop → global scoring → top-MAX_OCR OCR pipeline.
@@ -548,17 +578,6 @@
         if (text) lastDiag = diagnoseMRZ(text);
         if (window._mrzDebug) console.log('[MRZ] rot' + deg + '/' + label,
           'longest:', longest, 'ocrScore:', ocrScore);
-
-        // TEMP DEBUG — img_1914/1780 root cause investigation
-        if (['1914','1780'].some(id => (fileName||'').includes(id))) {
-          const lines = text.split('\n');
-          const mrzLines = lines.filter(l => l.length >= 28);
-          const entry = { rot: deg, label, fileName,
-            allLengths: lines.map(l => l.length),
-            mrzCandidates: mrzLines };
-          if (!window._dbgData) window._dbgData = [];
-          window._dbgData.push(entry);
-        }
 
         if (ocrScore > globalBestScore) { globalBestScore = ocrScore; globalBestText = text; }
 
@@ -710,33 +729,11 @@
           ocrAttempt++;
           const { data: { text: hiText } } = await wr.recognize(hiOcrIn);
 
-          // Debug log — same images as Phase 1 debug
-          if (['1914','1780'].some(id => (fileName||'').includes(id))) {
-            const hiLines = hiText.split('\n');
-            const entry = { rot: bestProjCropData.deg, label: 'proj-hicontrast', fileName,
-              allLengths: hiLines.map(l => l.length),
-              mrzCandidates: hiLines.filter(l => l.length >= 28) };
-            if (!window._dbgData) window._dbgData = [];
-            window._dbgData.push(entry);
-          }
-
-          const hiResult = extractMRZ(clean(hiText));
-          if (hiResult) {
-            const corrLines = correctCheckDigits(hiResult.type, hiResult.lines);
-            const corrCount = countCheckDigitChanges(hiResult.type, hiResult.lines, corrLines);
-            if (corrCount <= MAX_CORRECTIONS) {
-              const corrResult = { type: hiResult.type, lines: corrLines };
-              if (validateMRZ(corrResult).valid) {
-                return {
-                  extracted: corrResult, diag: lastDiag, attempts: ocrAttempt,
-                  longestLine: failLongest, chevronCount: failChevrons,
-                  rawOcrText: hiText, selectedBand: 'proj-hicontrast',
-                  corrected: corrCount > 0, correctionCount: corrCount,
-                  recoveryMode: 'proj-hicontrast',
-                };
-              }
-            }
-          }
+          const hiLongest  = longestOCRLine(hiText);
+          const hiChevrons = countChevrons(hiText);
+          const hiHit = tryMRZ(hiText, 'proj-hicontrast', { diag: lastDiag, attempts: ocrAttempt,
+                                                             longestLine: hiLongest, chevronCount: hiChevrons });
+          if (hiHit) return hiHit;
         }
       } catch (_) {}
     }
@@ -754,16 +751,6 @@
           ocrAttempt++;
           const { data: { text: psmText } } = await wr.recognize(hiOcrIn28);
           await wr.setParameters({ tessedit_pageseg_mode: '6' }); // restore
-
-          // Debug log for targeted images
-          if (['1914','1780'].some(id => (fileName||'').includes(id))) {
-            const psmLines = psmText.split('\n');
-            const entry = { rot: bestProjCropData?.deg, label: 'psm' + psm, fileName,
-              allLengths: psmLines.map(l => l.length),
-              mrzCandidates: psmLines.filter(l => l.length >= 28) };
-            if (!window._dbgData) window._dbgData = [];
-            window._dbgData.push(entry);
-          }
 
           const psmResult = extractMRZ(clean(psmText));
           if (psmResult) {
@@ -831,36 +818,11 @@
             ocrAttempt++;
             const { data: { text: deskewText } } = await wr.recognize(deskewOcrIn);
 
-            // Debug log for problem images
-            if (['1914', '1780'].some(id => (fileName || '').includes(id))) {
-              const dl = deskewText.split('\n');
-              const entry = {
-                rot: bestProjCropData.deg, label: 'micro-deskew', fileName,
-                allLengths: dl.map(l => l.length),
-                mrzCandidates: dl.filter(l => l.length >= 28),
-                bestAngle, score0, bestAngleScore, angleScores,
-              };
-              if (!window._dbgData) window._dbgData = [];
-              window._dbgData.push(entry);
-            }
-
-            const deskewResult = extractMRZ(clean(deskewText));
-            if (deskewResult) {
-              const corrLines = correctCheckDigits(deskewResult.type, deskewResult.lines);
-              const corrCount = countCheckDigitChanges(deskewResult.type, deskewResult.lines, corrLines);
-              if (corrCount <= MAX_CORRECTIONS) {
-                const corrResult = { type: deskewResult.type, lines: corrLines };
-                if (validateMRZ(corrResult).valid) {
-                  return {
-                    extracted: corrResult, diag: lastDiag, attempts: ocrAttempt,
-                    longestLine: failLongest, chevronCount: failChevrons,
-                    rawOcrText: deskewText, selectedBand: 'micro-deskew',
-                    corrected: corrCount > 0, correctionCount: corrCount,
-                    recoveryMode: 'micro-deskew',
-                  };
-                }
-              }
-            }
+            const deskewLongest  = longestOCRLine(deskewText);
+            const deskewChevrons = countChevrons(deskewText);
+            const deskewHit = tryMRZ(deskewText, 'micro-deskew', { diag: lastDiag, attempts: ocrAttempt,
+                                                                    longestLine: deskewLongest, chevronCount: deskewChevrons });
+            if (deskewHit) return deskewHit;
           }
         }
       } catch (_) {}
@@ -883,12 +845,12 @@
       const MAX_P295_CALLS = 3;
       let p295count = 0;
 
-      console.log('[P295] start bestDeg=' + bestDeg + ' file=' + (fileName || '?'));
+      if (window._mrzDebug) console.log('[P295] start bestDeg=' + bestDeg + ' file=' + (fileName || '?'));
 
       for (const { deg: fallbackDeg, frac } of PHASE295_ATTEMPTS) {
         if (p295count >= MAX_P295_CALLS) break;
         const pcd = projByDeg[fallbackDeg];
-        if (!pcd) { console.log('[P295] skip deg=' + fallbackDeg + ' no projByDeg entry'); continue; }
+        if (!pcd) { if (window._mrzDebug) console.log('[P295] skip deg=' + fallbackDeg + ' no projByDeg entry'); continue; }
 
         const rh     = pcd.rotated.height;
         const botH   = Math.round(rh * frac);
@@ -904,8 +866,8 @@
         );
 
         const fbOcrIn = batchUpscaleIfNeeded(batchPreprocessMRZ(fbCrop));
-        console.log('[P295] attempt deg=' + fallbackDeg + ' frac=' + frac + ' cropH=' + botH + ' ocrH=' + fbOcrIn.height);
-        if (fbOcrIn.height < 24) { console.log('[P295] skip: height < 24'); continue; }
+        if (window._mrzDebug) console.log('[P295] attempt deg=' + fallbackDeg + ' frac=' + frac + ' cropH=' + botH + ' ocrH=' + fbOcrIn.height);
+        if (fbOcrIn.height < 24) { if (window._mrzDebug) console.log('[P295] skip: height < 24'); continue; }
 
         ocrAttempt++;
         p295count++;
@@ -915,20 +877,24 @@
         try {
           const { data: { text: fbText } } = await wr.recognize(fbOcrIn);
 
-          // Unconditional debug — always pushed, every attempt, every image
-          const fl = fbText.split('\n');
-          const dbgEntry = {
-            phase: '2.95', label: bandLabel, deg: fallbackDeg, frac, fileName,
-            cropHeight: botH,
-            allLengths: fl.map(l => l.length),
-            longestLine: Math.max(0, ...fl.map(l => l.length)),
-            mrzCandidates: fl.filter(l => l.length >= 28),
-            chevronCount: (fbText.match(/</g) || []).length,
-            mrzScore: scoreMRZText(fbText),
-          };
-          if (!window._dbgData) window._dbgData = [];
-          window._dbgData.push(dbgEntry);
-          console.log('[P295]', JSON.stringify(dbgEntry));
+          const fbLongest  = longestOCRLine(fbText);
+          const fbChevrons = countChevrons(fbText);
+
+          if (window._mrzDebug) {
+            const fl = fbText.split('\n');
+            const dbgEntry = {
+              phase: '2.95', label: bandLabel, deg: fallbackDeg, frac, fileName,
+              cropHeight: botH,
+              allLengths: fl.map(l => l.length),
+              longestLine: fbLongest,
+              mrzCandidates: fl.filter(l => l.length >= 28),
+              chevronCount: fbChevrons,
+              mrzScore: scoreMRZText(fbText),
+            };
+            if (!window._dbgData) window._dbgData = [];
+            window._dbgData.push(dbgEntry);
+            console.log('[P295]', JSON.stringify(dbgEntry));
+          }
 
           // Phase 2.95 line recombination: ALWAYS try filtered candidates FIRST
           // to prevent false positives from garbage lines in full OCR text.
@@ -943,7 +909,6 @@
             return cl.includes('<') || /^I</.test(cl) || /^\d{6}/.test(cl) || cl.includes('<<');
           }).slice(0, 5);
 
-          let fbResult = null;
           let p295permCount = 0;
 
           if (fbCands.length >= 2) {
@@ -955,44 +920,29 @@
                   if (ci === ai || ci === bi) continue;
                   p295permCount++;
                   const reord = [fbCands[ai], fbCands[bi], fbCands[ci]].join('\n');
-                  const r = extractMRZ(clean(reord));
-                  if (r) {
-                    fbResult = r;
-                    console.log('[P295] recombination success at perm#' + p295permCount + ' order=[' + ai + ',' + bi + ',' + ci + ']');
-                    break outer295;
+                  const reordHit = tryMRZ(reord, bandLabel, { diag: lastDiag, attempts: ocrAttempt,
+                                                               longestLine: fbLongest, chevronCount: fbChevrons });
+                  if (reordHit) {
+                    if (window._mrzDebug) console.log('[P295] recombination success at perm#' + p295permCount + ' order=[' + ai + ',' + bi + ',' + ci + ']');
+                    return reordHit;
                   }
                 }
               }
             }
-            console.log('[P295] recombination done: ' + (fbResult ? 'found' : 'no match') + ' after ' + p295permCount + ' permutations, candidates=' + fbCands.length);
+            if (window._mrzDebug) console.log('[P295] recombination done: no match after ' + p295permCount + ' permutations, candidates=' + fbCands.length);
           }
 
           // Fallback: full OCR text (only if recombination found nothing or too few candidates)
-          if (!fbResult) {
-            fbResult = extractMRZ(clean(fbText));
-            if (fbResult) console.log('[P295] full-text extractMRZ found result');
+          const fbHit = tryMRZ(fbText, bandLabel, { diag: lastDiag, attempts: ocrAttempt,
+                                                     longestLine: fbLongest, chevronCount: fbChevrons });
+          if (fbHit) {
+            if (window._mrzDebug) console.log('[P295] full-text extractMRZ found result');
+            return fbHit;
           }
-
-          if (fbResult) {
-            const corrLines = correctCheckDigits(fbResult.type, fbResult.lines);
-            const corrCount = countCheckDigitChanges(fbResult.type, fbResult.lines, corrLines);
-            if (corrCount <= MAX_CORRECTIONS) {
-              const corrResult = { type: fbResult.type, lines: corrLines };
-              if (validateMRZ(corrResult).valid) {
-                return {
-                  extracted: corrResult, diag: lastDiag, attempts: ocrAttempt,
-                  longestLine: failLongest, chevronCount: failChevrons,
-                  rawOcrText: fbText, selectedBand: bandLabel,
-                  corrected: corrCount > 0, correctionCount: corrCount,
-                  recoveryMode: bandLabel,
-                };
-              }
-            }
-          }
-          console.log('[P295] attempt ' + bandLabel + ' no valid MRZ');
-        } catch (e) { console.log('[P295] OCR error:', e?.message); }
+          if (window._mrzDebug) console.log('[P295] attempt ' + bandLabel + ' no valid MRZ');
+        } catch (e) { if (window._mrzDebug) console.log('[P295] OCR error:', e?.message); }
       }
-      console.log('[P295] all attempts exhausted, p295count=' + p295count);
+      if (window._mrzDebug) console.log('[P295] all attempts exhausted, p295count=' + p295count);
     }
 
     // ── Phase 3: NO_PARSE ─────────────────────────────────────────────────
@@ -1084,7 +1034,6 @@
   // ── EXPORT ────────────────────────────────────────────────────────────────
 
   window.MRZPipeline = {
-    cropBottom,
     resizeForOCR,
     batchPreprocessMRZ,
     batchUpscaleIfNeeded,
