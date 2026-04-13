@@ -16,6 +16,74 @@
       .join('\n');
   }
 
+  // ── TD1_L2 EXPIRY RESCUE ──────────────────────────────────────────────
+  // Attempts to correct a garbled expiry date (positions 8–13) in a 30-char
+  // TD1_L2 string using OCR confusion substitutions. Validates each candidate
+  // against the expiry check digit (pos 14). Returns corrected string iff
+  // exactly ONE candidate produces valid MM/DD AND matches expiry CD.
+  // Called only when DOB is valid but expiry is invalid. Never touches DOB,
+  // nationality, or optional fields. TD3 excluded.
+  function rescueL2Expiry(s30) {
+    if (!s30 || s30.length !== 30) return null;
+    const expRaw = s30.substring(8, 14);
+    if (!/^\d{6}$/.test(expRaw)) return null;       // expiry must be digits
+    const rawMM = +expRaw.slice(2, 4), rawDD = +expRaw.slice(4, 6);
+    if (rawMM >= 1 && rawMM <= 12 && rawDD >= 1 && rawDD <= 31) return null; // already valid
+    const dobMM = +s30.slice(2, 4), dobDD = +s30.slice(4, 6);
+    if (dobMM < 1 || dobMM > 12 || dobDD < 1 || dobDD > 31) return null;    // DOB invalid — no rescue
+    const expCD = +s30[14];  // expiry check digit (reference for candidate validation)
+
+    // OCR confusion map: what could each OCR-read character really be?
+    // User-specified: O↔0, I↔1, L↔1, Z↔2, S↔5, B↔8, G↔6, Q↔0
+    // Added: 7↔1 — OCR-B font: digit 1 commonly misread as 7 (critical for img_1914)
+    const CONF = { '7':'1','1':'7','O':'0','Q':'0','G':'0','I':'1','L':'1','Z':'2','S':'5','B':'8' };
+    function alts(ch) {
+      const r = new Set([ch]);
+      if (CONF[ch]) for (const c of CONF[ch]) r.add(c);
+      return [...r];
+    }
+
+    const ec = expRaw.split('');
+    const valid = new Set();
+
+    // ── 1-char corrections ────────────────────────────────────────────────
+    for (let i = 0; i < 6; i++) {
+      for (const alt of alts(ec[i])) {
+        if (alt === ec[i]) continue;
+        const t = ec.slice(); t[i] = alt;
+        const s = t.join('');
+        if (!/^\d{6}$/.test(s)) continue;
+        const mm = +s.slice(2,4), dd = +s.slice(4,6);
+        if (mm < 1 || mm > 12 || dd < 1 || dd > 31) continue;
+        if (chk(s) !== expCD) continue;   // check digit must match
+        valid.add(s);
+      }
+    }
+    // ── 2-char corrections (only if single-char produced no unique match) ─
+    if (valid.size !== 1) {
+      valid.clear();
+      for (let i = 0; i < 6; i++) for (const altI of alts(ec[i])) {
+        if (altI === ec[i]) continue;
+        for (let j = i+1; j < 6; j++) for (const altJ of alts(ec[j])) {
+          if (altJ === ec[j]) continue;
+          const t = ec.slice(); t[i] = altI; t[j] = altJ;
+          const s = t.join('');
+          if (!/^\d{6}$/.test(s)) continue;
+          const mm = +s.slice(2,4), dd = +s.slice(4,6);
+          if (mm < 1 || mm > 12 || dd < 1 || dd > 31) continue;
+          if (chk(s) !== expCD) continue;
+          valid.add(s);
+        }
+      }
+    }
+
+    if (valid.size !== 1) return null;   // ambiguous or no fix — preserve original behaviour
+    const fixedExp = [...valid][0];
+    const arr = s30.split('');
+    for (let i = 0; i < 6; i++) arr[8+i] = fixedExp[i];
+    return arr.join('');   // pos14 (expiry CD) left as-is; correctCheckDigits recomputes if needed
+  }
+
   // ── FIX LINE (satır tipi bilinçli) ────────────────────────────────────
   // kind: 'TD1_L1' | 'TD1_L2' | 'TD1_L3' | 'TD3_L1' | 'TD3_L2'
   function fixLine(s, { targetLen, kind }) {
@@ -34,7 +102,10 @@
         const c = s.substring(skip, skip + targetLen);
         const f = (kind === 'TD1_L3') ? applyNameFixes(c, kind) : applyDigitFixes(c, kind);
         if (kind === 'TD1_L1' && isL1_TD1(f)) overValid.push(f);
-        if (kind === 'TD1_L2' && isL2_TD1(f)) overValid.push(f);
+        if (kind === 'TD1_L2') {
+          if (isL2_TD1(f)) overValid.push(f);
+          else { const r = rescueL2Expiry(f); if (r && isL2_TD1(r)) overValid.push(r); }
+        }
         if (kind === 'TD1_L3' && isL3_TD1(f)) overValid.push(f);
       }
       if (overValid.length >= 1) return overValid[0]; // earliest valid wins
