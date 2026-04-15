@@ -539,7 +539,7 @@
 
       const crops = generateCropCandidates(rotated.height, smooth, cropY, cropH);
       for (const c of crops) {
-        allCandidates.push({ deg, rotated, ...c, globalScore: c.score * (1 + rotScore * 0.2) });
+        allCandidates.push({ deg, rotated, ...c, globalScore: c.score * (1 + rotScore * 0.2), rotScore });
         if (window._mrzDebug) {
           console.log('[MRZ candidates] rot=' + deg, 'y=' + c.y, 'h=' + c.h,
             'score=' + c.score.toFixed(3), 'globalScore=' + (c.score * (1 + rotScore * 0.2)).toFixed(3),
@@ -563,6 +563,17 @@
 
     // Global sort + take top MAX_OCR
     allCandidates.sort((a, b) => b.globalScore - a.globalScore);
+
+    // Batch 15: Promote the proj crop from the highest-rotScore rotation to position 0.
+    // rotScore measures MRZ band clarity per rotation; the highest-rotScore rotation is
+    // almost always correct. Ensures the best candidate is tried first without changing
+    // the ranking of remaining candidates.
+    const bestRotScore = Math.max(...allCandidates.map(c => c.rotScore));
+    const bestProjIdx  = allCandidates.findIndex(c => c.label === 'proj' && c.rotScore === bestRotScore);
+    if (bestProjIdx > 0) {
+      allCandidates.unshift(allCandidates.splice(bestProjIdx, 1)[0]);
+    }
+
     const topCandidates = allCandidates.slice(0, MAX_OCR);
 
     if (window._mrzDebug) {
