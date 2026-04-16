@@ -856,14 +856,25 @@ function visionAnalyzeImage(srcCanvas) {
     }
     var origMrzBR = (origPresence.cropY + origPresence.cropH) / rotH;
 
+    // Warp aspect bonus: rewards quads whose perspective-corrected aspect is close to
+    // a valid ID document aspect (TD1 1.586, TD2 1.421, TD3 1.414).
+    // Computed in warp space (post-homography) — more reliable than pre-warp quad corners.
+    // Applied as soft bonus (0..15), never as a hard gate, to avoid cliff-edge failures.
+    var _aspDists = [1.586, 1.421, 1.414].map(function(a) { return Math.abs(warpAspect - a); });
+    var _minAspDist = warpCanvas ? Math.min.apply(null, _aspDists) : 1;
+    var aspBonus = warpCanvas ? Math.max(0, 1 - _minAspDist / 0.5) * 15 : 0;
+    var aspBonusEff = quadIsTextureFallback ? aspBonus * 0.5 : aspBonus;
+
     var effectiveScore;
     if (warpQuadOk && warpMrzBR >= 0.50 && !quadIsTextureFallback) {
       // Tier 1: warp confirms document orientation + MRZ at bottom
       // (texture-fallback quads are capped at Tier 2 to preserve priority of scene/contour warps)
-      effectiveScore = 100 + (warpPresence ? warpPresence.score * 40 : 0);
+      // aspBonusEff rewards aspect closeness to TD1/TD2/TD3 (0..15 pts, purely additive —
+      // MRZ weight kept at 40, not reduced; existing winners stay unless geometry is better)
+      effectiveScore = 100 + aspBonusEff + (warpPresence ? warpPresence.score * 40 : 0);
     } else if (warpQuadOk) {
       // Tier 2: warp found but MRZ not confirmed at bottom
-      effectiveScore = 60 + (warpPresence ? warpPresence.score * 30 : 0);
+      effectiveScore = 60 + aspBonusEff * 0.5 + (warpPresence ? warpPresence.score * 30 : 0);
     } else if (origMrzBR >= 0.50) {
       // Tier 3: no warp, density found MRZ in lower half
       effectiveScore = 40 + origPresence.score * 25;
@@ -886,7 +897,8 @@ function visionAnalyzeImage(srcCanvas) {
       origMrzBR:      Math.round(origMrzBR * 100) / 100,
       tier:           tier,
       quadFound:      !!quad,
-      quadQuality:    quad ? quad.quality : null
+      quadQuality:    quad ? quad.quality : null,
+      aspBonus:       Math.round(aspBonusEff * 100) / 100
     });
 
     if (!best || effectiveScore > best.effectiveScore) {
