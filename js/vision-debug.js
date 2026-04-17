@@ -882,7 +882,15 @@ function visionAnalyzeImage(srcCanvas) {
       // strip is vertical (sideways). A portrait result means the rotation is wrong
       // for any MRZ document (TD1/TD2/TD3 are all landscape). Demoting portrait
       // canvases to Tier 4 forces the selection toward the landscape-producing rotation.
-      effectiveScore = 40 + origPresence.score * 25;
+      //
+      // MRZ structure bonus (+10): real MRZ produces exactly 2 (TD2/TD3) or 3 (TD1)
+      // distinct horizontal text lines of uniform OCR-B characters. False positives
+      // (header/title text, decorative elements that accidentally score high density)
+      // typically give 0-1 detected lines. This differentiates e.g. the "ESPAÑA
+      // PASAPORTE" header (1 dense band) from real MRZ (2 clear OCR-B rows) when
+      // both appear in the lower half of two competing landscape rotations.
+      var _linesOk = origPresence.lines === 2 || origPresence.lines === 3;
+      effectiveScore = 40 + origPresence.score * 25 + (_linesOk ? 10 : 0);
     } else {
       // Tier 4: raw fallback.
       // Includes: portrait canvas rotations (wrong orientation for MRZ docs),
@@ -906,7 +914,8 @@ function visionAnalyzeImage(srcCanvas) {
       tier:           tier,
       quadFound:      !!quad,
       quadQuality:    quad ? quad.quality : null,
-      aspBonus:       Math.round(aspBonusEff * 100) / 100
+      aspBonus:       Math.round(aspBonusEff * 100) / 100,
+      origLines:      origPresence.lines != null ? origPresence.lines : null
     });
 
     if (!best || effectiveScore > best.effectiveScore) {
