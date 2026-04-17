@@ -210,13 +210,75 @@ const BADGE = {
 
 // ── VISUAL QUALITY RENDERER ───────────────────────────────────────────────────
 
-function renderVisualQuality(vd) {
-  if (!vd || !vd.meta) return '<span style="color:var(--muted)">—</span>';
-  const m   = vd.meta;
-  const src = m.finalDocumentSource;   // 'warp' | 'rotated'
-  const dim = (m.warpDimensions && m.warpDimensions !== '—') ? m.warpDimensions : null;
+// Compute vision regression metrics by comparing visionAnalyzeImage output to
+// the visionExpected ground truth in the manifest case config.
+// Returns null when vd or visionExpected is absent.
+function computeVisionMetrics(vd, c) {
+  const exp = c && c.visionExpected;
+  if (!vd || !vd.meta || !exp) return null;
+  const m = vd.meta;
 
-  // aspBonus of the winning rotation
+  const isFullFrame   = exp.frameMode === 'full-frame';
+  const isKnownBug    = !!exp.knownBug;
+  const warpDetected  = m.finalDocumentSource === 'warp';
+  const warpCorrect   = warpDetected === !!exp.warpExpected;
+  const rotationCorrect = isFullFrame ? m.detectedRotation === exp.rotation : null;
+  const uprightCorrect  = m.isVisuallyUpright === !!exp.isVisuallyUpright;
+
+  // Aspect deviation: only when warp produced a finalDocument canvas
+  let aspectDeviation = null;
+  if (warpDetected && vd.images && vd.images.finalDocument) {
+    const fd  = vd.images.finalDocument;
+    let asp   = fd.width / fd.height;
+    if (asp < 1) asp = 1 / asp;   // normalize to landscape
+    const expAspects = { TD1: 1.586, TD2: 1.421, TD3: 1.414 };
+    const expAsp = expAspects[c.docType] || expAspects[m.docType] || 1.414;
+    aspectDeviation = Math.round(Math.abs(asp - expAsp) / expAsp * 1000) / 10;
+  }
+
+  // Overall vision pass/fail
+  let visionPass;
+  if (isKnownBug)        visionPass = null;
+  else if (isFullFrame)  visionPass = rotationCorrect;
+  else                   visionPass = warpCorrect && uprightCorrect;
+
+  // Visual quality category
+  let visualQuality;
+  if (isKnownBug || visionPass === null) visualQuality = 'na';
+  else if (!visionPass)                  visualQuality = 'bad';
+  else if (warpDetected && aspectDeviation !== null && aspectDeviation > 20) visualQuality = 'weak';
+  else if (warpDetected && aspectDeviation !== null && aspectDeviation <= 10) visualQuality = 'good';
+  else                                   visualQuality = 'weak';
+
+  return {
+    rotationCorrect,
+    warpDetected,
+    warpCorrect,
+    uprightCorrect,
+    aspectDeviation,
+    visualQuality,
+    visionPass,
+    isKnownBug,
+    detectedRotation:  m.detectedRotation,
+    isVisuallyUpright: m.isVisuallyUpright,
+  };
+}
+
+// Render the 📐 Görsel cell. When ground truth is available (visionExpected),
+// shows VISION PASS/FAIL badge. Otherwise falls back to informational emoji.
+function renderVisualQuality(vd, c) {
+  if (!vd || !vd.meta) return '<span style="color:var(--muted)">—</span>';
+  const m  = vd.meta;
+  const vm = computeVisionMetrics(vd, c);
+
+  // Dimension string from actual finalDocument canvas
+  let dimStr = null;
+  if (vd.images && vd.images.finalDocument) {
+    const fd = vd.images.finalDocument;
+    dimStr = fd.width + '×' + fd.height;
+  }
+
+  // aspBonus of the winning rotation (for informational fallback)
   let aspBonus = null;
   if (m.rotationScores && m.rotationScores.length) {
     const winner = m.rotationScores.reduce((a, b) =>
@@ -224,30 +286,37 @@ function renderVisualQuality(vd) {
     if (winner.aspBonus !== undefined) aspBonus = winner.aspBonus;
   }
 
-  // Full-frame images: warp not applicable
-  if (src === 'rotated') {
-    return '<span style="color:var(--muted);font-size:.72rem">⬜ orig<br>' +
-           escapeHtml(m.finalDimensions || '') + '</span>';
+  // ── No ground truth: informational display ──────────────────────────────────
+  if (!vm) {
+    if (m.finalDocumentSource === 'rotated') {
+      return '<span style="color:var(--muted);font-size:.72rem">⬜ orig' +
+             (dimStr ? '<br>' + escapeHtml(dimStr) : '') + '</span>';
+    }
+    let icon, color;
+    if (!m.isVisuallyUpright)              { icon = '🔴'; color = 'var(--red)'; }
+    else if (aspBonus !== null && aspBonus >= 8) { icon = '🟢'; color = 'var(--green)'; }
+    else                                   { icon = '🟡'; color = 'var(--yellow)'; }
+    const parts = [];
+    if (dimStr)    parts.push(escapeHtml(dimStr));
+    if (aspBonus !== null) parts.push('asp +' + aspBonus.toFixed(1));
+    return '<span style="color:' + color + ';font-size:.8rem">' + icon + '</span>' +
+      (parts.length ? '<br><span style="color:var(--muted);font-size:.66rem">' +
+        parts.join(' | ') + '</span>' : '');
   }
 
-  // Scene images with warp
-  let icon, color;
-  if (!m.isVisuallyUpright) {
-    icon = '🔴'; color = 'var(--red)';
-  } else if (aspBonus !== null && aspBonus >= 8) {
-    icon = '🟢'; color = 'var(--green)';
-  } else {
-    icon = '🟡'; color = 'var(--yellow)';
-  }
+  // ── With ground truth: VISION PASS / FAIL badge ─────────────────────────────
+  let badge, badgeColor;
+  if (vm.isKnownBug)          { badge = '🐛 BUG';    badgeColor = 'var(--yellow)'; }
+  else if (vm.visionPass)     { badge = '✅ V-PASS'; badgeColor = 'var(--green)'; }
+  else                        { badge = '❌ V-FAIL'; badgeColor = 'var(--red)'; }
 
-  const parts = [];
-  if (dim) parts.push(escapeHtml(dim));
-  if (aspBonus !== null) parts.push('asp +' + aspBonus.toFixed(1));
+  const sub = [];
+  if (dimStr) sub.push(escapeHtml(dimStr));
+  if (vm.aspectDeviation !== null) sub.push('asp Δ' + vm.aspectDeviation + '%');
 
-  return '<span style="color:' + color + ';font-size:.8rem">' + icon + '</span>' +
-    (parts.length
-      ? '<br><span style="color:var(--muted);font-size:.66rem">' + parts.join(' | ') + '</span>'
-      : '');
+  return '<span style="color:' + badgeColor + ';font-size:.75rem;font-weight:700">' + badge + '</span>' +
+    (sub.length ? '<br><span style="color:var(--muted);font-size:.62rem">' +
+      sub.join(' | ') + '</span>' : '');
 }
 
 function updateRow(caseId, outcome, subtype, diffs, timingMs) {
@@ -279,7 +348,8 @@ function updateRow(caseId, outcome, subtype, diffs, timingMs) {
   // 📐 Görsel quality cell (index 5)
   const vd = (typeof batchVisionCache !== 'undefined' && batchVisionCache.has(caseId))
     ? batchVisionCache.get(caseId).vd : null;
-  if (tr.cells[5]) tr.cells[5].innerHTML = renderVisualQuality(vd);
+  const caseConf = manifest.cases.find(mc => mc.id === caseId) || null;
+  if (tr.cells[5]) tr.cells[5].innerHTML = renderVisualQuality(vd, caseConf);
 
   // Vision debug button (index 6)
   const visionBtn = (typeof batchVisionCache !== 'undefined' && batchVisionCache.has(caseId))
@@ -419,6 +489,10 @@ async function runAllTests() {
           try { vd = visionAnalyzeImage(vCanvas); } catch (_) {}
         }
         batchVisionCache.set(c.id, { imgCanvas: vCanvas, vd: vd });
+
+        // Compute vision regression metrics against ground truth
+        const visionMetrics = computeVisionMetrics(vd, c);
+        resultEntry.vision = visionMetrics;
       } catch (_) {}
     }
 
@@ -453,7 +527,16 @@ function exportJSON() {
     aggregate = { pathClass, p295Reached, p295Won };
   }
 
-  const summary = { ...counts, total: results.length };
+  // Vision regression summary
+  const vCounts = { PASS: 0, FAIL: 0, BUG: 0, NA: 0 };
+  for (const r of results) {
+    if (!r.vision || r.vision.visionPass === undefined) vCounts.NA++;
+    else if (r.vision.isKnownBug)           vCounts.BUG++;
+    else if (r.vision.visionPass === true)  vCounts.PASS++;
+    else                                    vCounts.FAIL++;
+  }
+
+  const summary = { ...counts, total: results.length, vision: vCounts };
   if (aggregate) summary.aggregate = aggregate;
 
   const report = {

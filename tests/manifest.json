@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "cases": [
     {
       "id": "img_1775",
@@ -12,7 +12,17 @@
           "P<ESPGUCEL<SEVI<<SUAT<<<<<<<<<<<<<<<<<<<<<<<",
           "XDF6847989ESP8001070M3512159RE20160044140690"
       ],
-      "notes": "First line manually reconstructed from visible image + OCR; verify first line before locking."
+      "notes": "First line manually reconstructed from visible image + OCR; verify first line before locking.",
+      "visionExpected": {
+        "rotation": 90,
+        "rotationConfidence": "high",
+        "warpExpected": false,
+        "frameMode": "full-frame",
+        "isVisuallyUpright": true,
+        "crop": null,
+        "cropConfidence": "manual_required",
+        "notes": "Passport rotated 90° CW in original photo. No perspective warp needed (full-frame). Correct orientation achieved by 90° rotation of original image."
+      }
     },
     {
       "id": "img_1777",
@@ -24,7 +34,17 @@
       "mrz_expected": [
         "P<ESPMAZLIYAH<KOHEN<<LINET<<<<<<<<<<<<<<<<<<",
         "XDF6852826ESP8506081F3512159RE20160044040660"
-      ]
+      ],
+      "visionExpected": {
+        "rotation": 270,
+        "rotationConfidence": "high",
+        "warpExpected": false,
+        "frameMode": "full-frame",
+        "isVisuallyUpright": true,
+        "crop": null,
+        "cropConfidence": "manual_required",
+        "notes": "Passport rotated 90° CW in original photo (photo side at top). Rotate 90° CCW (270° CW) to correct. Full-frame, no warp needed."
+      }
     },
     {
       "id": "img_1780",
@@ -36,7 +56,17 @@
       "mrz_expected": [
         "P<ESPGUCEL<MAZLIYAH<<NICOLE<<<<<<<<<<<<<<<<<",
         "XDF6847990ESP1908011F3012154RE20230019040686"
-      ]
+      ],
+      "visionExpected": {
+        "rotation": 270,
+        "rotationConfidence": "high",
+        "warpExpected": false,
+        "frameMode": "full-frame",
+        "isVisuallyUpright": true,
+        "crop": null,
+        "cropConfidence": "manual_required",
+        "notes": "Passport rotated 270° CW (90° CCW) in original photo. No perspective warp needed."
+      }
     },
     {
       "id": "img_1785",
@@ -49,7 +79,17 @@
         "P<ESPGUCEL<MAZLIYAH<<MIA<<<<<<<<<<<<<<<<<<<<",
         "XDE4677822ESP1507218F230123RE20160135040650"
       ],
-      "notes": "First line manually reconstructed; verify first line before locking."
+      "notes": "First line manually reconstructed; verify first line before locking.",
+      "visionExpected": {
+        "rotation": 90,
+        "rotationConfidence": "high",
+        "warpExpected": false,
+        "frameMode": "full-frame",
+        "isVisuallyUpright": true,
+        "crop": null,
+        "cropConfidence": "manual_required",
+        "notes": "Passport rotated 90° CCW in original photo (photo side at bottom). Rotate 90° CW to correct. Full-frame, no warp needed."
+      }
     },
     {
       "id": "img_1913",
@@ -61,8 +101,21 @@
       "mrz_expected": [
         "I<TURA48P241286<52000135084<<<",
         "8001070M3411067TUR<<<<<<<<<<<0",
-        "GUCEL<<SUAT<<<<<<<<<<<<<<<<<<<"
-      ]
+        "GUCEL<<SUAT<<<<<<<<<<<<<<<<<<<<"
+      ],
+      "visionExpected": {
+        "rotation": 0,
+        "rotationConfidence": "high",
+        "warpExpected": true,
+        "frameMode": "scene",
+        "isVisuallyUpright": true,
+        "crop": {
+          "type": "bbox",
+          "x": 0.05, "y": 0.25, "w": 0.90, "h": 0.50,
+          "cropConfidence": "user_estimate"
+        },
+        "notes": "ID card held in hand in car interior. Already landscape+upright. Background: dark car interior + hand. Warp expected. Card centered; top 25%, bottom 25%, sides 5% cropped."
+      }
     },
     {
       "id": "img_1914",
@@ -70,7 +123,21 @@
       "category": "id_clean_easy",
       "docType": "TD1",
       "match": "exact",
-      "confidence": "high"
+      "confidence": "high",
+      "visionExpected": {
+        "rotation": 0,
+        "rotationConfidence": "high",
+        "warpExpected": true,
+        "frameMode": "scene",
+        "isVisuallyUpright": true,
+        "crop": {
+          "type": "bbox",
+          "x": 0.05, "y": 0.30, "w": 0.90, "h": 0.50,
+          "cropConfidence": "user_estimate"
+        },
+        "knownBug": "System currently selects 270° rotation instead of correct 0°, causing NO_PARSE. Card is clearly landscape+upright in original image. Expected rotation=0 is ground truth.",
+        "notes": "Clean ID card on dark wood surface. Already landscape+upright. Warp expected to remove dark background. This image should be VISION FAIL until detection bug is fixed."
+      }
     },
     {
       "id": "img_1923",
@@ -83,7 +150,20 @@
         "I<TURA00E487812<50476346072<<<",
         "7905285M2612317TUR<<<<<<<<<<<6",
         "ALMALEH<<ALPER<<<<<<<<<<<<<<<<"
-      ]
+      ],
+      "visionExpected": {
+        "rotation": 0,
+        "rotationConfidence": "high",
+        "warpExpected": true,
+        "frameMode": "scene",
+        "isVisuallyUpright": true,
+        "crop": {
+          "type": "bbox",
+          "x": 0.05, "y": 0.40, "w": 0.90, "h": 0.50,
+          "cropConfidence": "user_estimate"
+        },
+        "notes": "ID card on wooden table slats. Already landscape+upright. Card in lower center; top 40%, bottom 10%, sides 5% cropped. System uses 270° internal rotation + warp producing correct upright output."
+      }
     },
     {
       "id": "img_1924",
@@ -96,7 +176,20 @@
           "I<TURA00E487812<50476346072<<<",
           "7905285M2612317TUR<<<<<<<<<<<6",
           "ALMALEH<<ALPER<<<<<<<<<<<<<<<<"
-      ]
+      ],
+      "visionExpected": {
+        "rotation": 0,
+        "rotationConfidence": "high",
+        "warpExpected": true,
+        "frameMode": "scene",
+        "isVisuallyUpright": true,
+        "crop": {
+          "type": "bbox",
+          "x": 0.20, "y": 0.35, "w": 0.60, "h": 0.30,
+          "cropConfidence": "user_estimate"
+        },
+        "notes": "Same card as img_1923, wider shot from above on wooden table. Landscape+upright. Card centered; top 35%, bottom 35%, sides 20% cropped. System uses 0° + warpNorm 180° — normalization corrects. OCR FAIL is character accuracy, not orientation."
+      }
     },
     {
       "id": "img_1925",
@@ -109,7 +202,20 @@
           "I<TURA00E487812<50476346072<<<",
           "7905285M2612317TUR<<<<<<<<<<<6",
           "ALMALEH<<ALPER<<<<<<<<<<<<<<<<"
-      ]
+      ],
+      "visionExpected": {
+        "rotation": 0,
+        "rotationConfidence": "high",
+        "warpExpected": true,
+        "frameMode": "scene",
+        "isVisuallyUpright": true,
+        "crop": {
+          "type": "bbox",
+          "x": 0.20, "y": 0.45, "w": 0.60, "h": 0.25,
+          "cropConfidence": "user_estimate"
+        },
+        "notes": "Same card, slightly different angle/distance. Landscape+upright. Card slightly below center; top 45%, bottom 30%, sides 20% cropped. Same system behavior as img_1924. OCR FAIL is character accuracy."
+      }
     },
     {
       "id": "img_1926",
@@ -122,7 +228,20 @@
           "I<TURA00E487812<50476346072<<<",
           "7905285M2612317TUR<<<<<<<<<<<6",
           "ALMALEH<<ALPER<<<<<<<<<<<<<<<<"
-      ]
+      ],
+      "visionExpected": {
+        "rotation": 0,
+        "rotationConfidence": "high",
+        "warpExpected": true,
+        "frameMode": "scene",
+        "isVisuallyUpright": true,
+        "crop": {
+          "type": "bbox",
+          "x": 0.15, "y": 0.30, "w": 0.70, "h": 0.20,
+          "cropConfidence": "user_estimate"
+        },
+        "notes": "Phone screenshot from web app camera view. Card is landscape+upright, positioned in upper center of preview. Warp expected to isolate card from phone UI chrome and wooden table. Top 30%, bottom 50%, sides 15% cropped."
+      }
     }
   ]
 }
