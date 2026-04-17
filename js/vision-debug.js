@@ -882,6 +882,14 @@ function visionAnalyzeImage(srcCanvas) {
       // Tier 4: raw fallback
       effectiveScore = origPresence.score * 15;
     }
+    // Full-frame landscape bonus: all MRZ documents (TD1/TD2/TD3) are landscape.
+    // For full-frame images with no detected quad, the correct rotation always produces
+    // a landscape canvas. Adding a bonus here breaks ties where the MRZ scanner gives a
+    // slightly higher density score to a portrait-producing rotation (e.g. 180° vs 270°
+    // for a passport photographed in portrait orientation).
+    // Only applied to Tier 3/4 (!warpQuadOk) — Tier 1/2 already handled by aspBonus.
+    if (!warpQuadOk && rotated.width > rotated.height) effectiveScore += 4;
+
     // Slight tie-breaker: prefer 0° (already upright) over upside-down (180°)
     if (deg === 0) effectiveScore += 3;
 
