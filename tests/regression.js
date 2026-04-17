@@ -191,6 +191,7 @@ function renderPendingRows() {
       '<td><span class="badge skip">⏭ Bekliyor</span></td>' +
       '<td>—</td>' +
       '<td>—</td>' +
+      '<td>—</td>' +
       '<td>—</td>';
     tbody.appendChild(tr);
   }
@@ -206,6 +207,48 @@ const BADGE = {
   SKIPPED:     ['skip',        '⏭ ATLA'],
   RUNNING:     ['running',     '⏳ Çalışıyor'],
 };
+
+// ── VISUAL QUALITY RENDERER ───────────────────────────────────────────────────
+
+function renderVisualQuality(vd) {
+  if (!vd || !vd.meta) return '<span style="color:var(--muted)">—</span>';
+  const m   = vd.meta;
+  const src = m.finalDocumentSource;   // 'warp' | 'rotated'
+  const dim = (m.warpDimensions && m.warpDimensions !== '—') ? m.warpDimensions : null;
+
+  // aspBonus of the winning rotation
+  let aspBonus = null;
+  if (m.rotationScores && m.rotationScores.length) {
+    const winner = m.rotationScores.reduce((a, b) =>
+      b.effectiveScore > a.effectiveScore ? b : a);
+    if (winner.aspBonus !== undefined) aspBonus = winner.aspBonus;
+  }
+
+  // Full-frame images: warp not applicable
+  if (src === 'rotated') {
+    return '<span style="color:var(--muted);font-size:.72rem">⬜ orig<br>' +
+           escapeHtml(m.finalDimensions || '') + '</span>';
+  }
+
+  // Scene images with warp
+  let icon, color;
+  if (!m.isVisuallyUpright) {
+    icon = '🔴'; color = 'var(--red)';
+  } else if (aspBonus !== null && aspBonus >= 8) {
+    icon = '🟢'; color = 'var(--green)';
+  } else {
+    icon = '🟡'; color = 'var(--yellow)';
+  }
+
+  const parts = [];
+  if (dim) parts.push(escapeHtml(dim));
+  if (aspBonus !== null) parts.push('asp +' + aspBonus.toFixed(1));
+
+  return '<span style="color:' + color + ';font-size:.8rem">' + icon + '</span>' +
+    (parts.length
+      ? '<br><span style="color:var(--muted);font-size:.66rem">' + parts.join(' | ') + '</span>'
+      : '');
+}
 
 function updateRow(caseId, outcome, subtype, diffs, timingMs) {
   const tr = document.getElementById('row-' + caseId);
@@ -233,10 +276,16 @@ function updateRow(caseId, outcome, subtype, diffs, timingMs) {
   tr.cells[3].innerHTML = timeHtml;
   tr.cells[4].innerHTML = issueHtml;
 
+  // 📐 Görsel quality cell (index 5)
+  const vd = (typeof batchVisionCache !== 'undefined' && batchVisionCache.has(caseId))
+    ? batchVisionCache.get(caseId).vd : null;
+  if (tr.cells[5]) tr.cells[5].innerHTML = renderVisualQuality(vd);
+
+  // Vision debug button (index 6)
   const visionBtn = (typeof batchVisionCache !== 'undefined' && batchVisionCache.has(caseId))
     ? '<button class="btn-vision" onclick="toggleVisionPanel(\'' + caseId + '\',this)">🔍 Vision</button>'
     : '—';
-  if (tr.cells[5]) tr.cells[5].innerHTML = visionBtn;
+  if (tr.cells[6]) tr.cells[6].innerHTML = visionBtn;
 }
 
 function updateSummary() {
@@ -353,7 +402,7 @@ async function runAllTests() {
     }
     results.push(resultEntry);
 
-    // Capture canvas for Vision debug panel (all non-SKIPPED rows)
+    // Capture canvas + run vision analysis for Visual Quality column
     if (file && outcome !== 'SKIPPED' && typeof batchVisionCache !== 'undefined') {
       try {
         const bmp = await createImageBitmap(file);
@@ -363,7 +412,13 @@ async function runAllTests() {
         vCanvas.width = vW; vCanvas.height = vH;
         vCanvas.getContext('2d').drawImage(bmp, 0, 0, vW, vH);
         if (bmp.close) bmp.close();
-        batchVisionCache.set(c.id, { imgCanvas: vCanvas, vd: null });
+
+        // Run visionAnalyzeImage immediately so 📐 Görsel column is populated
+        let vd = null;
+        if (typeof visionAnalyzeImage === 'function') {
+          try { vd = visionAnalyzeImage(vCanvas); } catch (_) {}
+        }
+        batchVisionCache.set(c.id, { imgCanvas: vCanvas, vd: vd });
       } catch (_) {}
     }
 
