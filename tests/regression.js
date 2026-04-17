@@ -259,13 +259,16 @@ function computeVisionMetrics(vd, c) {
     visualQuality,
     visionPass,
     isKnownBug,
+    isFullFrame,
     detectedRotation:  m.detectedRotation,
+    expectedRotation:  exp.rotation,
     isVisuallyUpright: m.isVisuallyUpright,
   };
 }
 
 // Render the 📐 Görsel cell. When ground truth is available (visionExpected),
-// shows VISION PASS/FAIL badge. Otherwise falls back to informational emoji.
+// shows VISION PASS/FAIL badge with Yön (orientation) and Kırp (crop) sub-checks.
+// Falls back to informational emoji when no ground truth.
 function renderVisualQuality(vd, c) {
   if (!vd || !vd.meta) return '<span style="color:var(--muted)">—</span>';
   const m  = vd.meta;
@@ -293,30 +296,64 @@ function renderVisualQuality(vd, c) {
              (dimStr ? '<br>' + escapeHtml(dimStr) : '') + '</span>';
     }
     let icon, color;
-    if (!m.isVisuallyUpright)              { icon = '🔴'; color = 'var(--red)'; }
+    if (!m.isVisuallyUpright)                   { icon = '🔴'; color = 'var(--red)'; }
     else if (aspBonus !== null && aspBonus >= 8) { icon = '🟢'; color = 'var(--green)'; }
-    else                                   { icon = '🟡'; color = 'var(--yellow)'; }
+    else                                         { icon = '🟡'; color = 'var(--yellow)'; }
     const parts = [];
-    if (dimStr)    parts.push(escapeHtml(dimStr));
+    if (dimStr)            parts.push(escapeHtml(dimStr));
     if (aspBonus !== null) parts.push('asp +' + aspBonus.toFixed(1));
     return '<span style="color:' + color + ';font-size:.8rem">' + icon + '</span>' +
       (parts.length ? '<br><span style="color:var(--muted);font-size:.66rem">' +
         parts.join(' | ') + '</span>' : '');
   }
 
-  // ── With ground truth: VISION PASS / FAIL badge ─────────────────────────────
+  // ── With ground truth: VISION PASS / FAIL badge + sub-checks ────────────────
   let badge, badgeColor;
-  if (vm.isKnownBug)          { badge = '🐛 BUG';    badgeColor = 'var(--yellow)'; }
-  else if (vm.visionPass)     { badge = '✅ V-PASS'; badgeColor = 'var(--green)'; }
-  else                        { badge = '❌ V-FAIL'; badgeColor = 'var(--red)'; }
+  if (vm.isKnownBug)      { badge = '🐛 BUG';    badgeColor = 'var(--yellow)'; }
+  else if (vm.visionPass) { badge = '✅ V-PASS'; badgeColor = 'var(--green)'; }
+  else                    { badge = '❌ V-FAIL'; badgeColor = 'var(--red)'; }
 
-  const sub = [];
-  if (dimStr) sub.push(escapeHtml(dimStr));
-  if (vm.aspectDeviation !== null) sub.push('asp Δ' + vm.aspectDeviation + '%');
+  // ── Yön (Orientation) sub-check ──────────────────────────────────────────────
+  let yonHtml;
+  if (vm.isKnownBug) {
+    yonHtml = '<span style="color:var(--yellow)">🔄 —</span>';
+  } else if (vm.isFullFrame) {
+    // Full-frame: check detected rotation vs expected
+    const ok = vm.rotationCorrect;
+    const rotLabel = vm.detectedRotation + '°' + (ok ? '' : '≠' + vm.expectedRotation + '°');
+    yonHtml = '<span style="color:' + (ok ? 'var(--green)' : 'var(--red)') + '">' +
+              '🔄 ' + rotLabel + (ok ? ' ✅' : ' ❌') + '</span>';
+  } else {
+    // Scene: check isVisuallyUpright
+    const ok = vm.uprightCorrect && vm.warpCorrect;
+    yonHtml = '<span style="color:' + (ok ? 'var(--green)' : 'var(--red)') + '">' +
+              '🔄 ' + (ok ? 'upright ✅' : 'wrong ❌') + '</span>';
+  }
+
+  // ── Kırp (Crop) sub-check ────────────────────────────────────────────────────
+  let kirpHtml;
+  if (!vm.warpDetected) {
+    // Full-frame: no crop expected
+    kirpHtml = '<span style="color:var(--muted)">✂️ N/A</span>';
+  } else if (vm.aspectDeviation === null) {
+    kirpHtml = '<span style="color:var(--muted)">✂️ —</span>';
+  } else {
+    // Scene with warp: use aspect deviation as crop quality proxy
+    const dev = vm.aspectDeviation;
+    let kirpColor, kirpIcon;
+    if (dev <= 10)      { kirpColor = 'var(--green)';  kirpIcon = '✅'; }
+    else if (dev <= 25) { kirpColor = 'var(--yellow)'; kirpIcon = '🟡'; }
+    else                { kirpColor = 'var(--red)';    kirpIcon = '❌'; }
+    kirpHtml = '<span style="color:' + kirpColor + '">✂️ Δ' + dev + '% ' + kirpIcon + '</span>';
+  }
+
+  const dimLine = dimStr
+    ? '<br><span style="color:var(--muted);font-size:.6rem">' + escapeHtml(dimStr) + '</span>'
+    : '';
+  const checksLine = '<br><span style="font-size:.64rem">' + yonHtml + ' &nbsp; ' + kirpHtml + '</span>';
 
   return '<span style="color:' + badgeColor + ';font-size:.75rem;font-weight:700">' + badge + '</span>' +
-    (sub.length ? '<br><span style="color:var(--muted);font-size:.62rem">' +
-      sub.join(' | ') + '</span>' : '');
+    dimLine + checksLine;
 }
 
 function updateRow(caseId, outcome, subtype, diffs, timingMs) {
