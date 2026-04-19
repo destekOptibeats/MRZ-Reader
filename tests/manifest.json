@@ -115,6 +115,7 @@
           "x": 0.05, "y": 0.25, "w": 0.90, "h": 0.50,
           "cropConfidence": "user_estimate"
         },
+        "knownBug": "visionDetectSceneDocumentQuad detects hand+car interior as card boundary. Warp crop includes significant background. aspCorr fixes aspect ratio metric but not crop content. ML-based segmentation required to fix.",
         "notes": "ID card held in hand in car interior. Already landscape+upright. Background: dark car interior + hand. Warp expected. Card centered; top 25%, bottom 25%, sides 5% cropped."
       }
     },
