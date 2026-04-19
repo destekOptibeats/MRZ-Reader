@@ -237,12 +237,14 @@ function computeVisionMetrics(vd, c) {
   }
 
   // Overall vision pass/fail
-  // Scene: warp must be correct, document must be upright, AND aspect must be within 25%
-  // (aspect > 25% deviation means the quad captured way too much background — bad crop)
+  // Scene: warp must be correct, document must be upright, AND aspect must be within 15%
+  // (aspect > 15% deviation means the quad captured too much background — bad crop.
+  //  25% was too lenient: img_1923/1924/1925 had 16-22% deviation from bad quads but
+  //  still passed. TD1 aspect=1.586; a clean warp should be within ±10-15% of target.)
   let visionPass;
   if (isKnownBug)        visionPass = null;
   else if (isFullFrame)  visionPass = rotationCorrect;
-  else                   visionPass = warpCorrect && uprightCorrect && (aspectDeviation === null || aspectDeviation <= 25);
+  else                   visionPass = warpCorrect && uprightCorrect && (aspectDeviation === null || aspectDeviation <= 15);
 
   // Visual quality category
   let visualQuality;
