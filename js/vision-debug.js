@@ -1025,6 +1025,51 @@ function visionAnalyzeImage(srcCanvas) {
     }
   }
 
+  // ── Post-warp aspect correction ────────────────────────────────────────────
+  // When visionDetectSceneDocumentQuad finds a quad that includes too much
+  // background (e.g. wooden table above the card), the warp aspect is
+  // smaller than the card standard. Since MRZ is anchored at the bottom
+  // (validated by warpMrzBR ≥ 0.55 above), the extra height is background
+  // above the card — safe to trim from the top.
+  //
+  // Applies when:
+  //   • docType known (TD1=1.586, TD2=1.421, TD3=1.414)
+  //   • Current aspect < expected AND deviation > 10% (too tall)
+  //   • Crop from top removes < 40% of canvas (sanity gate)
+  //   • MRZ still validates (mrzBR ≥ 0.50) after crop
+  if (useWarp && best.warpCanvas && best.docType) {
+    var _acAspRef = { TD1: 1.586, TD2: 1.421, TD3: 1.414 }[best.docType];
+    if (_acAspRef) {
+      var _acW = best.warpCanvas.width, _acH = best.warpCanvas.height;
+      var _acCurAsp = _acW / _acH;
+      var _acDev = Math.abs(_acCurAsp - _acAspRef) / _acAspRef;
+      if (_acDev > 0.10 && _acCurAsp < _acAspRef) {
+        var _acTargetH = Math.round(_acW / _acAspRef);
+        var _acCropTop = _acH - _acTargetH;
+        if (_acCropTop > 0 && _acCropTop < _acH * 0.40) {
+          try {
+            var _acCanvas = document.createElement('canvas');
+            _acCanvas.width  = _acW;
+            _acCanvas.height = _acTargetH;
+            _acCanvas.getContext('2d').drawImage(
+              best.warpCanvas, 0, _acCropTop, _acW, _acTargetH, 0, 0, _acW, _acTargetH
+            );
+            var _acBin   = window.MRZPipeline.batchPreprocessMRZ(_acCanvas);
+            var _acPres  = window.MRZPipeline.scoreMRZPresence(_acBin);
+            var _acMrzBR = (_acPres.cropY + _acPres.cropH) / _acTargetH;
+            if (_acMrzBR >= 0.50) {
+              best.warpCanvas   = _acCanvas;
+              best.warpPresence = _acPres;
+              best.warpMrzBR    = _acMrzBR;
+              best.warpScore    = _acPres.score;
+              selectedWhy      += '+aspCorr';
+            }
+          } catch(e) {}
+        }
+      }
+    }
+  }
+
   var canonicalRotation = best.deg + (warpNormDeg ? '+' + warpNormDeg : '');
   var isVisuallyUpright = useWarp
     ? (best.warpMrzBR !== undefined && best.warpMrzBR >= 0.55)
