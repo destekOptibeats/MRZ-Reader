@@ -883,14 +883,29 @@ function visionAnalyzeImage(srcCanvas) {
       // for any MRZ document (TD1/TD2/TD3 are all landscape). Demoting portrait
       // canvases to Tier 4 forces the selection toward the landscape-producing rotation.
       //
-      // MRZ structure bonus (+10): real MRZ produces exactly 2 (TD2/TD3) or 3 (TD1)
-      // distinct horizontal text lines of uniform OCR-B characters. False positives
-      // (header/title text, decorative elements that accidentally score high density)
-      // typically give 0-1 detected lines. This differentiates e.g. the "ESPAÑA
-      // PASAPORTE" header (1 dense band) from real MRZ (2 clear OCR-B rows) when
-      // both appear in the lower half of two competing landscape rotations.
-      var _linesOk = origPresence.lines === 2 || origPresence.lines === 3;
-      effectiveScore = 40 + origPresence.score * 25 + (_linesOk ? 10 : 0);
+      // MRZ row-count bonus: counts distinct horizontal text-row peaks in the detected
+      // strip using the smooth density profile from scoreMRZPresence.
+      // Real MRZ: exactly 2 peaks (TD2/TD3 = 2 OCR-B rows) → +6 pts
+      //           exactly 3 peaks (TD1 = 3 OCR-B rows)      → +2 pts
+      // False positives (e.g. "ESPAÑA PASAPORTE" header text): 3+ irregular peaks → +2 pts
+      // This extra 4-pt gap between peaks=2 and peaks=3 correctly breaks the tie between
+      // the real TD3 MRZ strip (2 clean OCR-B rows) and decorative header text that
+      // accidentally scores higher density but has irregular row structure.
+      var _peaksBonus = 0;
+      if (origPresence.smooth) {
+        var _prof = [], _pStart = origPresence.cropY, _pEnd = _pStart + origPresence.cropH;
+        for (var _pi = _pStart; _pi < _pEnd; _pi++) _prof.push(origPresence.smooth[_pi] || 0);
+        var _pMax = Math.max.apply(null, _prof);
+        if (_pMax > 0.01) {
+          var _pThr = _pMax * 0.35, _nPeaks = 0, _inPk = false;
+          for (var _pj = 0; _pj < _prof.length; _pj++) {
+            if (_prof[_pj] > _pThr && !_inPk)        { _nPeaks++; _inPk = true; }
+            else if (_prof[_pj] <= _pThr * 0.5)       { _inPk = false; }
+          }
+          _peaksBonus = _nPeaks === 2 ? 6 : _nPeaks === 3 ? 2 : _nPeaks === 1 ? 1 : 0;
+        }
+      }
+      effectiveScore = 40 + origPresence.score * 25 + _peaksBonus;
     } else {
       // Tier 4: raw fallback.
       // Includes: portrait canvas rotations (wrong orientation for MRZ docs),
@@ -929,45 +944,6 @@ function visionAnalyzeImage(srcCanvas) {
   if (!best) best = { deg: 0, rotated: srcCanvas, binary: srcCanvas,
                       origPresence: { score: 0, cropY: 0, cropH: srcCanvas.height },
                       origScore: 0, warpCanvas: null, warpScore: 0, effectiveScore: 0 };
-
-  // ── Post-loop thin-strip flip check ───────────────────────────────────────
-  // Problem: for portrait-source full-frame passports, both 90° and 270° produce
-  // landscape canvases. The MRZ scanner can't distinguish real MRZ (2 OCR-B rows,
-  // ~10-15% canvas height) from decorative header text like "ESPAÑA / PASAPORTE"
-  // (~20%+ canvas height) by score alone — both land in the lower half.
-  //
-  // Fix: if the winner is 90° or 270° with NO quad, compare the MRZ strip height
-  // ratio (cropH / canvasHeight) of the winner vs its 180° flip. If the flip
-  // produces a significantly thinner strip (< 85% of winner's ratio) AND the
-  // strip is still in the lower half (mrzBR >= 0.50), the flip has the real MRZ
-  // and the winner was fooled by wide header text. Switch to flip.
-  //
-  // Safety: img_1777 (correct 270°): real MRZ is thin, header flip would be thick
-  //   → flipRatio > curRatio → no switch ✓
-  // Target: img_1785 (wrong 270°): ESPAÑA header is thick, real MRZ flip is thin
-  //   → flipRatio < curRatio × 0.85 → switch to 90° ✓
-  if (best && !best.quad && (best.deg === 90 || best.deg === 270)) {
-    try {
-      var _flipDeg    = (best.deg + 180) % 360;
-      var _flipCanvas = window.MRZPipeline.rotateCanvas(best.rotated, 180);
-      var _flipBin    = window.MRZPipeline.batchPreprocessMRZ(_flipCanvas);
-      var _flipPres   = window.MRZPipeline.scoreMRZPresence(_flipBin);
-      var _flipBR     = (_flipPres.cropY + _flipPres.cropH) / _flipCanvas.height;
-      if (_flipBR >= 0.50) {
-        var _curRatio  = best.origPresence.cropH / best.rotated.height;
-        var _flipRatio = _flipPres.cropH / _flipCanvas.height;
-        if (_flipRatio < _curRatio * 0.85) {
-          // Flip has a thinner strip in the lower half → it's the real MRZ orientation
-          best.rotated      = _flipCanvas;
-          best.binary       = _flipBin;
-          best.origPresence = _flipPres;
-          best.origScore    = _flipPres.score;
-          best.origMrzBR    = _flipBR;
-          best.deg          = _flipDeg;
-        }
-      }
-    } catch(e) {}
-  }
 
   var t1 = performance.now();
 
