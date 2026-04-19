@@ -191,6 +191,17 @@ function visionDetectSceneDocumentQuad(canvas) {
     gray[i] = Math.round(0.299 * d[i*4] + 0.587 * d[i*4+1] + 0.114 * d[i*4+2]);
   }
 
+  // ── Border luminance (outer 8% ring) — used for dark/bright bg fast path ────
+  var _bSum = 0, _bCnt = 0, _bBand = Math.round(Math.min(W, H) * 0.08);
+  for (var _by = 0; _by < H; _by++) {
+    for (var _bx = 0; _bx < W; _bx++) {
+      if (_bx < _bBand || _bx >= W - _bBand || _by < _bBand || _by >= H - _bBand) {
+        _bSum += gray[_by * W + _bx]; _bCnt++;
+      }
+    }
+  }
+  var borderLuma = _bCnt > 0 ? Math.round(_bSum / _bCnt) : 128;
+
   // ── Otsu threshold ────────────────────────────────────────────────────────
   var hist = new Int32Array(256);
   for (var i = 0; i < gray.length; i++) hist[gray[i]]++;
@@ -224,7 +235,12 @@ function visionDetectSceneDocumentQuad(canvas) {
   // (e.g. warm-tan table or car interior raises all pixels), retry with
   // progressively higher fixed thresholds to isolate only the white card.
   var quadW = 0, quadH = 0, coverage = 0;
-  var allThresholds = [threshold, 180, 195, 210];
+  // Dark background fast path: prepend a targeted threshold before Otsu.
+  // When border pixels are very dark (< 50 luma), card is bright against dark bg.
+  // Use borderLuma + 70 to isolate card precisely (bypasses Otsu's noise sensitivity).
+  var allThresholds = borderLuma < 50
+    ? [borderLuma + 70, threshold, 180, 195, 210]
+    : [threshold, 180, 195, 210];
   var foundGoodBbox = false;
 
   for (var ti = 0; ti < allThresholds.length; ti++) {
@@ -291,6 +307,14 @@ function visionDetectSceneDocumentQuad(canvas) {
       }
     }
   }
+
+  // ── Bottom-corner safety margin ────────────────────────────────────────────
+  // Extend bl/br downward by 2% of H so the card's bottom edge (where MRZ sits)
+  // is always fully captured in the warp. Prevents MRZ line-clipping when Sobel
+  // corners land exactly on the card's bottom edge (warpMrzBR=1.00 scenario).
+  var _btmPad = Math.round(H * 0.02);
+  bl.y = Math.min(H - 1, bl.y + _btmPad);
+  br.y = Math.min(H - 1, br.y + _btmPad);
 
   var quality = computeQuadQuality([tl, tr, br, bl], W, H);
   return { corners: [tl, tr, br, bl], quality: quality };
@@ -1109,6 +1133,17 @@ function visionAnalyzeImage(srcCanvas) {
       // Density scorer found a real band — use its coordinates directly
       mrzCropY = finalPresence.cropY;
       mrzCropH = finalPresence.cropH;
+      // Minimum MRZ height: density scorer may lock onto a single dense line
+      // (e.g. line-3 names with many '<' chars) and miss lines above it.
+      // Empirically, 3-line TD1 MRZ occupies ≥28% of a well-warped canvas.
+      // Anchor at detected bottom, extend upward to meet the floor.
+      var _mrzMinH = Math.round(finalH * 0.28);
+      if (mrzCropH < _mrzMinH) {
+        var _mrzBottom = mrzCropY + mrzCropH;
+        mrzCropH = _mrzMinH;
+        mrzCropY = Math.max(0, _mrzBottom - mrzCropH);
+        selectedWhy += '+mrzFloor';
+      }
       selectedWhy += '+warp_density(' + best.docType + ')';
     } else {
       // Fallback: docType-based fixed bottom strip
