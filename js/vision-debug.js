@@ -1043,7 +1043,7 @@ function visionAnalyzeImage(srcCanvas) {
       var _acW = best.warpCanvas.width, _acH = best.warpCanvas.height;
       var _acCurAsp = _acW / _acH;
       var _acDev = Math.abs(_acCurAsp - _acAspRef) / _acAspRef;
-      if (_acDev > 0.10 && _acCurAsp < _acAspRef) {
+      if (_acDev > 0.05 && _acCurAsp < _acAspRef) {
         var _acTargetH = Math.round(_acW / _acAspRef);
         var _acCropTop = _acH - _acTargetH;
         if (_acCropTop > 0 && _acCropTop < _acH * 0.40) {
