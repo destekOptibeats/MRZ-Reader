@@ -308,14 +308,6 @@ function visionDetectSceneDocumentQuad(canvas) {
     }
   }
 
-  // ── Bottom-corner safety margin ────────────────────────────────────────────
-  // Extend bl/br downward by 2% of H so the card's bottom edge (where MRZ sits)
-  // is always fully captured in the warp. Prevents MRZ line-clipping when Sobel
-  // corners land exactly on the card's bottom edge (warpMrzBR=1.00 scenario).
-  var _btmPad = Math.round(H * 0.02);
-  bl.y = Math.min(H - 1, bl.y + _btmPad);
-  br.y = Math.min(H - 1, br.y + _btmPad);
-
   var quality = computeQuadQuality([tl, tr, br, bl], W, H);
   return { corners: [tl, tr, br, bl], quality: quality };
 }
@@ -1129,7 +1121,7 @@ function visionAnalyzeImage(srcCanvas) {
     var stripRatio = best.docType === 'TD1' ? 0.36 : 0.28;
     var fixedH = Math.round(finalH * stripRatio);
 
-    if (finalPresence && finalPresence.score > 0.15 && finalPresence.cropH < finalH * 0.35) {
+    if (finalPresence && finalPresence.score > 0.15 && finalPresence.cropH < finalH * 0.40) {
       // Density scorer found a real band — use its coordinates directly
       mrzCropY = finalPresence.cropY;
       mrzCropH = finalPresence.cropH;
