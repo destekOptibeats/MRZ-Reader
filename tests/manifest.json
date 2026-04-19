@@ -164,6 +164,7 @@
           "x": 0.05, "y": 0.40, "w": 0.90, "h": 0.50,
           "cropConfidence": "user_estimate"
         },
+        "knownBug": "visionDetectSceneDocumentQuad captures wooden table slats along with card. Warp canvas shows significant background (warpScore~0.21). aspCorr corrects aspect ratio metric but not crop content. Better edge detection required.",
         "notes": "ID card on wooden table slats. Already landscape+upright. Card in lower center; top 40%, bottom 10%, sides 5% cropped. System uses 270° internal rotation + warp producing correct upright output."
       }
     },
@@ -190,6 +191,7 @@
           "x": 0.20, "y": 0.35, "w": 0.60, "h": 0.30,
           "cropConfidence": "user_estimate"
         },
+        "knownBug": "Wider shot of same card — quad detector captures too much wooden table background above the card. Document panel shows background+card instead of card only. aspCorr corrects aspect metric but not crop content.",
         "notes": "Same card as img_1923, wider shot from above on wooden table. Landscape+upright. Card centered; top 35%, bottom 35%, sides 20% cropped. System uses 0° + warpNorm 180° — normalization corrects. OCR FAIL is character accuracy, not orientation."
       }
     },

@@ -236,15 +236,21 @@ function computeVisionMetrics(vd, c) {
     aspectDeviation = Math.round(Math.abs(asp - expAsp) / expAsp * 1000) / 10;
   }
 
+  // Warp quality score: MRZ density in the warp canvas (from pipeline scoreMRZPresence × 1.2).
+  // A low warpScore (<0.30) means the warp captured too much background relative to the MRZ zone.
+  // This catches bad quads where the card is a small fraction of the warp canvas.
+  const warpScore = (warpDetected && m.warpScore > 0) ? Math.round(m.warpScore * 1000) / 1000 : null;
+  const warpScoreWeak = warpDetected && (warpScore === null || warpScore < 0.30);
+
   // Overall vision pass/fail
-  // Scene: warp must be correct, document must be upright, AND aspect must be within 15%
-  // (aspect > 15% deviation means the quad captured too much background — bad crop.
-  //  25% was too lenient: img_1923/1924/1925 had 16-22% deviation from bad quads but
-  //  still passed. TD1 aspect=1.586; a clean warp should be within ±10-15% of target.)
+  // Scene: warp must be correct, document must be upright, aspect within 15%, AND warpScore ≥ 0.30
+  // (warpScore < 0.30 means MRZ density in warp is too low — quad captured too much background)
   let visionPass;
   if (isKnownBug)        visionPass = null;
   else if (isFullFrame)  visionPass = rotationCorrect;
-  else                   visionPass = warpCorrect && uprightCorrect && (aspectDeviation === null || aspectDeviation <= 15);
+  else                   visionPass = warpCorrect && uprightCorrect
+                                   && (aspectDeviation === null || aspectDeviation <= 15)
+                                   && !warpScoreWeak;
 
   // Visual quality category
   let visualQuality;
@@ -260,6 +266,8 @@ function computeVisionMetrics(vd, c) {
     warpCorrect,
     uprightCorrect,
     aspectDeviation,
+    warpScore,
+    warpScoreWeak,
     visualQuality,
     visionPass,
     isKnownBug,
@@ -342,13 +350,15 @@ function renderVisualQuality(vd, c) {
   } else if (vm.aspectDeviation === null) {
     kirpHtml = '<span style="color:var(--muted)">✂️ —</span>';
   } else {
-    // Scene with warp: use aspect deviation as crop quality proxy
+    // Scene with warp: aspect deviation + warpScore quality
     const dev = vm.aspectDeviation;
     let kirpColor, kirpIcon;
-    if (dev <= 10)      { kirpColor = 'var(--green)';  kirpIcon = '✅'; }
-    else if (dev <= 25) { kirpColor = 'var(--yellow)'; kirpIcon = '🟡'; }
-    else                { kirpColor = 'var(--red)';    kirpIcon = '❌'; }
-    kirpHtml = '<span style="color:' + kirpColor + '">✂️ Δ' + dev + '% ' + kirpIcon + '</span>';
+    if (vm.warpScoreWeak)   { kirpColor = 'var(--red)';    kirpIcon = '❌'; }
+    else if (dev <= 10)     { kirpColor = 'var(--green)';  kirpIcon = '✅'; }
+    else if (dev <= 25)     { kirpColor = 'var(--yellow)'; kirpIcon = '🟡'; }
+    else                    { kirpColor = 'var(--red)';    kirpIcon = '❌'; }
+    const scoreStr = vm.warpScore !== null ? ' s=' + vm.warpScore.toFixed(2) : '';
+    kirpHtml = '<span style="color:' + kirpColor + '">✂️ Δ' + dev + '%' + scoreStr + ' ' + kirpIcon + '</span>';
   }
 
   const dimLine = dimStr
