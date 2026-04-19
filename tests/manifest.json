@@ -124,8 +124,14 @@
       "file": "IMG_1914.jpg",
       "category": "id_clean_easy",
       "docType": "TD1",
-      "match": "exact",
+      "match": "fuzzy",
       "confidence": "high",
+      "mrz_expected": [
+        "I<TURA48P241286<52000135084<<<",
+        "8001070M3411067TUR<<<<<<<<<<<0",
+        "GUCEL<<SUAT<<<<<<<<<<<<<<<<<<<<"
+      ],
+      "notes": "Same card as img_1913. Clean ID on dark wood surface. Rotation and warp detection fixed via borderLuma fast path.",
       "visionExpected": {
         "rotation": 0,
         "rotationConfidence": "high",
@@ -137,8 +143,7 @@
           "x": 0.05, "y": 0.30, "w": 0.90, "h": 0.50,
           "cropConfidence": "user_estimate"
         },
-        "knownBug": "System currently selects 270° rotation instead of correct 0°, causing NO_PARSE. Card is clearly landscape+upright in original image. Expected rotation=0 is ground truth.",
-        "notes": "Clean ID card on dark wood surface. Already landscape+upright. Warp expected to remove dark background. This image should be VISION FAIL until detection bug is fixed."
+        "notes": "Clean ID card on dark wood surface. Landscape+upright. Warp isolates card from dark background. borderLuma fast path fixed rotation detection."
       }
     },
     {

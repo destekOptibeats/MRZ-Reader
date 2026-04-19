@@ -308,6 +308,17 @@ function visionDetectSceneDocumentQuad(canvas) {
     }
   }
 
+  // ── Symmetric corner outset (0.5% of max dimension) ──────────────────────
+  // Sobel edge pixels sit at the card-background boundary. Due to pixel
+  // rounding the detected corner may be 1-2 px inside the card edge.
+  // Expand each corner 0.5% outward in its natural direction so the full
+  // card extent is included in the perspective warp.
+  var _ep = Math.round(Math.max(W, H) * 0.005);
+  tl.x = Math.max(0,   tl.x - _ep); tl.y = Math.max(0,   tl.y - _ep);
+  tr.x = Math.min(W-1, tr.x + _ep); tr.y = Math.max(0,   tr.y - _ep);
+  bl.x = Math.max(0,   bl.x - _ep); bl.y = Math.min(H-1, bl.y + _ep);
+  br.x = Math.min(W-1, br.x + _ep); br.y = Math.min(H-1, br.y + _ep);
+
   var quality = computeQuadQuality([tl, tr, br, bl], W, H);
   return { corners: [tl, tr, br, bl], quality: quality };
 }
