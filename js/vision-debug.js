@@ -1127,11 +1127,14 @@ function visionAnalyzeImage(srcCanvas) {
       mrzCropH = finalPresence.cropH;
       // Minimum MRZ height: density scorer may lock onto a single dense line
       // (e.g. line-3 names with many '<' chars) and miss lines above it.
-      // TD1 cards have 3 MRZ lines occupying ~36% of a well-warped canvas.
-      // TD3 passports have 2 lines (~28%). Use 36% as the universal floor —
-      // it is safe for TD3 too (extra height above MRZ is just more card content).
-      // Anchor at detected bottom, extend upward to meet the floor.
-      var _mrzMinH = Math.round(finalH * 0.36);
+      // The warp canvas typically includes some background, so the card occupies
+      // only ~85-95% of the canvas height. TD1 3-line MRZ is ~30% of the card,
+      // which maps to only ~26-28% of the warp canvas — not enough with a 36% floor.
+      // Use 42% as a generous universal floor: covers TD1 (3 lines + margin) and
+      // TD3 passports in scene mode (2 lines + margin above). Safe because the floor
+      // only triggers when the density scorer under-detects; it is anchored at the
+      // confirmed MRZ bottom so extra height just includes more card content above.
+      var _mrzMinH = Math.round(finalH * 0.42);
       if (mrzCropH < _mrzMinH) {
         var _mrzBottom = mrzCropY + mrzCropH;
         mrzCropH = _mrzMinH;
