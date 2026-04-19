@@ -1014,9 +1014,15 @@ function visionAnalyzeImage(srcCanvas) {
         var nPres = window.MRZPipeline.scoreMRZPresence(nBin);
         var nBR   = (nPres.cropY + nPres.cropH) / nc.height;
         var nAsp  = nc.width / nc.height;
+        // Penalise wide bands: a genuine MRZ occupies ≤38% of a well-warped canvas.
+        // When the density scorer returns a band >38% it is likely confused by
+        // dense card data fields above the MRZ (e.g. Turkish ID address/name fields).
+        // Penalty factor 0.6 prevents those rotations from beating a clean narrow band.
+        var _nBandFrac = nPres.cropH / nc.height;
+        var _nAdjScore = nPres.score * (_nBandFrac > 0.38 ? 0.6 : 1.0);
         // Must have MRZ in lower 45% of canvas (br >= 0.55), stay landscape, beat current best
-        if (nBR >= 0.55 && nAsp >= 1.0 && nPres.score > _normBest.score) {
-          _normBest = { deg: ndeg, score: nPres.score, canvas: nc,
+        if (nBR >= 0.55 && nAsp >= 1.0 && _nAdjScore > _normBest.score) {
+          _normBest = { deg: ndeg, score: _nAdjScore, canvas: nc,
                         presence: nPres, mrzBR: nBR };
         }
       } catch(e) {}
@@ -1177,6 +1183,55 @@ function visionAnalyzeImage(srcCanvas) {
     }
   }
   try { mrzCrop = visionCropRegion(finalDocumentCanvas, mrzCropY, mrzCropH); } catch(e) {}
+
+  // ── Luminance sanity check: if mrzCrop is dark, warpNorm may be wrong ─────
+  // scoreMRZPresence can be fooled by dense card data fields, causing an incorrect
+  // 180° norm that inverts the card. After inversion the mrzBox falls on the
+  // wrong region (card header / dark background). Detect this by checking mean
+  // luminance of mrzCrop. If dark (<70) and a warpNorm rotation was applied,
+  // try reverting the norm (flip 180°) and recheck. Use whichever is brighter.
+  if (useWarp && mrzCrop && warpNormDeg !== 0) {
+    try {
+      var _ckCtx = mrzCrop.getContext('2d', { willReadFrequently: true });
+      var _ckD   = _ckCtx.getImageData(0, 0, mrzCrop.width, mrzCrop.height).data;
+      var _ckSum = 0;
+      for (var _ki = 0; _ki < _ckD.length; _ki += 4) {
+        _ckSum += 0.299 * _ckD[_ki] + 0.587 * _ckD[_ki + 1] + 0.114 * _ckD[_ki + 2];
+      }
+      var _ckLuma = _ckSum / (mrzCrop.width * mrzCrop.height);
+      if (_ckLuma < 70) {
+        // mrzCrop is too dark — warpNorm was likely applied incorrectly.
+        // Revert by rotating finalDocumentCanvas another 180°.
+        var _rvC = document.createElement('canvas');
+        _rvC.width = finalDocumentCanvas.width; _rvC.height = finalDocumentCanvas.height;
+        var _rvCtx = _rvC.getContext('2d');
+        _rvCtx.save();
+        _rvCtx.translate(_rvC.width / 2, _rvC.height / 2);
+        _rvCtx.rotate(Math.PI);
+        _rvCtx.drawImage(finalDocumentCanvas, -finalDocumentCanvas.width / 2, -finalDocumentCanvas.height / 2);
+        _rvCtx.restore();
+        var _rvCrop = visionCropRegion(_rvC, mrzCropY, mrzCropH);
+        var _rvCtx2 = _rvCrop.getContext('2d', { willReadFrequently: true });
+        var _rvD    = _rvCtx2.getImageData(0, 0, _rvCrop.width, _rvCrop.height).data;
+        var _rvSum  = 0;
+        for (var _ri = 0; _ri < _rvD.length; _ri += 4) {
+          _rvSum += 0.299 * _rvD[_ri] + 0.587 * _rvD[_ri + 1] + 0.114 * _rvD[_ri + 2];
+        }
+        var _rvLuma = _rvSum / (_rvCrop.width * _rvCrop.height);
+        if (_rvLuma > _ckLuma + 25) {
+          // Reverted canvas is significantly brighter → warpNorm was wrong, use reverted
+          finalDocumentCanvas = _rvC;
+          mrzCrop             = _rvCrop;
+          isVisuallyUpright   = true;
+          selectedWhy        += '+normRevert';
+        } else {
+          // Both dark → genuinely bad warp, mark as not upright
+          isVisuallyUpright = false;
+          selectedWhy      += '+lumaFail';
+        }
+      }
+    } catch(e) {}
+  }
 
   var t2 = performance.now();
 
