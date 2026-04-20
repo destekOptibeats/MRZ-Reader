@@ -308,6 +308,41 @@ function visionDetectSceneDocumentQuad(canvas) {
     }
   }
 
+  // ── Corner confidence: nearby edge-pixel count ────────────────────────────
+  // A corner that found no Sobel edge pixels in its quadrant stayed at the
+  // initialised bbox boundary value. Count edge pixels within a 2.5%-radius
+  // neighbourhood around each corner; < 3 pixels → "bbox fallback" corner.
+  var _cfR = Math.round(Math.max(W, H) * 0.025);
+  function _edgeCount(px, py) {
+    var c = 0;
+    var _ex0 = Math.max(0, px - _cfR), _ex1 = Math.min(W - 1, px + _cfR);
+    var _ey0 = Math.max(0, py - _cfR), _ey1 = Math.min(H - 1, py + _cfR);
+    for (var _ey = _ey0; _ey <= _ey1; _ey++)
+      for (var _ex = _ex0; _ex <= _ex1; _ex++)
+        if (edge[_ey * W + _ex]) c++;
+    return c;
+  }
+  var _cfTL = _edgeCount(tl.x, tl.y);
+  var _cfTR = _edgeCount(tr.x, tr.y);
+  var _cfBL = _edgeCount(bl.x, bl.y);
+  var _cfBR = _edgeCount(br.x, br.y);
+  var _cfMin = 3; // fewer than 3 edge pixels → no real corner detected there
+  var _cfLow = [_cfTL < _cfMin, _cfTR < _cfMin, _cfBL < _cfMin, _cfBR < _cfMin];
+  var _cfNLow = _cfLow.reduce(function(s, v) { return s + (v ? 1 : 0); }, 0);
+
+  // ── 3-corner geometric reconstruction ────────────────────────────────────
+  // If exactly one corner has no real edge support, reconstruct it from the
+  // other three using orthogonal projection (same X or Y as adjacent corners).
+  // This avoids using a spurious bbox-boundary point in the perspective warp.
+  //   TL/TR share the same top-Y band;  TL/BL share the same left-X band.
+  //   TR/BR share the same right-X band; BL/BR share the same bottom-Y band.
+  if (_cfNLow === 1) {
+    if      (_cfLow[0]) { tl = { x: bl.x, y: tr.y }; } // TL: left-X from BL, top-Y from TR
+    else if (_cfLow[1]) { tr = { x: br.x, y: tl.y }; } // TR: right-X from BR, top-Y from TL
+    else if (_cfLow[2]) { bl = { x: tl.x, y: br.y }; } // BL: left-X from TL, bottom-Y from BR
+    else                { br = { x: tr.x, y: bl.y }; } // BR: right-X from TR, bottom-Y from BL
+  }
+
   // ── Symmetric corner outset (0.5% of max dimension) ──────────────────────
   // Sobel edge pixels sit at the card-background boundary. Due to pixel
   // rounding the detected corner may be 1-2 px inside the card edge.
@@ -320,7 +355,8 @@ function visionDetectSceneDocumentQuad(canvas) {
   br.x = Math.min(W-1, br.x + _ep); br.y = Math.min(H-1, br.y + _ep);
 
   var quality = computeQuadQuality([tl, tr, br, bl], W, H);
-  return { corners: [tl, tr, br, bl], quality: quality };
+  return { corners: [tl, tr, br, bl], quality: quality,
+           cornerConf: { TL: _cfTL, TR: _cfTR, BL: _cfBL, BR: _cfBR, reconstructed: _cfNLow === 1 } };
 }
 
 // ── QUAD QUALITY VALIDATOR ────────────────────────────────────────────────
@@ -999,6 +1035,11 @@ function visionAnalyzeImage(srcCanvas) {
     // by dense card data fields in the inverted canvas, giving a spuriously high score
     // that would incorrectly invert an already-correct warp.
     var _has0Qualified = false;
+    // Extended guard: track 0° landscape score even when nBR < 0.55 (card is small/far,
+    // MRZ not in bottom 45% of the warp canvas). If 0° is landscape with any positive
+    // score, 180° must be at least 1.5× better before it can override — prevents wooden
+    // table texture from being mistaken for MRZ after inversion.
+    var _has0LandscapeScore = -1;
     [0, 90, 180, 270].forEach(function(ndeg) {
       try {
         var nc;
@@ -1025,13 +1066,22 @@ function visionAnalyzeImage(srcCanvas) {
         // Penalty factor 0.6 prevents those rotations from beating a clean narrow band.
         var _nBandFrac = nPres.cropH / nc.height;
         var _nAdjScore = nPres.score * (_nBandFrac > 0.38 ? 0.6 : 1.0);
+        // Track 0° landscape score regardless of nBR threshold.
+        // Even if MRZ is not confirmed in the bottom 45% (card small/far in warp),
+        // a landscape 0° score tells us 180° inversion would likely make things worse.
+        if (ndeg === 0 && nAsp >= 1.0 && _nAdjScore > _has0LandscapeScore) {
+          _has0LandscapeScore = _nAdjScore;
+        }
         // Must have MRZ in lower 45% of canvas (br >= 0.55), stay landscape, beat current best
         if (nBR >= 0.55 && nAsp >= 1.0 && _nAdjScore > _normBest.score) {
           if (ndeg === 0) { _has0Qualified = true; }
-          // 180° full-inversion must not override a valid 0° orientation.
-          // Only a sideways warp (90°/270°) can legitimately need normalization
-          // when the initial warp has MRZ already at the bottom.
-          if (ndeg === 180 && _has0Qualified) { return; }
+          // Block 180° inversion when:
+          // (a) 0° fully qualified (original guard — strong case), OR
+          // (b) 0° produced a positive landscape score AND 180° is not clearly better.
+          //     Ratio threshold 1.5×: a real upside-down card flips dramatically;
+          //     a table-texture false positive is only marginally better.
+          if (ndeg === 180 && (_has0Qualified ||
+              (_has0LandscapeScore > 0 && _nAdjScore < _has0LandscapeScore * 1.5))) { return; }
           _normBest = { deg: ndeg, score: _nAdjScore, canvas: nc,
                         presence: nPres, mrzBR: nBR };
         }
@@ -1110,6 +1160,43 @@ function visionAnalyzeImage(srcCanvas) {
           } catch(e) {}
         }
       }
+    }
+  }
+
+  // ── Multi-aspect correction (fallback when docType-specific aspCorr didn't fire) ──
+  // docType is unreliable for background-inflated quads (wooden table included → warp
+  // appears taller → TD1 card detected as TD2). Try all three standard aspect ratios
+  // and apply the trim that best confirms MRZ at the bottom. Skips if aspCorr already ran.
+  // Only runs when current aspect is too small (canvas too tall — background above card).
+  if (useWarp && best.warpCanvas && selectedWhy.indexOf('+aspCorr') < 0) {
+    var _acmW = best.warpCanvas.width, _acmH = best.warpCanvas.height;
+    var _acmCurAsp = _acmW / _acmH;
+    var _acmBestBR = -1, _acmBestCanvas = null, _acmBestPres = null;
+    [{ t: 'TD1', a: 1.586 }, { t: 'TD2', a: 1.421 }, { t: 'TD3', a: 1.414 }].forEach(function(ref) {
+      var _dev = (_acmCurAsp < ref.a) ? (ref.a - _acmCurAsp) / ref.a : 0;
+      if (_dev < 0.07) return; // deviation too small to bother (< 7%)
+      var _tgtH = Math.round(_acmW / ref.a);
+      var _top  = _acmH - _tgtH;
+      if (_top <= 0 || _top >= _acmH * 0.40) return; // sanity: only trim < 40% from top
+      try {
+        var _acm2 = document.createElement('canvas');
+        _acm2.width  = _acmW; _acm2.height = _tgtH;
+        _acm2.getContext('2d').drawImage(best.warpCanvas, 0, _top, _acmW, _tgtH, 0, 0, _acmW, _tgtH);
+        var _b2   = window.MRZPipeline.batchPreprocessMRZ(_acm2);
+        var _p2   = window.MRZPipeline.scoreMRZPresence(_b2);
+        var _br2  = (_p2.cropY + _p2.cropH) / _tgtH;
+        // Accept if MRZ is clearly at bottom AND this trim gives a better result than others tried
+        if (_br2 >= 0.50 && _br2 > _acmBestBR) {
+          _acmBestBR = _br2; _acmBestCanvas = _acm2; _acmBestPres = _p2;
+        }
+      } catch(e) {}
+    });
+    if (_acmBestCanvas) {
+      best.warpCanvas   = _acmBestCanvas;
+      best.warpPresence = _acmBestPres;
+      best.warpMrzBR    = _acmBestBR;
+      best.warpScore    = _acmBestPres.score;
+      selectedWhy      += '+aspCorrMulti';
     }
   }
 
