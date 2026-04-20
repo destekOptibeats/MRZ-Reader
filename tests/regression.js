@@ -234,6 +234,13 @@ function computeVisionMetrics(vd, c) {
   // MRZ crop quality: if the extracted mrzCrop contains background texture instead of
   // real MRZ text (uniform low-density pattern), the vision result is unreliable.
   const mrzCropValid = m.mrzCropValid !== false; // true by default (non-warp / legacy)
+  // DocType check: detected docType must match manifest's expected docType.
+  // A mismatch means the quad aspect ratio was distorted by background inclusion,
+  // causing the wrong strip size for mrzCrop extraction.
+  const detectedDocType  = m.docType || null;
+  const expectedDocType  = c.docType || null;
+  const docTypeCorrect   = !warpDetected || !detectedDocType || !expectedDocType
+                           || detectedDocType === expectedDocType;
 
   // Aspect deviation: only when warp produced a finalDocument canvas
   let aspectDeviation = null;
@@ -259,7 +266,7 @@ function computeVisionMetrics(vd, c) {
   if (isKnownBug)        visionPass = null;
   else if (isFullFrame)  visionPass = rotationCorrect;
   else                   visionPass = warpCorrect && uprightCorrect && warpNormCorrect
-                                   && mrzCropValid
+                                   && mrzCropValid && docTypeCorrect
                                    && (aspectDeviation === null || aspectDeviation <= 15)
                                    && !warpScoreWeak;
 
@@ -286,6 +293,9 @@ function computeVisionMetrics(vd, c) {
     detectedRotation:  m.detectedRotation,
     expectedRotation:  exp.rotation,
     isVisuallyUpright: m.isVisuallyUpright,
+    detectedDocType,
+    expectedDocType,
+    docTypeCorrect,
   };
 }
 
@@ -372,10 +382,19 @@ function renderVisualQuality(vd, c) {
     kirpHtml = '<span style="color:' + kirpColor + '">✂️ Δ' + dev + '%' + scoreStr + ' ' + kirpIcon + '</span>';
   }
 
+  // ── DocType sub-check ────────────────────────────────────────────────────────
+  let docTypeHtml = '';
+  if (vm.warpDetected && vm.detectedDocType) {
+    const dtOk = vm.docTypeCorrect;
+    const dtLabel = vm.detectedDocType + (dtOk ? '' : '≠' + vm.expectedDocType);
+    docTypeHtml = ' &nbsp; <span style="color:' + (dtOk ? 'var(--muted)' : 'var(--red)') + ';font-size:.64rem">'
+                + '🪪 ' + dtLabel + (dtOk ? '' : ' ❌') + '</span>';
+  }
+
   const dimLine = dimStr
     ? '<br><span style="color:var(--muted);font-size:.6rem">' + escapeHtml(dimStr) + '</span>'
     : '';
-  const checksLine = '<br><span style="font-size:.64rem">' + yonHtml + ' &nbsp; ' + kirpHtml + '</span>';
+  const checksLine = '<br><span style="font-size:.64rem">' + yonHtml + ' &nbsp; ' + kirpHtml + docTypeHtml + '</span>';
 
   return '<span style="color:' + badgeColor + ';font-size:.75rem;font-weight:700">' + badge + '</span>' +
     dimLine + checksLine;

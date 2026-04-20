@@ -1144,23 +1144,20 @@ function visionAnalyzeImage(srcCanvas) {
   var finalH = finalDocumentCanvas.height;
 
   if (useWarp) {
-    // Warp path: prefer density-scored band, fall back to docType-based fixed strip.
-    var stripRatio = best.docType === 'TD1' ? 0.36 : 0.28;
-    var fixedH = Math.round(finalH * stripRatio);
+    // Warp path: prefer density-scored band, fall back to universal 42% bottom strip.
+    // NOTE: docType detected from quad aspect ratio can be wrong when the quad captures
+    // too much background (e.g. wooden table), making the warp canvas taller than the
+    // actual card and reducing the apparent aspect ratio. Therefore we do NOT use
+    // docType-based strip ratios (0.28 for TD2, 0.36 for TD1) — instead we use 42%
+    // universally in the fallback, which is safe for all doc types and tolerates
+    // background-inflated warp canvases.
 
     if (finalPresence && finalPresence.score > 0.15 && finalPresence.cropH < finalH * 0.40) {
       // Density scorer found a real band — use its coordinates directly
       mrzCropY = finalPresence.cropY;
       mrzCropH = finalPresence.cropH;
-      // Minimum MRZ height: density scorer may lock onto a single dense line
-      // (e.g. line-3 names with many '<' chars) and miss lines above it.
-      // The warp canvas typically includes some background, so the card occupies
-      // only ~85-95% of the canvas height. TD1 3-line MRZ is ~30% of the card,
-      // which maps to only ~26-28% of the warp canvas — not enough with a 36% floor.
-      // Use 42% as a generous universal floor: covers TD1 (3 lines + margin) and
-      // TD3 passports in scene mode (2 lines + margin above). Safe because the floor
-      // only triggers when the density scorer under-detects; it is anchored at the
-      // confirmed MRZ bottom so extra height just includes more card content above.
+      // Minimum MRZ height: density scorer may lock onto a single dense line.
+      // 42% universal floor anchored at the confirmed MRZ bottom.
       var _mrzMinH = Math.round(finalH * 0.42);
       if (mrzCropH < _mrzMinH) {
         var _mrzBottom = mrzCropY + mrzCropH;
@@ -1170,8 +1167,9 @@ function visionAnalyzeImage(srcCanvas) {
       }
       selectedWhy += '+warp_density(' + best.docType + ')';
     } else {
-      // Fallback: docType-based fixed bottom strip
-      mrzCropH = fixedH;
+      // Fallback: universal 42% bottom strip (docType-independent).
+      // docType from quad aspect may be wrong; 42% covers all doc types safely.
+      mrzCropH = Math.round(finalH * 0.42);
       mrzCropY = finalH - mrzCropH;
       selectedWhy += '+doctype_pos(' + best.docType + ')';
     }
