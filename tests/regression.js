@@ -231,6 +231,9 @@ function computeVisionMetrics(vd, c) {
   // incorrectly flipped the warp, which is a false positive for isVisuallyUpright.
   const expectedWarpNormDeg = exp.warpNormDeg || 0;
   const warpNormCorrect = (m.warpNormDeg || 0) === expectedWarpNormDeg;
+  // MRZ crop quality: if the extracted mrzCrop contains background texture instead of
+  // real MRZ text (uniform low-density pattern), the vision result is unreliable.
+  const mrzCropValid = m.mrzCropValid !== false; // true by default (non-warp / legacy)
 
   // Aspect deviation: only when warp produced a finalDocument canvas
   let aspectDeviation = null;
@@ -256,6 +259,7 @@ function computeVisionMetrics(vd, c) {
   if (isKnownBug)        visionPass = null;
   else if (isFullFrame)  visionPass = rotationCorrect;
   else                   visionPass = warpCorrect && uprightCorrect && warpNormCorrect
+                                   && mrzCropValid
                                    && (aspectDeviation === null || aspectDeviation <= 15)
                                    && !warpScoreWeak;
 

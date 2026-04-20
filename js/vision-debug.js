@@ -1243,6 +1243,32 @@ function visionAnalyzeImage(srcCanvas) {
     } catch(e) {}
   }
 
+  // ── MRZ crop quality validation ────────────────────────────────────────────
+  // After extracting the mrzCrop, verify it actually contains MRZ-like content.
+  // Problem: scoreMRZPresence on a warp with too much background (e.g. wooden table)
+  // places the mrzBox on a background region → mrzCrop contains texture, not MRZ text.
+  //
+  // Detection pattern for "uniform background texture" (not real MRZ):
+  //   • mrzValScore < 0.25  — text density too low for OCR-A characters on white card
+  //   • bandFrac > 0.90     — density is uniform throughout the crop (no discrete text lines)
+  //
+  // Real MRZ has either high score (≥0.40, dense OCR-A text) OR a clear band
+  // covering a fraction of the crop height (not the entire crop).
+  var mrzCropValid = true;
+  if (useWarp && mrzCrop) {
+    try {
+      var _mvBin  = window.MRZPipeline.batchPreprocessMRZ(mrzCrop);
+      var _mvPres = window.MRZPipeline.scoreMRZPresence(_mvBin);
+      var _mvBandFrac = _mvPres.cropH / mrzCrop.height;
+      if (_mvPres.score < 0.25 && _mvBandFrac > 0.90) {
+        // Uniform-texture pattern: density is spread throughout the crop at a low level.
+        // This indicates wooden table / plain background, not actual MRZ text.
+        mrzCropValid = false;
+        selectedWhy += '+mrzCropInvalid';
+      }
+    } catch(e) {}
+  }
+
   var t2 = performance.now();
 
   return {
@@ -1261,6 +1287,7 @@ function visionAnalyzeImage(srcCanvas) {
       warpNormDeg:         warpNormDeg,       // additional rotation applied to warp (0/90/180/270)
       finalDocumentSource: finalDocumentSource, // 'warp' | 'rotated' — how finalDocument was produced
       mrzFound:            best.effectiveScore > 0,
+      mrzCropValid:        mrzCropValid,      // false when mrzCrop contains background, not MRZ text
       sourceUsedForMrz:    useWarp ? 'warp' : 'original', // kept for backwards compatibility
       selectedWhy:         selectedWhy,
       selectionReason:     selectionReason,

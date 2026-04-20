@@ -218,6 +218,7 @@
           "x": 0.20, "y": 0.45, "w": 0.60, "h": 0.25,
           "cropConfidence": "user_estimate"
         },
+        "knownBug": "visionDetectSceneDocumentQuad captures too much wooden table background in this wider/farther shot (card occupies only ~25% of image height). mrzCrop falls on background texture instead of MRZ zone. Same root cause as img_1923/img_1924. ML-based segmentation required for reliable card isolation at this distance.",
         "notes": "Same card, slightly different angle/distance. Landscape+upright. Card slightly below center; top 45%, bottom 30%, sides 20% cropped. Same system behavior as img_1924. OCR FAIL is character accuracy."
       }
     },
