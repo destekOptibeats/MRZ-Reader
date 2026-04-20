@@ -245,6 +245,7 @@
           "x": 0.15, "y": 0.30, "w": 0.70, "h": 0.20,
           "cropConfidence": "user_estimate"
         },
+        "knownBug": "visionDetectSceneDocumentQuad captures too much background (phone UI chrome + wooden table). mrzCrop falls on non-MRZ area — same root cause as img_1923/img_1924/img_1925. OCR succeeds via fallback path but crop quality (mrzCropValid) fails. ML-based segmentation required for reliable card isolation in this layout.",
         "notes": "Phone screenshot from web app camera view. Card is landscape+upright, positioned in upper center of preview. Warp expected to isolate card from phone UI chrome and wooden table. Top 30%, bottom 50%, sides 15% cropped."
       }
     }
