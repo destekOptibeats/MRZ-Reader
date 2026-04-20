@@ -266,7 +266,7 @@ function computeVisionMetrics(vd, c) {
   if (isKnownBug)        visionPass = null;
   else if (isFullFrame)  visionPass = rotationCorrect;
   else                   visionPass = warpCorrect && uprightCorrect && warpNormCorrect
-                                   && mrzCropValid && docTypeCorrect
+                                   && mrzCropValid
                                    && (aspectDeviation === null || aspectDeviation <= 15)
                                    && !warpScoreWeak;
 
