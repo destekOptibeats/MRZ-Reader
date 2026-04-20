@@ -224,6 +224,13 @@ function computeVisionMetrics(vd, c) {
   const warpCorrect   = warpDetected === !!exp.warpExpected;
   const rotationCorrect = isFullFrame ? m.detectedRotation === exp.rotation : null;
   const uprightCorrect  = m.isVisuallyUpright === !!exp.isVisuallyUpright;
+  // Post-warp normalization check: any non-zero warpNormDeg means the algorithm applied
+  // an extra rotation to the warp canvas after perspective correction. This is only valid
+  // when the warp genuinely comes out sideways (corner-ordering issue). The manifest
+  // declares an expected warpNormDeg (defaults to 0). A mismatch means the algorithm
+  // incorrectly flipped the warp, which is a false positive for isVisuallyUpright.
+  const expectedWarpNormDeg = exp.warpNormDeg || 0;
+  const warpNormCorrect = (m.warpNormDeg || 0) === expectedWarpNormDeg;
 
   // Aspect deviation: only when warp produced a finalDocument canvas
   let aspectDeviation = null;
@@ -248,7 +255,7 @@ function computeVisionMetrics(vd, c) {
   let visionPass;
   if (isKnownBug)        visionPass = null;
   else if (isFullFrame)  visionPass = rotationCorrect;
-  else                   visionPass = warpCorrect && uprightCorrect
+  else                   visionPass = warpCorrect && uprightCorrect && warpNormCorrect
                                    && (aspectDeviation === null || aspectDeviation <= 15)
                                    && !warpScoreWeak;
 

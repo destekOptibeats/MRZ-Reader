@@ -994,6 +994,11 @@ function visionAnalyzeImage(srcCanvas) {
   if (useWarp && best.warpCanvas) {
     var _normBest = { deg: 0, score: -1, canvas: best.warpCanvas,
                       presence: best.warpPresence, mrzBR: best.warpMrzBR || 0 };
+    // Track whether the 0° (unrotated) warp already has a valid MRZ at the bottom.
+    // If it does, a 180° flip must never override it — scoreMRZPresence can be fooled
+    // by dense card data fields in the inverted canvas, giving a spuriously high score
+    // that would incorrectly invert an already-correct warp.
+    var _has0Qualified = false;
     [0, 90, 180, 270].forEach(function(ndeg) {
       try {
         var nc;
@@ -1022,6 +1027,11 @@ function visionAnalyzeImage(srcCanvas) {
         var _nAdjScore = nPres.score * (_nBandFrac > 0.38 ? 0.6 : 1.0);
         // Must have MRZ in lower 45% of canvas (br >= 0.55), stay landscape, beat current best
         if (nBR >= 0.55 && nAsp >= 1.0 && _nAdjScore > _normBest.score) {
+          if (ndeg === 0) { _has0Qualified = true; }
+          // 180° full-inversion must not override a valid 0° orientation.
+          // Only a sideways warp (90°/270°) can legitimately need normalization
+          // when the initial warp has MRZ already at the bottom.
+          if (ndeg === 180 && _has0Qualified) { return; }
           _normBest = { deg: ndeg, score: _nAdjScore, canvas: nc,
                         presence: nPres, mrzBR: nBR };
         }
